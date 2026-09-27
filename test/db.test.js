@@ -249,4 +249,52 @@ test('Fase 1 E2E: add 1000 links, download several, restart mid-download -> stat
     }
 });
 
+test('BUG 1: requeueFailedItems resets ERROR/COOLDOWN/PAUSED with retries < maxRetries to PENDING, keeps retries >= 5 as ERROR, and leaves SKIPPED/DONE untouched', () => {
+    const ctx = createTempDb();
+    try {
+        // 1. ERROR with retries = 1 -> should return to PENDING with error = null
+        dbMod.enqueueGallery({ galleryId: 600001, status: 'ERROR', error: 'Socket Timeout', retries: 1 }, ctx.db);
+        // 2. PAUSED (e.g. Circuit breaker) with retries = 0 -> should return to PENDING with error = null
+        dbMod.enqueueGallery({ galleryId: 600002, status: 'PAUSED', error: 'Circuit breaker (too many 429s)', retries: 0 }, ctx.db);
+        // 3. COOLDOWN with retries = 2 -> should return to PENDING with error = null
+        dbMod.enqueueGallery({ galleryId: 600003, status: 'COOLDOWN', error: 'Rate limit', retries: 2 }, ctx.db);
+        // 4. ERROR with retries = 5 (>= maxRetries default 5) -> must stay ERROR
+        dbMod.enqueueGallery({ galleryId: 600004, status: 'ERROR', error: 'Broken Link', retries: 5 }, ctx.db);
+        // 5. SKIPPED -> must stay SKIPPED
+        dbMod.enqueueGallery({ galleryId: 600005, status: 'SKIPPED', error: '404 Not Found', retries: 0 }, ctx.db);
+        // 6. DONE -> must stay DONE
+        dbMod.enqueueGallery({ galleryId: 600006, status: 'DONE', pagesDone: 15, pagesTotal: 15, retries: 0 }, ctx.db);
+
+        const count = dbMod.requeueFailedItems({ maxRetries: 5 }, ctx.db);
+        assert.strictEqual(count, 3);
+
+        const item1 = dbMod.getQueueItem(600001, ctx.db);
+        assert.strictEqual(item1.status, 'PENDING');
+        assert.strictEqual(item1.error, null);
+        assert.strictEqual(item1.retries, 1);
+
+        const item2 = dbMod.getQueueItem(600002, ctx.db);
+        assert.strictEqual(item2.status, 'PENDING');
+        assert.strictEqual(item2.error, null);
+
+        const item3 = dbMod.getQueueItem(600003, ctx.db);
+        assert.strictEqual(item3.status, 'PENDING');
+        assert.strictEqual(item3.error, null);
+
+        const item4 = dbMod.getQueueItem(600004, ctx.db);
+        assert.strictEqual(item4.status, 'ERROR');
+        assert.strictEqual(item4.error, 'Broken Link');
+        assert.strictEqual(item4.retries, 5);
+
+        const item5 = dbMod.getQueueItem(600005, ctx.db);
+        assert.strictEqual(item5.status, 'SKIPPED');
+
+        const item6 = dbMod.getQueueItem(600006, ctx.db);
+        assert.strictEqual(item6.status, 'DONE');
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+
 

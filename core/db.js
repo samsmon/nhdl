@@ -176,6 +176,39 @@ function resetStuckQueueItems(db = getDb()) {
     return Number(res.changes || 0);
 }
 
+// Re-queue ERROR / COOLDOWN / PAUSED items back to PENDING if retries < maxRetries (default 5)
+function requeueFailedItems(options = {}, db = getDb()) {
+    const maxRetries = Number.isFinite(options.maxRetries) ? options.maxRetries : 5;
+    const targetRows = db.prepare(`
+        SELECT gallery_id FROM queue
+        WHERE status IN ('ERROR', 'COOLDOWN', 'PAUSED')
+          AND COALESCE(retries, 0) < ?
+    `).all(maxRetries);
+
+    const stmt = db.prepare(`
+        UPDATE queue
+        SET status = 'PENDING', error = NULL, updated_at = datetime('now')
+        WHERE status IN ('ERROR', 'COOLDOWN', 'PAUSED')
+          AND COALESCE(retries, 0) < ?
+    `);
+    const res = stmt.run(maxRetries);
+    if (res.changes > 0) {
+        const batchCount = Math.max(1, getMaxBatch(db));
+        for (const r of targetRows) {
+            const updated = getQueueItem(r.gallery_id, db);
+            if (updated) {
+                dbEvents.emit('item', {
+                    type: 'updated',
+                    item: formatQueueRow(updated),
+                    rawRow: updated,
+                    batchCount
+                });
+            }
+        }
+    }
+    return Number(res.changes || 0);
+}
+
 function normalizeGalleryId(galleryId) {
     const num = typeof galleryId === 'number' ? galleryId : parseInt(String(galleryId).trim(), 10);
     if (!Number.isFinite(num) || num <= 0) {
@@ -708,6 +741,7 @@ module.exports = {
     getSchemaVersion,
     runMigrations,
     resetStuckQueueItems,
+    requeueFailedItems,
     formatQueueRow,
     enqueueGallery,
     getQueueItem,

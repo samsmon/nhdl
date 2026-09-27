@@ -11,6 +11,7 @@ const {
     dbEvents,
     formatQueueRow,
     resetStuckQueueItems,
+    requeueFailedItems,
     getQueueItems,
     getMaxBatch,
     importListText,
@@ -414,10 +415,12 @@ function createRequestHandler() {
                         if (action === 'pause' || action === 'stop') {
                             engine.pause();
                         } else if (action === 'resume' || action === 'start') {
+                            requeueFailedItems();
                             engine.resume();
                             autoProcessQueue();
                         } else if (action === 'restart') {
                             resetStuckQueueItems();
+                            requeueFailedItems();
                             engine.restart();
                         }
                         return res.end(JSON.stringify({ success: true, engineStatus: engine.getStatus() }));
@@ -593,7 +596,10 @@ function createRequestHandler() {
                         engine.triggerForceRetry();
 
                         if (galleryId) {
-                            updateQueueStatus(galleryId, 'PENDING', { error: null });
+                            updateQueueStatus(galleryId, 'PENDING', { error: null, retries: 0 });
+                            autoProcessQueue();
+                        } else {
+                            requeueFailedItems();
                             autoProcessQueue();
                         }
                         return res.end(JSON.stringify({ success: true, message: 'Force retry triggered' }));

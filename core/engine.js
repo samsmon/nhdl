@@ -18,7 +18,8 @@ const {
     getQueueItems,
     getNextPendingItem,
     enqueueGallery,
-    updateQueueItem
+    updateQueueItem,
+    requeueFailedItems
 } = require('./db');
 
 dns.setServers(['1.1.1.1', '8.8.8.8']);
@@ -790,6 +791,8 @@ class DownloaderEngine extends EventEmitter {
                 }
             }
         }
+
+        requeueFailedItems();
 
         const allQueue = getQueueItems();
         for (const row of allQueue) {
