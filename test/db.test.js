@@ -162,3 +162,45 @@ test('core/db.js: settings and events helpers work and cap event rows', () => {
         ctx.cleanup();
     }
 });
+
+test('core/tracker.js: rescanLibrary populates SQLite library table from .nhdl-id markers on disk', () => {
+    const ctx = createTempDb();
+    const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-dl-test-'));
+    try {
+        const { rescanLibrary } = require('../core/tracker');
+        const folderGallery = path.join(dlDir, 'Japanese', 'Artist One', 'Sample Gallery');
+        fs.mkdirSync(folderGallery, { recursive: true });
+        fs.writeFileSync(path.join(folderGallery, '1.jpg'), Buffer.alloc(2048));
+        fs.writeFileSync(path.join(folderGallery, '2.jpg'), Buffer.alloc(2048));
+        fs.writeFileSync(path.join(folderGallery, '.nhdl-id'), '468614', 'utf-8');
+
+        const archiveDir = path.join(dlDir, 'English', 'Artist Two');
+        fs.mkdirSync(archiveDir, { recursive: true });
+        const archivePath = path.join(archiveDir, 'Archived Title.cbz');
+        fs.writeFileSync(archivePath, Buffer.from('PK\x03\x04'));
+        fs.writeFileSync(archivePath + '.nhdl-id', '500123', 'utf-8');
+
+        const result = rescanLibrary(dlDir);
+        assert.strictEqual(result.scanned, 2);
+        assert.strictEqual(result.relocated, 2);
+
+        const lib1 = dbMod.getLibraryEntry(468614, ctx.db);
+        assert.ok(lib1);
+        assert.strictEqual(lib1.title, 'Sample Gallery');
+        assert.strictEqual(lib1.artist, 'Artist One');
+        assert.strictEqual(lib1.language, 'Japanese');
+        assert.strictEqual(lib1.pages, 2);
+        assert.strictEqual(lib1.format, 'folder');
+
+        const lib2 = dbMod.getLibraryEntry(500123, ctx.db);
+        assert.ok(lib2);
+        assert.strictEqual(lib2.title, 'Archived Title');
+        assert.strictEqual(lib2.artist, 'Artist Two');
+        assert.strictEqual(lib2.language, 'English');
+        assert.strictEqual(lib2.format, 'cbz');
+    } finally {
+        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
+        ctx.cleanup();
+    }
+});
+

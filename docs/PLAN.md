@@ -94,12 +94,12 @@ Pemetaan file lama → tabel:
 Task:
 - [x] Naikkan Docker base image ke `node:24-alpine` (Dockerfile, kedua stage) dan set `engines.node >= 22.13` di `package.json`
 - [x] `core/db.js`: buka DB, jalankan migrasi skema (berbasis `schema_version`), ekspor fungsi query (bukan SQL mentah di mana-mana)
-- [ ] `core/tracker.js`: ganti baca/tulis `list_status.txt` dan `library.json` dengan tabel `queue` dan `library`
+- [x] `core/tracker.js`: ganti baca/tulis `list_status.txt` dan `library.json` dengan tabel `queue` dan `library`
 - [ ] `core/engine.js`: ambil item berikutnya dari `queue` (status `PENDING`, urut `priority DESC, id`), update status/progress per baris; hapus `progress.json`
 - [ ] Config: `config.json` → `settings`
 - [x] Logger: `activity.log`/`error.log` → `events` (batasi, mis. simpan 10k baris terakhir)
 - [ ] `server/index.js`: endpoint pakai query DB; tambah import `list.txt` (upload/paste) dan export
-- [ ] Rescan folder download untuk mengisi `library`
+- [x] Rescan folder download untuk mengisi `library`
 - [ ] Hapus kode dan file lama: `list_status.txt`, `progress.json`, `library.json`, `config.json`, log `.txt`; tambah `data/` ke `.gitignore` dan volume di `docker-compose.yml`
 - [ ] Saat startup, item berstatus `ON_PROGRESS` dikembalikan ke `PENDING` (server mati di tengah download tidak boleh meninggalkan item stuck)
 - [x] Test dengan `node:test` bawaan (`npm test`, tanpa dependency) di `test/`: `core/db.js` (migrasi skema, UNIQUE gallery_id), alur `PENDING → ON_PROGRESS → DONE/ERROR`, reset saat startup, import/export `list.txt`. Pakai DB sementara, jangan `data/nhdl.db`
