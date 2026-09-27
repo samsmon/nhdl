@@ -131,6 +131,27 @@ Task:
 ## Fase 6 — (Opsional) Backend Go
 - [ ] Go dengan skema SQLite dan kontrak API yang sama, UI di-embed via `embed.FS`
 
+## Fase 7 — PostgreSQL terpusat + backup/export/import
+Tujuan: di server, data disimpan di PostgreSQL terpusat (shared Postgres yang dipakai semua container), jadi rebuild container tidak menghapus data. SQLite tetap jadi default untuk pemakaian lokal.
+
+Keputusan:
+- Pilih database lewat env: `DATABASE_URL=postgres://user:pass@host:5432/nhdl` → PostgreSQL; kosong → SQLite `data/nhdl.db`.
+- Driver `pg` (satu-satunya dependency runtime backend, pengecualian dari aturan zero-dependency).
+- Pakai schema/database khusus `nhdl` di shared Postgres, jangan campur tabel dengan aplikasi lain. Dokumentasikan SQL untuk membuat user + database dengan hak minimal.
+- `DATABASE_URL` berisi password → masuk `.env`/env container, bukan tabel `settings`, dan tidak pernah dikirim ke UI.
+- Format export **tidak bergantung jenis DB** (JSON berisi semua tabel + `schema_version`), supaya data bisa dipindah SQLite ⇄ PostgreSQL lewat export/import.
+
+Task:
+- [ ] Ubah API `core/db.js` menjadi async (semua fungsi mengembalikan Promise) dan sesuaikan pemanggil di `core/` dan `server/`. SQLite tetap di belakangnya. **Ini langkah terbesar karena `node:sqlite` sinkron sedangkan `pg` async**
+- [ ] Pisahkan adapter: `core/db/sqlite.js` dan `core/db/postgres.js` dengan antarmuka yang sama; `core/db.js` memilih berdasarkan `DATABASE_URL`
+- [ ] Skema dan migrasi versi PostgreSQL: `datetime('now')` → `now()`/`timestamptz`, `INTEGER PRIMARY KEY` → `bigserial`/`identity`, `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`, `PRAGMA table_info` → `information_schema`
+- [ ] Koneksi: pool, retry saat Postgres belum siap waktu container start, pesan error yang jelas kalau `DATABASE_URL` salah
+- [ ] Endpoint (catat dulu di `docs/API.md`): `GET /api/db/export` (download JSON), `POST /api/db/import` (upload JSON; mode *replace* atau *merge*, dalam satu transaksi), `POST /api/db/backup` + `GET /api/db/backups` (backup terjadwal/manual ke folder `data/backups/`, simpan N terakhir)
+- [ ] UI menu Settings → Database: info jenis DB + status koneksi (tanpa password), tombol Export, Import (dengan konfirmasi dan pilihan replace/merge), Backup sekarang, daftar backup + restore
+- [ ] `docker-compose.yml`: contoh `DATABASE_URL` ke shared Postgres (network eksternal), hapus kebutuhan volume `data/` untuk mode Postgres (kecuali folder backup)
+- [ ] Test: suite `db` yang sama dijalankan ke SQLite dan PostgreSQL (Postgres lewat `TEST_DATABASE_URL`, di-skip kalau tidak ada); test export → import menghasilkan data identik; import ke DB jenis lain (SQLite → Postgres)
+- [ ] Uji manual di server: rebuild container → antrian dan library tetap ada
+
 ## Log
 | Tanggal | Fase | Catatan |
 |---|---|---|
@@ -138,3 +159,4 @@ Task:
 | 2026-09-27 | 1 | Diputuskan: semua data pindah ke SQLite (`node:sqlite`); skema ditambahkan, fase lain bergeser +1 |
 | 2026-09-27 | 0 | `docs/ARCHITECTURE.md` dibuat & ditautkan di `AGENTS.md` sebagai referensi lengkap codebase lintas sesi |
 | 2026-09-27 | 0 | Fase 0 selesai: fix `utils.js`, hapus Counter, `start.bat` auto-build, branch `rework`. Plan: tambah test, reset startup, `docs/API.md`, pola fitur |
+| 2026-09-27 | 7 | Tambah Fase 7: PostgreSQL terpusat (via `DATABASE_URL`) + backup/export/import di Settings |
