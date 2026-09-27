@@ -19,7 +19,8 @@ const {
     getNextPendingItem,
     enqueueGallery,
     updateQueueItem,
-    requeueFailedItems
+    requeueFailedItems,
+    deleteLibraryEntry
 } = require('./db');
 
 dns.setServers(['1.1.1.1', '8.8.8.8']);
@@ -797,11 +798,27 @@ class DownloaderEngine extends EventEmitter {
         const allQueue = getQueueItems();
         for (const row of allQueue) {
             const idStr = String(row.gallery_id);
+            const libEntry = library[idStr];
             if (row.status === 'PENDING') {
-                if (isLibraryEntryValid(library[idStr])) {
+                if (isLibraryEntryValid(libEntry)) {
                     updateListStatus(null, row.gallery_id, 'DONE');
-                } else if (isPermanentlySkipped(library[idStr])) {
-                    updateListStatus(null, row.gallery_id, `SKIPPED - ${library[idStr].reason || 'Skipped'}`);
+                } else if (isPermanentlySkipped(libEntry)) {
+                    updateListStatus(null, row.gallery_id, `SKIPPED - ${libEntry.reason || 'Skipped'}`);
+                } else if (libEntry) {
+                    deleteLibraryEntry(row.gallery_id);
+                    delete library[idStr];
+                }
+            } else if (row.status === 'DONE') {
+                if (!isLibraryEntryValid(libEntry)) {
+                    if (libEntry && !isPermanentlySkipped(libEntry)) {
+                        deleteLibraryEntry(row.gallery_id);
+                        delete library[idStr];
+                    }
+                    updateQueueItem(row.gallery_id, {
+                        status: 'PENDING',
+                        pagesDone: 0,
+                        error: null
+                    });
                 }
             }
         }

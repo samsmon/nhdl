@@ -489,8 +489,14 @@ function importListText(text, options = {}, db = getDb()) {
 
         for (const item of parsedItems) {
             const existing = getQueueItem(item.galleryId, db);
-            const libEntry = getLibraryEntry(item.galleryId, db);
-            const isValidLib = libEntry && libEntry.path && fs.existsSync(libEntry.path);
+            let libEntry = getLibraryEntry(item.galleryId, db);
+            const isPermanentSkip = !!(libEntry && libEntry.skipped);
+            const isValidLib = !!(libEntry && !libEntry.skipped && libEntry.path && fs.existsSync(libEntry.path));
+
+            if (libEntry && !isPermanentSkip && !isValidLib) {
+                deleteLibraryEntry(item.galleryId, db);
+                libEntry = null;
+            }
 
             let initialStatus = 'PENDING';
             let initialTitle = item.title;
@@ -505,6 +511,8 @@ function importListText(text, options = {}, db = getDb()) {
                 initialTitle = initialTitle || display;
                 pagesDone = libEntry.pages || 0;
                 pagesTotal = libEntry.pages || 0;
+            } else if (isPermanentSkip) {
+                initialStatus = 'SKIPPED';
             }
 
             if (!existing) {
@@ -516,7 +524,8 @@ function importListText(text, options = {}, db = getDb()) {
                     batch: item.batch,
                     format: item.format,
                     pagesDone,
-                    pagesTotal
+                    pagesTotal,
+                    error: isPermanentSkip ? (libEntry.reason || 'Skipped') : null
                 }, db);
                 added++;
             } else {
@@ -528,6 +537,14 @@ function importListText(text, options = {}, db = getDb()) {
                     updates.status = 'DONE';
                     updates.pagesDone = pagesDone;
                     updates.pagesTotal = pagesTotal;
+                } else if (
+                    !isValidLib &&
+                    !isPermanentSkip &&
+                    (existing.status === 'DONE' || String(existing.status).startsWith('SKIPPED'))
+                ) {
+                    updates.status = 'PENDING';
+                    updates.pagesDone = 0;
+                    updates.error = null;
                 }
                 updateQueueItem(item.galleryId, updates, db);
                 updated++;
@@ -572,11 +589,22 @@ function upsertLibraryEntry(entry, db = getDb()) {
     const title = entry.title || 'Unknown';
     const folderPath = entry.path || entry.folder || '';
     const pages = Number.isFinite(entry.pages) ? entry.pages : null;
-    const format = entry.format || (entry.archived ? (entry.archiveExt || 'cbz') : 'folder');
+    const format = entry.format || (entry.skipped ? 'skipped' : (entry.archived ? (entry.archiveExt || 'cbz') : 'folder'));
     const language = entry.language ?? entry.lang ?? null;
     const artist = entry.artist ?? entry.author ?? null;
     const addedAt = entry.addedAt || entry.downloadedAt || new Date().toISOString();
-    const metaJson = entry.meta ? (typeof entry.meta === 'string' ? entry.meta : JSON.stringify(entry.meta)) : null;
+
+    let metaObj = null;
+    if (entry.meta) {
+        metaObj = typeof entry.meta === 'string' ? JSON.parse(entry.meta) : { ...entry.meta };
+    }
+    if (entry.skipped !== undefined || entry.reason !== undefined || format === 'skipped') {
+        metaObj = metaObj || {};
+        if (entry.skipped !== undefined) metaObj.skipped = !!entry.skipped;
+        else if (format === 'skipped') metaObj.skipped = true;
+        if (entry.reason !== undefined) metaObj.reason = entry.reason;
+    }
+    const metaJson = metaObj ? JSON.stringify(metaObj) : null;
 
     db.prepare(`
         INSERT INTO library (gallery_id, title, path, pages, format, language, artist, added_at, meta)
@@ -602,6 +630,7 @@ function parseLibraryRow(row) {
         try { parsedMeta = JSON.parse(row.meta); } catch (e) {}
     }
     const isArchived = row.format === 'cbz' || row.format === 'zip';
+    const isSkipped = row.format === 'skipped' || !!(parsedMeta && parsedMeta.skipped);
     return {
         gallery_id: row.gallery_id,
         id: String(row.gallery_id),
@@ -620,7 +649,7 @@ function parseLibraryRow(row) {
         archiveExt: isArchived ? row.format : null,
         ext: parsedMeta && parsedMeta.ext ? parsedMeta.ext : (isArchived ? null : 'jpg'),
         pageExts: parsedMeta && parsedMeta.pageExts ? parsedMeta.pageExts : {},
-        skipped: !!(parsedMeta && parsedMeta.skipped),
+        skipped: isSkipped,
         reason: parsedMeta && parsedMeta.reason ? parsedMeta.reason : null,
         meta: parsedMeta
     };

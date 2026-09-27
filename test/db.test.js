@@ -296,5 +296,93 @@ test('BUG 1: requeueFailedItems resets ERROR/COOLDOWN/PAUSED with retries < maxR
     }
 });
 
+test('BUG 2: re-importing DONE item whose file is missing resets to PENDING and prunes stale library entry, while valid DONE and permanent SKIPPED remain unchanged', () => {
+    const ctx = createTempDb();
+    const tempDir = path.dirname(ctx.dbPath);
+    const validFilePath = path.join(tempDir, 'valid-archive.cbz');
+    fs.writeFileSync(validFilePath, Buffer.from('PK\x03\x04dummy-cbz-data'));
+    const missingFilePath = path.join(tempDir, 'deleted-archive.cbz');
+
+    try {
+        // Case 1: Row is DONE, library entry points to missing file on disk
+        dbMod.upsertLibraryEntry({
+            galleryId: 700001,
+            title: 'Missing Archive Gallery',
+            format: 'cbz',
+            path: missingFilePath,
+            pages: 24
+        }, ctx.db);
+        dbMod.enqueueGallery({
+            galleryId: 700001,
+            title: 'Missing Archive Gallery',
+            status: 'DONE',
+            pagesDone: 24,
+            pagesTotal: 24
+        }, ctx.db);
+
+        // Case 2: Row is DONE, library entry points to valid existing file on disk
+        dbMod.upsertLibraryEntry({
+            galleryId: 700002,
+            title: 'Valid Archive Gallery',
+            format: 'cbz',
+            path: validFilePath,
+            pages: 18
+        }, ctx.db);
+        dbMod.enqueueGallery({
+            galleryId: 700002,
+            title: 'Valid Archive Gallery',
+            status: 'DONE',
+            pagesDone: 18,
+            pagesTotal: 18
+        }, ctx.db);
+
+        // Case 3: Row is SKIPPED with permanent skip in library (404 Not Found)
+        dbMod.upsertLibraryEntry({
+            galleryId: 700003,
+            title: 'Skipped 404 Gallery',
+            format: 'skipped',
+            path: '',
+            skipped: true,
+            reason: '404 Not Found'
+        }, ctx.db);
+        dbMod.enqueueGallery({
+            galleryId: 700003,
+            title: 'Skipped 404 Gallery',
+            status: 'SKIPPED',
+            error: '404 Not Found'
+        }, ctx.db);
+
+        // Re-import all three IDs
+        const listText = [
+            'https://nhentai.net/g/700001/',
+            'https://nhentai.net/g/700002/',
+            'https://nhentai.net/g/700003/'
+        ].join('\n');
+        dbMod.importListText(listText, { replace: false }, ctx.db);
+
+        // Case 1 must be reset to PENDING, pages_done = 0, error = null, and stale library entry deleted
+        const row1 = dbMod.getQueueItem(700001, ctx.db);
+        assert.strictEqual(row1.status, 'PENDING');
+        assert.strictEqual(row1.pages_done, 0);
+        assert.strictEqual(row1.error, null);
+        assert.strictEqual(dbMod.getLibraryEntry(700001, ctx.db), null);
+
+        // Case 2 must stay DONE and keep its library entry
+        const row2 = dbMod.getQueueItem(700002, ctx.db);
+        assert.strictEqual(row2.status, 'DONE');
+        assert.strictEqual(row2.pages_done, 18);
+        assert.ok(dbMod.getLibraryEntry(700002, ctx.db));
+
+        // Case 3 (permanent skip 404) must stay SKIPPED and keep its skipped library entry
+        const row3 = dbMod.getQueueItem(700003, ctx.db);
+        assert.strictEqual(row3.status, 'SKIPPED');
+        const lib3 = dbMod.getLibraryEntry(700003, ctx.db);
+        assert.ok(lib3 && lib3.skipped);
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+
 
 
