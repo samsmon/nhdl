@@ -7,26 +7,26 @@ const fs = require('fs');
 const path = require('path');
 const dns = require('dns');
 
-const { sanitizeName, toTitleCase, getDynamicDelay, verifyImage, writeBlankPlaceholderImage, sleep, withFsRetryAsync, atomicWriteFileSync } = require('./utils');
-const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, trackerFileToListPath, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery } = require('./tracker');
+const { sanitizeName, toTitleCase, getDynamicDelay, verifyImage, writeBlankPlaceholderImage, sleep, withFsRetryAsync } = require('./utils');
+const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery } = require('./tracker');
 const { logActivity, setLogDir } = require('./logger');
 const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');
+const {
+    getSetting,
+    setSetting,
+    getQueueItem,
+    getQueueItems,
+    getNextPendingItem,
+    enqueueGallery,
+    updateQueueItem
+} = require('./db');
 
 dns.setServers(['1.1.1.1', '8.8.8.8']);
 const NHENTAI_MAIN_IP = '104.26.4.188';
 
-// A page that keeps failing verification AND keeps coming back suspiciously small (well
-// under any real manga page, which is always tens/hundreds of KB) isn't a transient
-// network blip after this many attempts — it's the CDN deliberately serving a blank
-// placeholder to this IP instead of real content. Retrying that forever just spins.
 const PLACEHOLDER_RETRY_THRESHOLD = 5;
 const PLACEHOLDER_SIZE_CEILING = 1536;
 
-const CONFIG_FILE = path.join(__dirname, '..', 'config.json');
-
-// On Windows, cmd.exe resolves "curl" to the bundled system32 curl.exe (Schannel build),
-// whose TLS fingerprint gets flagged by Cloudflare as a bot and triggers false 429s.
-// Prefer Git's mingw64 curl build, which is not flagged, when it's available.
 function resolveCurlBinary() {
     if (process.platform !== 'win32') return 'curl';
     const candidates = [
@@ -43,21 +43,12 @@ const CURL_BIN = resolveCurlBinary();
 class DownloaderEngine extends EventEmitter {
     constructor(options = {}) {
         super();
-        let savedDownloadDir = null;
-        let savedDownloadFormat = 'cbz';
-        let savedAutoContinue = true;
-        if (fs.existsSync(CONFIG_FILE)) {
-            try {
-                const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8'));
-                if (cfg.downloadDir) savedDownloadDir = cfg.downloadDir;
-                if (cfg.downloadFormat === 'folder' || cfg.downloadFormat === 'zip' || cfg.downloadFormat === 'cbz') savedDownloadFormat = cfg.downloadFormat;
-                if (cfg.autoContinueBatches === false) savedAutoContinue = false;
-            } catch (e) {}
-        }
+        const savedDownloadDir = getSetting('downloadDir', null);
+        const rawFormat = getSetting('downloadFormat', 'cbz');
+        const savedDownloadFormat = (rawFormat === 'folder' || rawFormat === 'zip' || rawFormat === 'cbz') ? rawFormat : 'cbz';
+        const savedAutoContinue = getSetting('autoContinueBatches', true) !== false;
 
         this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || savedDownloadDir || path.join(__dirname, '..', 'Download');
-        // Queue/library/log state lives next to the downloads themselves (a persistent
-        // volume) instead of the app dir (container's writable layer, wiped on rebuild).
         if (!fs.existsSync(this.baseDownloadDir)) fs.mkdirSync(this.baseDownloadDir, { recursive: true });
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
@@ -66,15 +57,13 @@ class DownloaderEngine extends EventEmitter {
         this.batchSize = options.batchSize || 50;
         this.batchRestMinutes = options.batchRestMinutes || 5;
         this.concurrency = options.concurrency || 3;
+        this.skipStartupJitter = !!options.skipStartupJitter;
         this.isRunning = false;
         this.isStopped = false;
         this.isPaused = false;
         this.forceRetry = false;
         this.currentProgress = null;
 
-        // Anti-rate-limit state: every consecutive 429 makes the engine more cautious
-        // (longer waits, slower pacing). Any fully successful real download resets this
-        // back to normal speed. See the RATE_LIMIT handling in runBatch().
         this.consecutiveRateLimits = 0;
         this.circuitBreakerTripped = false;
     }
@@ -86,8 +75,6 @@ class DownloaderEngine extends EventEmitter {
 
     resume() {
         this.isPaused = false;
-        // A manual resume is a deliberate human decision that enough time has passed —
-        // give it a clean slate instead of immediately re-tripping on the old count.
         this.consecutiveRateLimits = 0;
         this.circuitBreakerTripped = false;
         this.emit('resumed');
@@ -110,46 +97,31 @@ class DownloaderEngine extends EventEmitter {
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
         try {
-            let cfg = {};
-            if (fs.existsSync(CONFIG_FILE)) {
-                try { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch (e) {}
-            }
-            cfg.downloadDir = this.baseDownloadDir;
-            atomicWriteFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+            setSetting('downloadDir', this.baseDownloadDir);
             this.emit('config_updated', { downloadDir: this.baseDownloadDir });
         } catch (e) {
-            console.error("Failed to save config.json:", e.message);
+            console.error('Failed to save downloadDir to settings:', e.message);
         }
     }
 
     setDownloadFormat(format) {
-        if (format !== 'folder' && format !== 'cbz') return;
+        if (format !== 'folder' && format !== 'cbz' && format !== 'zip') return;
         this.downloadFormat = format;
         try {
-            let cfg = {};
-            if (fs.existsSync(CONFIG_FILE)) {
-                try { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch (e) {}
-            }
-            cfg.downloadFormat = format;
-            atomicWriteFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+            setSetting('downloadFormat', format);
             this.emit('config_updated', { downloadFormat: format });
         } catch (e) {
-            console.error("Failed to save config.json:", e.message);
+            console.error('Failed to save downloadFormat to settings:', e.message);
         }
     }
 
     setAutoContinueBatches(enabled) {
         this.autoContinueBatches = !!enabled;
         try {
-            let cfg = {};
-            if (fs.existsSync(CONFIG_FILE)) {
-                try { cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, 'utf-8')); } catch (e) {}
-            }
-            cfg.autoContinueBatches = this.autoContinueBatches;
-            atomicWriteFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2));
+            setSetting('autoContinueBatches', this.autoContinueBatches);
             this.emit('config_updated', { autoContinueBatches: this.autoContinueBatches });
         } catch (e) {
-            console.error("Failed to save config.json:", e.message);
+            console.error('Failed to save autoContinueBatches to settings:', e.message);
         }
     }
 
@@ -158,14 +130,8 @@ class DownloaderEngine extends EventEmitter {
         this.emit('retry_triggered');
     }
 
-    // Decides whether a just-completed gallery should be compressed, using whichever
-    // format its own batch was tagged with (the Insert Target dropdown), falling back to
-    // this.downloadFormat only when there's no per-batch tag (e.g. CLI usage without a
-    // trackerFile, or a batch predating this feature).
-    maybeCompress(galleryId, trackerFile) {
-        const format = trackerFile
-            ? getBatchFormatForGallery(trackerFileToListPath(trackerFile), galleryId)
-            : this.downloadFormat;
+    maybeCompress(galleryId) {
+        const format = getBatchFormatForGallery(null, galleryId) || this.downloadFormat;
         if (format === 'cbz' || format === 'zip') {
             const result = compressLibraryEntry(galleryId, { ext: format });
             if (result.success) logActivity(`Compressed ID ${galleryId} to .${format}`);
@@ -495,21 +461,20 @@ class DownloaderEngine extends EventEmitter {
         }
 
         saveArchivedGallery(galleryId, sanitizedTitle, archivePath, format, { author: authorStr, lang: langStr, pages: numPages, extraMeta });
-        if (trackerFile) updateListStatus(trackerFile, galleryId, "DONE");
+        updateListStatus(null, galleryId, 'DONE');
+        updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
         logActivity(`[API] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
         this.currentProgress = null;
         this.emit('done', { galleryId, title, pages: numPages, currentTaskNum, totalTasks });
         return { status: "SUCCESS", numPages };
     }
 
-    async processGallery(galleryId, currentTaskNum = 1, totalTasks = 1, trackerFile = null) {
-        if (trackerFile) updateListStatus(trackerFile, galleryId, "ON_PROGRESS");
+    async processGallery(galleryId, currentTaskNum = 1, totalTasks = 1, _trackerFile = null) {
+        updateListStatus(null, galleryId, 'ON_PROGRESS');
 
         const library = loadLibrary();
         if (library[galleryId] && library[galleryId].folder && fs.existsSync(library[galleryId].folder) && library[galleryId].pages && library[galleryId].ext) {
             const data = library[galleryId];
-            // Archived (.cbz) entries aren't a folder of loose pages anymore — the zip
-            // existing on disk (already checked above) is proof enough it's complete.
             let allValid = !!data.archived;
             if (!allValid) {
                 const savedPageExts = data.pageExts || {};
@@ -522,27 +487,17 @@ class DownloaderEngine extends EventEmitter {
                 }
             }
             if (allValid) {
-                if (trackerFile) {
-                    updateListStatus(trackerFile, galleryId, "SKIPPED - Already in Library");
-                    // Reuses metadata already stored from when this gallery was originally
-                    // downloaded — no extra network request needed to show the full name.
-                    updateListDisplayName(trackerFileToListPath(trackerFile), galleryId, buildDisplayName(data.title, data.author));
-                }
+                updateListStatus(null, galleryId, 'SKIPPED - Already in Library');
+                updateListDisplayName(null, galleryId, buildDisplayName(data.title, data.author));
+                updateQueueItem(galleryId, { pagesDone: data.pages, pagesTotal: data.pages });
                 this.emit('skipped', { galleryId, title: data.title, currentTaskNum, totalTasks, reason: 'Already in Library' });
-                // Pure library.json lookup — zero network requests made, nothing to pace.
                 return { status: "SUCCESS", numPages: data.pages, skipped: true, skipReason: 'library' };
             }
         }
 
         const meta = await this.fetchMetadata(galleryId);
         if (meta.status === "RATE_LIMIT") {
-            // Before committing to a 5-minute cooldown: if a previous run already got far
-            // enough to write this gallery's title into list.txt, use that cached name to
-            // check disk directly — no network needed for that. Covers exactly the case
-            // where library.json lost track of an already-finished download (e.g. the
-            // corruption incident) and a 429 on the metadata re-fetch would otherwise block
-            // ever discovering the file is already there.
-            const cached = trackerFile ? getCachedDisplayName(trackerFileToListPath(trackerFile), galleryId) : null;
+            const cached = getCachedDisplayName(null, galleryId);
             if (cached && cached.title) {
                 const found = this.findExistingOnDisk(cached.title, cached.author);
                 if (found) {
@@ -551,18 +506,15 @@ class DownloaderEngine extends EventEmitter {
                     } else {
                         saveToLibrary(galleryId, found.title, found.path, found.pages, found.ext, found.pageExts, { author: cached.author });
                     }
-                    if (trackerFile) {
-                        updateListStatus(trackerFile, galleryId, "SKIPPED - Found on disk (metadata was 429'd)");
-                    }
+                    updateListStatus(null, galleryId, "SKIPPED - Found on disk (metadata was 429'd)");
+                    updateQueueItem(galleryId, { pagesDone: found.pages || 0, pagesTotal: found.pages || 0 });
                     logActivity(`SKIPPED ID ${galleryId}: found existing file on disk, avoided 429 cooldown`);
                     this.emit('skipped', { galleryId, title: found.title, currentTaskNum, totalTasks, reason: 'Already on disk (metadata blocked by 429)' });
-                    // The metadata request itself already got a 429 (blocked, no data) — no
-                    // successful request was made here, so there's nothing extra to pace.
                     return { status: "SUCCESS", numPages: found.pages || 0, skipped: true, skipReason: 'library' };
                 }
             }
             logError(galleryId, "Cloudflare Rate Limit / Challenge (429)");
-            if (trackerFile) updateListStatus(trackerFile, galleryId, "COOLDOWN - CLOUDFLARE 429");
+            updateListStatus(null, galleryId, "COOLDOWN - CLOUDFLARE 429");
             return { status: "RATE_LIMIT" };
         }
 
@@ -572,26 +524,16 @@ class DownloaderEngine extends EventEmitter {
         const sanitizedAuthor = sanitizeName(authorStr);
         const sanitizedTitle = sanitizeName(title) || galleryId;
 
-        if (trackerFile) {
-            // Same metadata call already needed for the download itself — reusing it to fill
-            // in the full title + artist/group in list.txt costs zero extra requests.
-            updateListDisplayName(trackerFileToListPath(trackerFile), galleryId, buildDisplayName(title, authorStr));
-        }
+        updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
+        updateQueueItem(galleryId, { pagesTotal: numPages });
 
         const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
         let folderPath = path.join(parentDir, sanitizedTitle);
 
-        // Not in library.json doesn't mean not downloaded — it may predate the marker/library
-        // feature, or the title got truncated differently than last time (folder-name length
-        // limit, a tweak on nhentai's side, etc). Before creating a fresh folder (and before
-        // downloading a single byte), check what's already sitting in the parent dir.
         if (fs.existsSync(parentDir)) {
             try {
                 const siblings = fs.readdirSync(parentDir, { withFileTypes: true });
 
-                // Already compressed to .cbz/.zip under this title (exact or untruncated)?
-                // That archive file IS the finished download — adopt it into library.json
-                // and stop here, no folder, no page requests, no re-download.
                 const archiveMatch = siblings.find(d => {
                     if (!d.isFile()) return false;
                     const m = d.name.match(/^(.*)\.(cbz|zip)$/i);
@@ -601,36 +543,24 @@ class DownloaderEngine extends EventEmitter {
                     const archiveExt = archiveMatch.name.match(/\.(cbz|zip)$/i)[1].toLowerCase();
                     const archivePath = path.join(parentDir, archiveMatch.name);
                     saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages });
-                    if (trackerFile) {
-                        updateListStatus(trackerFile, galleryId, "SKIPPED - Already in Library");
-                        updateListDisplayName(trackerFileToListPath(trackerFile), galleryId, buildDisplayName(title, authorStr));
-                    }
+                    updateListStatus(null, galleryId, "SKIPPED - Already in Library");
+                    updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
+                    updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
                     this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Already Downloaded (Archive)' });
-                    // A real metadata request to nhentai just happened (that's how we got
-                    // `title` to match against) — pace this like a real hit, not a free skip.
                     return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
                 }
 
-                // Otherwise, an existing folder with this same title (exact, or the on-disk
-                // name simply being a longer/untruncated version of it) — resume into it
-                // instead of re-downloading everything into a duplicate.
                 const folderMatch = siblings.find(d => d.isDirectory() && d.name.startsWith(sanitizedTitle));
                 if (folderMatch) folderPath = path.join(parentDir, folderMatch.name);
             } catch (e) {}
         }
 
-        // API-first archive download: only worth trying once we know there's no existing
-        // archive/folder already covering this gallery (checked just above) — no point
-        // spending an API-download-endpoint request (tightly rate-limited) on a gallery
-        // we're about to skip anyway.
         const apiKey = process.env.NHENTAI_API_KEY;
-        const targetFormat = trackerFile
-            ? getBatchFormatForGallery(trackerFileToListPath(trackerFile), galleryId)
-            : this.downloadFormat;
+        const targetFormat = getBatchFormatForGallery(null, galleryId) || this.downloadFormat;
         if (apiKey && (targetFormat === 'cbz' || targetFormat === 'zip')) {
             const apiResult = await this.tryApiArchiveDownload(galleryId, targetFormat, apiKey, {
                 sanitizedTitle, title, folderPath, numPages, authorStr, langStr, extraMeta,
-                currentTaskNum, totalTasks, trackerFile
+                currentTaskNum, totalTasks, trackerFile: null
             });
             if (apiResult) return apiResult;
         }
@@ -644,9 +574,6 @@ class DownloaderEngine extends EventEmitter {
                 });
             } catch (e) {
                 if (e.code === 'ENOENT' || e.code === 'ENAMETOOLONG' || e.code === 'EINVAL') {
-                    // The sanitized title still produced a path the OS rejects (odd unicode,
-                    // length, etc) — fall back to the gallery ID as the folder name instead of
-                    // killing the whole batch over one title.
                     folderPath = path.join(parentDir, galleryId.toString());
                     logError(galleryId, `Folder name rejected by filesystem (${e.code}), falling back to gallery ID as folder name`);
                     fs.mkdirSync(folderPath, { recursive: true });
@@ -669,12 +596,13 @@ class DownloaderEngine extends EventEmitter {
             }
         }
 
+        updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
+
         if (completed === numPages) {
             saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
-            this.maybeCompress(galleryId, trackerFile);
-            if (trackerFile) updateListStatus(trackerFile, galleryId, "SKIPPED - Files Complete");
+            this.maybeCompress(galleryId);
+            updateListStatus(null, galleryId, "SKIPPED - Files Complete");
             this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Files 100% Complete' });
-            // Same as above — a real metadata request already happened this call.
             return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
         }
 
@@ -741,8 +669,9 @@ class DownloaderEngine extends EventEmitter {
                 if (pendingPages.length === 0 && active === 0) {
                     clearInterval(heartbeat);
                     saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
-                    this.maybeCompress(galleryId, trackerFile);
-                    if (trackerFile) updateListStatus(trackerFile, galleryId, "DONE");
+                    this.maybeCompress(galleryId);
+                    updateListStatus(null, galleryId, "DONE");
+                    updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
                     logActivity(`[CDN] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
                     this.currentProgress = null;
                     this.emit('done', { galleryId, title, pages: numPages, currentTaskNum, totalTasks });
@@ -790,6 +719,7 @@ class DownloaderEngine extends EventEmitter {
                                     pageErrors.delete(currentPage);
                                     completedBytes += failedSize;
                                     completed++;
+                                    updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
                                     const percent = Math.round((completed / numPages) * 100);
                                     this.currentProgress = buildProgress();
                                     this.currentProgress.percent = percent;
@@ -804,6 +734,7 @@ class DownloaderEngine extends EventEmitter {
                                 pageErrors.delete(currentPage);
                                 completedBytes += pageEntry.bytesReceived;
                                 completed++;
+                                updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
                                 const percent = Math.round((completed / numPages) * 100);
                                 this.currentProgress = buildProgress();
                                 this.currentProgress.percent = percent;
@@ -816,8 +747,6 @@ class DownloaderEngine extends EventEmitter {
                             pageErrors.set(currentPage, err.message);
                             pendingPages.unshift(currentPage);
 
-                            // Only log to file once the same page keeps failing, to avoid spamming
-                            // error.log on the first transient blip.
                             if (attempt === 3 || attempt % 5 === 0) {
                                 logError(galleryId, `Page ${currentPage} (${imageUrl}) failed ${attempt}x: ${err.message}`);
                             }
@@ -835,14 +764,10 @@ class DownloaderEngine extends EventEmitter {
         return { status: "SUCCESS", numPages, skipped: false };
     }
 
-    async runBatch(galleryIds, trackerFile = null) {
+    async runBatch(galleryIds = null, trackerFile = null) {
         if (this.isRunning) return;
         this.isRunning = true;
         this.isStopped = false;
-        // Everything below is wrapped so isRunning is *guaranteed* to reset even if
-        // something throws mid-batch — without this, an uncaught error anywhere in here
-        // leaves isRunning stuck at true forever, and the app can never START again
-        // (every entry point gates on !isRunning) short of a manual restart.
         try {
             await this._runBatchBody(galleryIds, trackerFile);
         } finally {
@@ -850,63 +775,88 @@ class DownloaderEngine extends EventEmitter {
         }
     }
 
-    async _runBatchBody(galleryIds, trackerFile) {
+    async _runBatchBody(galleryIds = null) {
         const library = loadLibrary();
-        const uniqueIds = [...new Set(galleryIds)];
-        const pendingIds = uniqueIds.filter(id => !isLibraryEntryValid(library[id]) && !isPermanentlySkipped(library[id]));
+        if (Array.isArray(galleryIds) && galleryIds.length > 0) {
+            for (const rawId of galleryIds) {
+                const existing = getQueueItem(rawId);
+                if (!existing) {
+                    const isDone = isLibraryEntryValid(library[rawId]);
+                    const isSkipped = isPermanentlySkipped(library[rawId]);
+                    enqueueGallery({
+                        galleryId: rawId,
+                        status: isDone ? 'DONE' : (isSkipped ? 'SKIPPED' : 'PENDING')
+                    });
+                }
+            }
+        }
 
-        this.emit('batch_start', { total: uniqueIds.length, pending: pendingIds.length, skipped: uniqueIds.length - pendingIds.length });
-        logActivity(`Run started: ${pendingIds.length} pending / ${uniqueIds.length} total (${uniqueIds.length - pendingIds.length} already in library)`);
+        const allQueue = getQueueItems();
+        for (const row of allQueue) {
+            const idStr = String(row.gallery_id);
+            if (row.status === 'PENDING') {
+                if (isLibraryEntryValid(library[idStr])) {
+                    updateListStatus(null, row.gallery_id, 'DONE');
+                } else if (isPermanentlySkipped(library[idStr])) {
+                    updateListStatus(null, row.gallery_id, `SKIPPED - ${library[idStr].reason || 'Skipped'}`);
+                }
+            }
+        }
 
-        if (pendingIds.length === 0) {
+        const initialPending = getQueueItems({ status: 'PENDING' });
+        const totalQueueCount = allQueue.length;
+        this.emit('batch_start', {
+            total: totalQueueCount,
+            pending: initialPending.length,
+            skipped: Math.max(0, totalQueueCount - initialPending.length)
+        });
+        logActivity(`Run started: ${initialPending.length} pending / ${totalQueueCount} total (${Math.max(0, totalQueueCount - initialPending.length)} already in library)`);
+
+        if (initialPending.length === 0) {
             this.emit('batch_complete', { processed: 0 });
             return;
         }
 
-        // Startup jitter: every container restart used to start hammering nhentai
-        // immediately, and several restarts close together (exactly what happened during
-        // today's incident/debugging) sent bursts of near-simultaneous requests that look
-        // bot-like to Cloudflare. A small random pause before the very first request breaks
-        // up that pattern for free.
-        const startupJitterMs = 5000 + Math.floor(Math.random() * 10000);
-        logActivity(`Run starting in ${Math.round(startupJitterMs / 1000)}s (startup jitter, anti-burst)`);
-        await sleep(startupJitterMs);
+        if (!this.skipStartupJitter) {
+            const startupJitterMs = 5000 + Math.floor(Math.random() * 10000);
+            logActivity(`Run starting in ${Math.round(startupJitterMs / 1000)}s (startup jitter, anti-burst)`);
+            await sleep(startupJitterMs);
+        }
 
-        for (let i = 0; i < pendingIds.length; i++) {
-            if (this.isStopped) break;
+        let processedCount = 0;
+        let totalTasksSnapshot = initialPending.length;
+
+        while (!this.isStopped) {
             while (this.isPaused && !this.isStopped) {
                 await sleep(500);
             }
             if (this.isStopped) break;
-            const id = pendingIds[i];
+
+            const nextRow = getNextPendingItem();
+            if (!nextRow) break;
+
+            const id = String(nextRow.gallery_id);
+            processedCount++;
+            const remainingNow = getQueueItems({ status: 'PENDING' }).length;
+            totalTasksSnapshot = Math.max(totalTasksSnapshot, processedCount + Math.max(0, remainingNow - 1));
 
             let result = null;
             try {
-                result = await this.processGallery(id, i + 1, pendingIds.length, trackerFile);
+                result = await this.processGallery(id, processedCount, totalTasksSnapshot, null);
             } catch (err) {
                 if (err.permanent) {
-                    // A genuinely broken/wrong link (e.g. 404 - gallery removed or never
-                    // existed) — mark it skipped-for-good instead of erroring every single
-                    // run forever, and keep the batch moving to the next gallery.
                     saveSkippedToLibrary(id, err.message);
                     logActivity(`SKIPPED ID ${id}: ${err.message}`);
-                    if (trackerFile) updateListStatus(trackerFile, id, `SKIPPED - ${err.message.substring(0, 60)}`);
-                    this.emit('skipped', { galleryId: id, reason: err.message, currentTaskNum: i + 1, totalTasks: pendingIds.length });
+                    updateListStatus(null, id, `SKIPPED - ${err.message.substring(0, 60)}`);
+                    this.emit('skipped', { galleryId: id, reason: err.message, currentTaskNum: processedCount, totalTasks: totalTasksSnapshot });
                 } else {
                     logError(id, err.message);
                     logActivity(`ERROR ID ${id}: ${err.message}`);
-                    if (trackerFile) updateListStatus(trackerFile, id, `ERROR - ${err.message.substring(0, 30)}`);
-                    this.emit('error', { galleryId: id, error: err.message, currentTaskNum: i + 1, totalTasks: pendingIds.length });
+                    updateListStatus(null, id, `ERROR - ${err.message.substring(0, 30)}`);
+                    this.emit('error', { galleryId: id, error: err.message, currentTaskNum: processedCount, totalTasks: totalTasksSnapshot });
                 }
             }
 
-            // Cloudflare 429 Cooldown loop — escalating backoff + circuit breaker.
-            // A fixed 5-minute wait that keeps retrying forever is exactly what turned one
-            // 429 into a full Cloudflare JS-challenge IP flag: repeatedly poking a service
-            // that just told you to back off makes things worse, not better. Every
-            // consecutive 429 (across the whole run, not just this gallery) now doubles the
-            // wait, and after too many in a row we stop entirely and require a human to look
-            // instead of continuing to hammer it unattended.
             const MAX_CONSECUTIVE_RATE_LIMITS = 3;
             const BASE_RATE_LIMIT_WAIT = 5 * 60;
             const MAX_RATE_LIMIT_WAIT = 60 * 60;
@@ -921,7 +871,7 @@ class DownloaderEngine extends EventEmitter {
                     logError(id, msg);
                     this.emit('circuit_breaker', { galleryId: id, consecutiveRateLimits: this.consecutiveRateLimits - 1 });
                     this.pause();
-                    if (trackerFile) updateListStatus(trackerFile, id, "PAUSED - Circuit breaker (too many 429s)");
+                    updateListStatus(null, id, "PAUSED - Circuit breaker (too many 429s)");
                     break;
                 }
 
@@ -944,8 +894,8 @@ class DownloaderEngine extends EventEmitter {
                         percent: Math.round(((waitSeconds - s) / waitSeconds) * 100),
                         remaining: s,
                         total: waitSeconds,
-                        taskNum: i + 1,
-                        totalTasks: pendingIds.length
+                        taskNum: processedCount,
+                        totalTasks: totalTasksSnapshot
                     };
                     this.emit('cooldown', this.currentProgress);
                     await sleep(1000);
@@ -954,33 +904,25 @@ class DownloaderEngine extends EventEmitter {
                     this.forceRetry = false;
                     this.currentProgress = null;
                 }
-                result = await this.processGallery(id, i + 1, pendingIds.length, trackerFile);
+                result = await this.processGallery(id, processedCount, totalTasksSnapshot, null);
             }
 
             if (this.circuitBreakerTripped) break;
 
-            // Any real success (download OR a genuine metadata fetch that wasn't rate
-            // limited) proves we're not currently flagged — safe to reset back to full speed.
             if (result && result.status !== "RATE_LIMIT") {
                 this.consecutiveRateLimits = 0;
             }
 
-            // Only a pure library.json/marker-file hit never touched the network at all — that
-            // one gets a small "humanize" pause instead of the full anti-ban delay (a few
-            // hundred of these costs low-single-digit minutes instead of hours, but it's never
-            // a flat-out instant burst either). Any OTHER skip reason (found on disk only
-            // after a real metadata fetch succeeded) DID make a real request to nhentai just
-            // now and needs the same pacing a real download gets — it just skips the actual
-            // page downloads afterward.
+            const hasMorePending = !!getNextPendingItem();
             const wasFreeSkip = !!(result && result.skipped && result.skipReason === 'library');
 
-            if (wasFreeSkip && i < pendingIds.length - 1 && !this.isStopped) {
+            if (wasFreeSkip && hasMorePending && !this.isStopped) {
                 await sleep(1000 + Math.floor(Math.random() * 2000));
             }
 
-            if (i < pendingIds.length - 1 && !this.isStopped && !wasFreeSkip) {
-                if ((i + 1) % this.batchSize === 0) {
-                    const currentBatch = Math.ceil((i + 1) / this.batchSize);
+            if (hasMorePending && !this.isStopped && !wasFreeSkip) {
+                if (processedCount % this.batchSize === 0) {
+                    const currentBatch = Math.ceil(processedCount / this.batchSize);
                     const totalSeconds = this.batchRestMinutes * 60;
                     for (let s = totalSeconds; s > 0; s--) {
                         if (this.isStopped || this.forceRetry) break;
@@ -998,8 +940,8 @@ class DownloaderEngine extends EventEmitter {
                             percent: Math.round(((totalSeconds - s) / totalSeconds) * 100),
                             remaining: s,
                             total: totalSeconds,
-                            taskNum: i + 1,
-                            totalTasks: pendingIds.length
+                            taskNum: processedCount,
+                            totalTasks: totalTasksSnapshot
                         };
                         this.emit('cooldown', this.currentProgress);
                         await sleep(1000);
@@ -1025,8 +967,8 @@ class DownloaderEngine extends EventEmitter {
                             percent: Math.round(((delaySeconds - s) / delaySeconds) * 100),
                             remaining: s,
                             total: delaySeconds,
-                            taskNum: i + 1,
-                            totalTasks: pendingIds.length
+                            taskNum: processedCount,
+                            totalTasks: totalTasksSnapshot
                         };
                         this.emit('cooldown', this.currentProgress);
                         await sleep(1000);
@@ -1037,22 +979,19 @@ class DownloaderEngine extends EventEmitter {
             }
         }
 
-        logActivity(`Run finished: ${pendingIds.length} galleries processed`);
-        this.emit('batch_complete', { processed: pendingIds.length });
+        logActivity(`Run finished: ${processedCount} galleries processed`);
+        this.emit('batch_complete', { processed: processedCount });
     }
 
     stop() {
         this.isStopped = true;
         this.isRunning = false;
         this.isPaused = false;
-        // Deliberately NOT clearing this.currentProgress here: the UI keeps showing the
-        // last-known snapshot (marked stale via `live: false`) instead of going blank,
-        // so the user can tell what was happening instead of wondering if anything ran at all.
         if (this.currentProgress) this.currentProgress.live = false;
         this.emit('stopped');
     }
 
-    async restart(galleryIds, trackerFile = null) {
+    async restart(galleryIds = null, trackerFile = null) {
         this.stop();
         this.forceRetry = true;
         await sleep(600);

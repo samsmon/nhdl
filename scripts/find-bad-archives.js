@@ -22,8 +22,9 @@ function resolveDownloadDir(arg) {
     if (arg) return path.resolve(arg);
     if (process.env.DOWNLOAD_DIR) return process.env.DOWNLOAD_DIR;
     try {
-        const cfg = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'config.json'), 'utf-8'));
-        if (cfg.downloadDir) return cfg.downloadDir;
+        const { getSetting } = require('../core/db');
+        const savedDir = getSetting('downloadDir');
+        if (savedDir) return savedDir;
     } catch (e) {}
     return path.join(__dirname, '..', 'Download');
 }

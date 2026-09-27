@@ -95,8 +95,8 @@ Task:
 - [x] Naikkan Docker base image ke `node:24-alpine` (Dockerfile, kedua stage) dan set `engines.node >= 22.13` di `package.json`
 - [x] `core/db.js`: buka DB, jalankan migrasi skema (berbasis `schema_version`), ekspor fungsi query (bukan SQL mentah di mana-mana)
 - [x] `core/tracker.js`: ganti baca/tulis `list_status.txt` dan `library.json` dengan tabel `queue` dan `library`
-- [ ] `core/engine.js`: ambil item berikutnya dari `queue` (status `PENDING`, urut `priority DESC, id`), update status/progress per baris; hapus `progress.json`
-- [ ] Config: `config.json` → `settings`
+- [x] `core/engine.js`: ambil item berikutnya dari `queue` (status `PENDING`, urut `priority DESC, id`), update status/progress per baris; hapus `progress.json`
+- [x] Config: `config.json` → `settings`
 - [x] Logger: `activity.log`/`error.log` → `events` (batasi, mis. simpan 10k baris terakhir)
 - [ ] `server/index.js`: endpoint pakai query DB; tambah import `list.txt` (upload/paste) dan export
 - [x] Rescan folder download untuk mengisi `library`
