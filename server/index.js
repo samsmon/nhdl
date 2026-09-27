@@ -6,13 +6,27 @@ const { loadEnvFile, saveEnvValue } = require('../core/env');
 const ROOT_DIR = path.resolve(__dirname, '..');
 loadEnvFile(ROOT_DIR);
 
-const { verifyApiKey } = require('../core/nhentaiApi');
+const {
+    initDb,
+    resetStuckQueueItems,
+    getQueueItems,
+    getMaxBatch,
+    importListText,
+    exportListText,
+    updateQueueStatus,
+    getAllLibraryEntries
+} = require('../core/db');
+initDb();
 
+const { verifyApiKey } = require('../core/nhentaiApi');
 const DownloaderEngine = require('../core/engine');
-const trackerModule = require('../core/tracker');
-const { syncListTracker, updateListStatus, loadLibrary, rescanLibrary, renameLibraryEntry, compressLibraryEntry } = trackerModule;
-const { extractGalleries } = require('../core/utils');
-const { logActivity, readActivityLog, ACTIVITY_LOG } = require('../core/logger');
+const {
+    loadLibrary,
+    rescanLibrary,
+    renameLibraryEntry,
+    compressLibraryEntry
+} = require('../core/tracker');
+const { logActivity, readActivityLog, readErrorLog } = require('../core/logger');
 const { isAuthRequired, checkPassword, createSession, isValidSession, destroySession, parseCookies, SESSION_TTL_MS } = require('../core/auth');
 
 const WEBUI_DIST = path.join(ROOT_DIR, 'webui', 'dist');
@@ -22,20 +36,9 @@ const SESSION_COOKIE = 'nhdl_session';
 
 const engine = new DownloaderEngine();
 
-// IMPORTANT: 'error' is a special EventEmitter event — emitting it with zero listeners
-// throws synchronously and used to silently kill runBatch's loop mid-batch on the very
-// first gallery-level failure (bad filename, disk I/O error, etc), with nothing written
-// anywhere explaining why the queue just stopped. This listener is what makes that a
-// normal, logged, continue-to-next-gallery event instead of a crash.
 engine.on('error', ({ galleryId, error, currentTaskNum, totalTasks }) => {
     logActivity(`ERROR ID ${galleryId} (${currentTaskNum}/${totalTasks}): ${error}`);
 });
-
-// Queue files live next to the downloads themselves (a persistent volume) instead of a
-// path fixed at startup, so they follow the download dir if the user changes it and
-// survive a container rebuild (the app dir does not).
-function getListFile() { return path.join(engine.baseDownloadDir, 'list.txt'); }
-function getStatusFile() { return path.join(engine.baseDownloadDir, 'list_status.txt'); }
 
 const mimeTypes = {
     '.html': 'text/html',
@@ -59,9 +62,6 @@ process.on('unhandledRejection', (reason) => {
     logActivity(`FATAL Unhandled Rejection: ${msg}`);
 });
 
-// Batch-compress runs as a plain background job on the server process, independent of any
-// HTTP connection. `compressJob` is polled via GET /api/library/compress-status so the UI
-// can show live progress, and the job itself is unaffected by the browser tab closing.
 let compressJob = null;
 
 function startBatchCompressJob(ids, ext) {
@@ -91,8 +91,6 @@ function startBatchCompressJob(ids, ext) {
             else { compressJob.failed++; compressJob.errors.push({ id: strId, error: result.error }); }
 
             compressJob.done++;
-            // Yield back to the event loop between files so /api/library/compress-status
-            // polls (and the rest of the server) stay responsive during a big batch.
             await new Promise(resolve => setImmediate(resolve));
         }
         compressJob.currentId = null;
@@ -103,27 +101,16 @@ function startBatchCompressJob(ids, ext) {
 }
 
 function autoProcessQueue() {
-    if (fs.existsSync(getListFile())) {
-        const synced = syncListTracker(getListFile());
-        if (synced && synced.galleryIds.length > 0 && !engine.isRunning) {
-            console.log(`[+] Auto-processing queue: ${synced.galleryIds.length} galleries found.`);
-            engine.runBatch(synced.galleryIds, synced.trackerFile).catch(e => {
-                logActivity(`FATAL runBatch (auto-process): ${e.stack || e.message}`);
-            });
-        }
+    const pending = getQueueItems({ status: 'PENDING' });
+    if (pending.length > 0 && !engine.isRunning && !engine.isPaused) {
+        console.log(`[+] Auto-processing queue: ${pending.length} pending galleries found.`);
+        engine.runBatch().catch(e => {
+            logActivity(`FATAL runBatch (auto-process): ${e.stack || e.message}`);
+        });
     }
 }
 
-// A "batch" in runBatch() terms is just whatever pendingIds snapshot it started with — it
-// doesn't know about newly-added items. When one such run finishes, optionally pick up
-// anything new that was queued meanwhile (e.g. a later "Insert Target" paste) instead of
-// requiring the user to press START again.
 engine.on('batch_complete', (e) => {
-    // Guard against re-triggering on a batch that processed nothing: runBatch() emits
-    // batch_complete with processed:0 when every queued ID is already done, and
-    // autoProcessQueue() would just find those same already-done IDs again — looping
-    // synchronously forever (this actually happened: ~860 "Run started" log lines in
-    // under a second before a temp-file rename finally threw and surfaced it).
     if (engine.autoContinueBatches && e && e.processed > 0) {
         autoProcessQueue();
     }
@@ -164,512 +151,508 @@ function renderLoginPage(error) {
 </body></html>`;
 }
 
-const server = http.createServer((req, res) => {
-    // One-time-login gate — only active when NHDL_PASSWORD is set. Sessions are held in
-    // memory server-side; the cookie just carries an opaque token, never the password.
-    if (isAuthRequired()) {
-        const cookies = parseCookies(req.headers.cookie);
-        const authed = isValidSession(cookies[SESSION_COOKIE]);
+function createRequestHandler() {
+    return (req, res) => {
+        if (isAuthRequired()) {
+            const cookies = parseCookies(req.headers.cookie);
+            const authed = isValidSession(cookies[SESSION_COOKIE]);
 
-        if (req.method === 'POST' && req.url === '/api/login') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                res.setHeader('Content-Type', 'application/json');
-                try {
-                    const { password } = JSON.parse(body);
-                    if (checkPassword(password)) {
-                        const token = createSession();
-                        res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; SameSite=Lax`);
-                        logActivity('Login: success');
-                        return res.end(JSON.stringify({ success: true }));
-                    }
-                    logActivity('Login: wrong password');
-                    res.writeHead(401);
-                    return res.end(JSON.stringify({ success: false, error: 'Wrong password' }));
-                } catch (e) {
-                    res.writeHead(400);
-                    return res.end(JSON.stringify({ success: false, error: 'Bad request' }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'POST' && req.url === '/api/logout') {
-            destroySession(cookies[SESSION_COOKIE]);
-            res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
-            res.setHeader('Content-Type', 'application/json');
-            logActivity('Logout');
-            return res.end(JSON.stringify({ success: true }));
-        }
-
-        if (!authed) {
-            if (req.url.startsWith('/api/')) {
-                res.setHeader('Content-Type', 'application/json');
-                res.writeHead(401);
-                return res.end(JSON.stringify({ error: 'Unauthorized' }));
-            }
-            const urlObj = new URL(req.url, 'http://localhost');
-            const hasError = urlObj.searchParams.get('error') === '1';
-            res.setHeader('Content-Type', 'text/html');
-            return res.end(renderLoginPage(hasError ? 'Wrong password' : null));
-        }
-    }
-
-    // API Endpoints
-    if (req.url.startsWith('/api/')) {
-        res.setHeader('Content-Type', 'application/json');
-        res.setHeader('Access-Control-Allow-Origin', '*');
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
-        res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-        if (req.method === 'OPTIONS') {
-            res.writeHead(204);
-            return res.end();
-        }
-
-        if (req.method === 'GET' && req.url === '/api/status') {
-            let listContent = fs.existsSync(getListFile()) ? fs.readFileSync(getListFile(), 'utf-8') : '';
-            let statusContent = fs.existsSync(getStatusFile()) ? fs.readFileSync(getStatusFile(), 'utf-8') : '';
-            let errorContent = fs.existsSync(trackerModule.DEFAULT_ERROR_LOG) ? fs.readFileSync(trackerModule.DEFAULT_ERROR_LOG, 'utf-8') : '';
-
-            const statusLines = statusContent.split('\n').filter(l => l.trim());
-            // Lines that look like "# BATCH 3" mark where a user's paste/insert began —
-            // everything below one, until the next marker, belongs to that batch. Content
-            // that predates this feature (no marker at all) is treated as batch 1.
-            let currentBatch = 1;
-            let batchCount = 1;
-            const items = [];
-            statusLines.forEach(line => {
-                const batchMatch = line.match(/^#\s*BATCH\s+(\d+)/i);
-                if (batchMatch) {
-                    currentBatch = parseInt(batchMatch[1], 10);
-                    batchCount = Math.max(batchCount, currentBatch);
-                    return;
-                }
-                if (line.trim().startsWith('#')) return;
-
-                const match = line.match(/^\[(.*?)\]\s*(.*)$/);
-                if (match) {
-                    items.push({ status: match[1], url: match[2], batch: currentBatch });
-                } else {
-                    items.push({ status: 'UNKNOWN', url: line, batch: currentBatch });
-                }
-            });
-
-            return res.end(JSON.stringify({
-                items,
-                batchCount,
-                rawList: listContent,
-                errors: errorContent,
-                liveProgress: engine.currentProgress,
-                engineStatus: engine.getStatus(),
-                autoContinueBatches: engine.autoContinueBatches
-            }));
-        }
-
-        if (req.method === 'GET' && req.url === '/api/library') {
-            const library = loadLibrary();
-            const items = Object.entries(library).map(([id, data]) => ({
-                id,
-                title: data.title || 'Unknown',
-                author: data.author || null,
-                lang: data.lang || null,
-                pages: data.pages || 0,
-                folder: data.folder || null,
-                downloadedAt: data.downloadedAt || null,
-                legacy: !!data.legacy,
-                archived: !!data.archived,
-                archiveExt: data.archiveExt || null
-            })).sort((a, b) => {
-                if (!a.downloadedAt) return 1;
-                if (!b.downloadedAt) return -1;
-                return new Date(b.downloadedAt) - new Date(a.downloadedAt);
-            });
-            return res.end(JSON.stringify({ items, total: items.length }));
-        }
-
-        if (req.method === 'POST' && req.url === '/api/library/rescan') {
-            // One-shot, on-demand disk walk — only runs when the user explicitly asks for
-            // it (button click), never on a timer/interval, so it doesn't cost any CPU
-            // the rest of the time.
-            try {
-                const result = rescanLibrary(engine.baseDownloadDir);
-                logActivity(`Library rescan: ${result.relocated} relocated, ${result.pruned} pruned (no folder found), ${result.unchanged} unchanged`);
-                return res.end(JSON.stringify({ success: true, ...result }));
-            } catch (e) {
-                res.writeHead(500);
-                return res.end(JSON.stringify({ success: false, error: e.message }));
-            }
-        }
-
-        if (req.method === 'POST' && req.url === '/api/queue') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                try {
-                    const { text } = JSON.parse(body);
-                    if (typeof text === 'string') {
-                        fs.writeFileSync(getListFile(), text, 'utf-8');
-                        const synced = syncListTracker(getListFile());
-                        logActivity(`Queue saved: ${synced ? synced.galleryIds.length : 0} gallery line(s) in list.txt`);
-                        res.end(JSON.stringify({ success: true }));
-
-                        if (synced && synced.galleryIds.length > 0 && !engine.isRunning && !engine.isPaused) {
-                            engine.runBatch(synced.galleryIds, synced.trackerFile).catch(e => {
-                                logActivity(`FATAL runBatch (queue save): ${e.stack || e.message}`);
-                            });
+            if (req.method === 'POST' && req.url === '/api/login') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    res.setHeader('Content-Type', 'application/json');
+                    try {
+                        const { password } = JSON.parse(body);
+                        if (checkPassword(password)) {
+                            const token = createSession();
+                            res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; SameSite=Lax`);
+                            logActivity('Login: success');
+                            return res.end(JSON.stringify({ success: true }));
                         }
-                    } else {
+                        logActivity('Login: wrong password');
+                        res.writeHead(401);
+                        return res.end(JSON.stringify({ success: false, error: 'Wrong password' }));
+                    } catch (e) {
                         res.writeHead(400);
-                        res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+                        return res.end(JSON.stringify({ success: false, error: 'Bad request' }));
                     }
+                });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/logout') {
+                destroySession(cookies[SESSION_COOKIE]);
+                res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
+                res.setHeader('Content-Type', 'application/json');
+                logActivity('Logout');
+                return res.end(JSON.stringify({ success: true }));
+            }
+
+            if (!authed) {
+                if (req.url.startsWith('/api/')) {
+                    res.setHeader('Content-Type', 'application/json');
+                    res.writeHead(401);
+                    return res.end(JSON.stringify({ error: 'Unauthorized' }));
+                }
+                const urlObj = new URL(req.url, 'http://localhost');
+                const hasError = urlObj.searchParams.get('error') === '1';
+                res.setHeader('Content-Type', 'text/html');
+                return res.end(renderLoginPage(hasError ? 'Wrong password' : null));
+            }
+        }
+
+        if (req.url.startsWith('/api/')) {
+            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Access-Control-Allow-Origin', '*');
+            res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+            res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+
+            if (req.method === 'OPTIONS') {
+                res.writeHead(204);
+                return res.end();
+            }
+
+            if (req.method === 'GET' && req.url === '/api/status') {
+                const rows = getQueueItems();
+                const items = rows.map(r => {
+                    const displayStatus = r.error ? `${r.status} - ${r.error}` : r.status;
+                    const displayUrl = r.title ? `${r.url} | ${r.title}` : r.url;
+                    return {
+                        id: r.id,
+                        galleryId: r.gallery_id,
+                        status: displayStatus,
+                        rawStatus: r.status,
+                        url: displayUrl,
+                        title: r.title,
+                        batch: r.batch || 1,
+                        priority: r.priority || 0,
+                        pagesDone: r.pages_done || 0,
+                        pagesTotal: r.pages_total || 0,
+                        error: r.error || null,
+                        retries: r.retries || 0,
+                        format: r.format || null
+                    };
+                });
+
+                const batchCount = Math.max(1, getMaxBatch());
+                const rawList = exportListText();
+                const errorContent = readErrorLog();
+
+                return res.end(JSON.stringify({
+                    items,
+                    batchCount,
+                    rawList,
+                    errors: errorContent,
+                    liveProgress: engine.currentProgress,
+                    engineStatus: engine.getStatus(),
+                    autoContinueBatches: engine.autoContinueBatches
+                }));
+            }
+
+            if (req.method === 'GET' && req.url === '/api/library') {
+                const entries = getAllLibraryEntries().filter(e => !e.skipped);
+                const items = entries.map(data => ({
+                    id: String(data.gallery_id),
+                    title: data.title || 'Unknown',
+                    author: data.artist || null,
+                    lang: data.language || null,
+                    pages: data.pages || 0,
+                    folder: data.path || null,
+                    downloadedAt: data.added_at || null,
+                    legacy: false,
+                    archived: !!data.archived,
+                    archiveExt: data.archiveExt || null
+                }));
+                return res.end(JSON.stringify({ items, total: items.length }));
+            }
+
+            if (req.method === 'POST' && req.url === '/api/library/rescan') {
+                try {
+                    const result = rescanLibrary(engine.baseDownloadDir);
+                    logActivity(`Library rescan: ${result.relocated} relocated/added, ${result.pruned} pruned (no folder found), ${result.unchanged} unchanged`);
+                    return res.end(JSON.stringify({ success: true, ...result }));
                 } catch (e) {
                     res.writeHead(500);
-                    res.end(JSON.stringify({ success: false, error: e.message }));
+                    return res.end(JSON.stringify({ success: false, error: e.message }));
                 }
-            });
-            return;
-        }
+            }
 
-        if (req.method === 'POST' && req.url === '/api/control') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                try {
-                    let action = '';
+            if (req.method === 'POST' && (req.url === '/api/queue' || req.url === '/api/queue/import')) {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
                     try {
-                        const parsed = JSON.parse(body);
-                        action = parsed.action;
-                    } catch(pe) {
+                        let text = '';
+                        let replace = req.url === '/api/queue';
+                        let defaultFormat = engine.downloadFormat;
+
+                        const contentType = String(req.headers['content-type'] || '').toLowerCase();
+                        if (contentType.includes('text/plain')) {
+                            text = body;
+                        } else {
+                            const parsed = JSON.parse(body || '{}');
+                            text = typeof parsed.text === 'string' ? parsed.text : '';
+                            if (typeof parsed.replace === 'boolean') replace = parsed.replace;
+                            if (parsed.format) defaultFormat = parsed.format;
+                        }
+
+                        const summary = importListText(text, { replace, defaultFormat });
+                        logActivity(`Queue updated: ${summary.total} gallery item(s) (${summary.added} added, ${summary.duplicates} existing)`);
+                        res.end(JSON.stringify({ success: true, ...summary }));
+
+                        autoProcessQueue();
+                    } catch (e) {
+                        res.writeHead(400);
+                        res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'GET' && req.url === '/api/queue/export') {
+                const listText = exportListText();
+                res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+                res.setHeader('Content-Disposition', 'attachment; filename="list.txt"');
+                return res.end(listText);
+            }
+
+            if (req.method === 'POST' && req.url === '/api/control') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        let action = '';
                         try {
-                            const unescaped = body.replace(/\\"/g, '"');
-                            const parsed = JSON.parse(unescaped);
+                            const parsed = JSON.parse(body);
                             action = parsed.action;
-                        } catch(pe2) {
+                        } catch (pe) {
                             if (body.includes('pause')) action = 'pause';
                             else if (body.includes('resume')) action = 'resume';
                             else if (body.includes('restart')) action = 'restart';
                             else if (body.includes('start')) action = 'start';
                         }
-                    }
 
-                    logActivity(`Control action: ${action || '(unrecognized)'}`);
-                    if (action === 'pause' || action === 'stop') {
-                        engine.pause();
-                    } else if (action === 'resume' || action === 'start') {
-                        engine.resume();
-                        autoProcessQueue();
-                    } else if (action === 'restart') {
-                        if (fs.existsSync(getListFile())) {
-                            const synced = syncListTracker(getListFile());
-                            if (synced && synced.galleryIds.length > 0) {
-                                engine.restart(synced.galleryIds, synced.trackerFile);
+                        logActivity(`Control action: ${action || '(unrecognized)'}`);
+                        if (action === 'pause' || action === 'stop') {
+                            engine.pause();
+                        } else if (action === 'resume' || action === 'start') {
+                            engine.resume();
+                            autoProcessQueue();
+                        } else if (action === 'restart') {
+                            resetStuckQueueItems();
+                            engine.restart();
+                        }
+                        return res.end(JSON.stringify({ success: true, engineStatus: engine.getStatus() }));
+                    } catch (e) {
+                        res.writeHead(500);
+                        res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'GET' && req.url === '/api/config') {
+                const apiKey = process.env.NHENTAI_API_KEY || '';
+                return res.end(JSON.stringify({
+                    downloadDir: engine.baseDownloadDir,
+                    downloadFormat: engine.downloadFormat,
+                    autoContinueBatches: engine.autoContinueBatches,
+                    authRequired: isAuthRequired(),
+                    apiKeyConfigured: !!apiKey,
+                    apiKeyMasked: apiKey ? `${apiKey.slice(0, 4)}${'*'.repeat(Math.max(apiKey.length - 8, 4))}${apiKey.slice(-4)}` : ''
+                }));
+            }
+
+            if (req.method === 'POST' && req.url === '/api/config') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { downloadDir, downloadFormat, autoContinueBatches, apiKey } = JSON.parse(body);
+                        if (typeof autoContinueBatches === 'boolean') {
+                            engine.setAutoContinueBatches(autoContinueBatches);
+                            return res.end(JSON.stringify({ success: true, autoContinueBatches: engine.autoContinueBatches }));
+                        }
+                        if (downloadFormat) {
+                            engine.setDownloadFormat(downloadFormat);
+                            return res.end(JSON.stringify({ success: true, downloadFormat: engine.downloadFormat }));
+                        }
+                        if (downloadDir && typeof downloadDir === 'string') {
+                            if (!fs.existsSync(downloadDir)) {
+                                fs.mkdirSync(downloadDir, { recursive: true });
                             }
+                            engine.setDownloadDir(downloadDir);
+                            return res.end(JSON.stringify({ success: true, downloadDir: engine.baseDownloadDir }));
                         }
-                    }
-                    return res.end(JSON.stringify({ success: true, engineStatus: engine.getStatus() }));
-                } catch (e) {
-                    res.writeHead(500);
-                    res.end(JSON.stringify({ success: false, error: e.message }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'GET' && req.url === '/api/config') {
-            const apiKey = process.env.NHENTAI_API_KEY || '';
-            return res.end(JSON.stringify({
-                downloadDir: engine.baseDownloadDir,
-                downloadFormat: engine.downloadFormat,
-                autoContinueBatches: engine.autoContinueBatches,
-                authRequired: isAuthRequired(),
-                apiKeyConfigured: !!apiKey,
-                apiKeyMasked: apiKey ? `${apiKey.slice(0, 4)}${'*'.repeat(Math.max(apiKey.length - 8, 4))}${apiKey.slice(-4)}` : ''
-            }));
-        }
-
-        if (req.method === 'POST' && req.url === '/api/config') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                try {
-                    const { downloadDir, downloadFormat, autoContinueBatches, apiKey } = JSON.parse(body);
-                    if (typeof autoContinueBatches === 'boolean') {
-                        engine.setAutoContinueBatches(autoContinueBatches);
-                        return res.end(JSON.stringify({ success: true, autoContinueBatches: engine.autoContinueBatches }));
-                    }
-                    if (downloadFormat) {
-                        engine.setDownloadFormat(downloadFormat);
-                        return res.end(JSON.stringify({ success: true, downloadFormat: engine.downloadFormat }));
-                    }
-                    if (downloadDir && typeof downloadDir === 'string') {
-                        if (!fs.existsSync(downloadDir)) {
-                            fs.mkdirSync(downloadDir, { recursive: true });
+                        if (typeof apiKey === 'string') {
+                            if (!apiKey.trim()) {
+                                res.writeHead(400);
+                                return res.end(JSON.stringify({ success: false, error: 'API key kosong' }));
+                            }
+                            saveEnvValue(ROOT_DIR, 'NHENTAI_API_KEY', apiKey.trim());
+                            return res.end(JSON.stringify({ success: true }));
                         }
-                        engine.setDownloadDir(downloadDir);
-                        return res.end(JSON.stringify({ success: true, downloadDir: engine.baseDownloadDir }));
+                        res.writeHead(400);
+                        res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
+                    } catch (e) {
+                        res.writeHead(500);
+                        res.end(JSON.stringify({ success: false, error: e.message }));
                     }
-                    if (typeof apiKey === 'string') {
-                        if (!apiKey.trim()) {
+                });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/config/verify-key') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', async () => {
+                    try {
+                        const { apiKey } = JSON.parse(body || '{}');
+                        const keyToCheck = typeof apiKey === 'string' && apiKey.trim() ? apiKey.trim() : process.env.NHENTAI_API_KEY;
+                        const result = await verifyApiKey(keyToCheck);
+                        res.end(JSON.stringify(result));
+                    } catch (e) {
+                        res.writeHead(500);
+                        res.end(JSON.stringify({ valid: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/library/rename') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { id, newName } = JSON.parse(body);
+                        if (!id || !newName) {
                             res.writeHead(400);
-                            return res.end(JSON.stringify({ success: false, error: 'API key kosong' }));
+                            return res.end(JSON.stringify({ success: false, error: 'id and newName are required' }));
                         }
-                        saveEnvValue(ROOT_DIR, 'NHENTAI_API_KEY', apiKey.trim());
-                        return res.end(JSON.stringify({ success: true }));
+                        const result = renameLibraryEntry(id.toString(), newName);
+                        if (result.success) logActivity(`Renamed ID ${id} -> "${newName}"`);
+                        if (!result.success) res.writeHead(400);
+                        return res.end(JSON.stringify(result));
+                    } catch (e) {
+                        res.writeHead(500);
+                        res.end(JSON.stringify({ success: false, error: e.message }));
                     }
-                    res.writeHead(400);
-                    res.end(JSON.stringify({ success: false, error: 'Invalid payload' }));
-                } catch (e) {
-                    res.writeHead(500);
-                    res.end(JSON.stringify({ success: false, error: e.message }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'POST' && req.url === '/api/config/verify-key') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', async () => {
-                try {
-                    const { apiKey } = JSON.parse(body || '{}');
-                    const keyToCheck = typeof apiKey === 'string' && apiKey.trim() ? apiKey.trim() : process.env.NHENTAI_API_KEY;
-                    const result = await verifyApiKey(keyToCheck);
-                    res.end(JSON.stringify(result));
-                } catch (e) {
-                    res.writeHead(500);
-                    res.end(JSON.stringify({ valid: false, error: e.message }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'POST' && req.url === '/api/library/rename') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                try {
-                    const { id, newName } = JSON.parse(body);
-                    if (!id || !newName) {
-                        res.writeHead(400);
-                        return res.end(JSON.stringify({ success: false, error: 'id and newName are required' }));
-                    }
-                    const result = renameLibraryEntry(id.toString(), newName, undefined, getListFile());
-                    if (result.success) logActivity(`Renamed ID ${id} -> "${newName}"`);
-                    if (!result.success) res.writeHead(400);
-                    return res.end(JSON.stringify(result));
-                } catch (e) {
-                    res.writeHead(500);
-                    res.end(JSON.stringify({ success: false, error: e.message }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'POST' && req.url === '/api/library/compress') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                try {
-                    const { id, ext } = JSON.parse(body);
-                    if (!id) {
-                        res.writeHead(400);
-                        return res.end(JSON.stringify({ success: false, error: 'id is required' }));
-                    }
-                    const result = compressLibraryEntry(id.toString(), { ext });
-                    if (result.success) logActivity(`Compressed ID ${id} to .${ext === 'zip' ? 'zip' : 'cbz'}`);
-                    if (!result.success) res.writeHead(400);
-                    return res.end(JSON.stringify(result));
-                } catch (e) {
-                    res.writeHead(500);
-                    res.end(JSON.stringify({ success: false, error: e.message }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'POST' && req.url === '/api/library/batch-compress') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                try {
-                    const { ids, ext } = JSON.parse(body);
-                    if (!Array.isArray(ids) || ids.length === 0) {
-                        res.writeHead(400);
-                        return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
-                    }
-                    if (compressJob && !compressJob.finishedAt) {
-                        res.writeHead(409);
-                        return res.end(JSON.stringify({ success: false, error: 'A batch compress is already running' }));
-                    }
-                    // Runs detached from this request/response — it's a plain async loop on
-                    // the Node process, so closing the browser tab (which only drops the HTTP
-                    // connection) has no effect on it. Progress is polled separately via
-                    // /api/library/compress-status, which works even after reopening the app.
-                    startBatchCompressJob(ids, ext);
-                    return res.end(JSON.stringify({ success: true, started: true, total: ids.length }));
-                } catch (e) {
-                    res.writeHead(500);
-                    res.end(JSON.stringify({ success: false, error: e.message }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'GET' && req.url === '/api/library/compress-status') {
-            return res.end(JSON.stringify({ job: compressJob }));
-        }
-
-        if (req.method === 'GET' && req.url === '/api/logs') {
-            return res.end(JSON.stringify({ log: readActivityLog() }));
-        }
-
-        if (req.method === 'GET' && req.url === '/api/logs/download') {
-            const log = readActivityLog();
-            res.setHeader('Content-Type', 'text/plain');
-            res.setHeader('Content-Disposition', `attachment; filename="nhdl-activity-${Date.now()}.log"`);
-            return res.end(log);
-        }
-
-        if (req.method === 'POST' && req.url === '/api/retry') {
-            let body = '';
-            req.on('data', chunk => { body += chunk.toString(); });
-            req.on('end', () => {
-                try {
-                    let payload = {};
-                    if (body && body.trim()) {
-                        try { payload = JSON.parse(body); } catch(e) {}
-                    }
-                    const { galleryId } = payload;
-                    engine.triggerForceRetry();
-
-                    if (galleryId) {
-                        updateListStatus(getStatusFile(), galleryId, 'PENDING');
-                        autoProcessQueue();
-                    }
-                    return res.end(JSON.stringify({ success: true, message: 'Force retry triggered' }));
-                } catch (e) {
-                    res.writeHead(500);
-                    res.end(JSON.stringify({ success: false, error: e.message }));
-                }
-            });
-            return;
-        }
-
-        if (req.method === 'GET' && req.url.startsWith('/api/fs/browse')) {
-            const urlObj = new URL(req.url, 'http://localhost');
-            let targetPath = urlObj.searchParams.get('path');
-
-            const isWindows = process.platform === 'win32';
-            let availableDrives = [];
-            if (isWindows) {
-                const possibleDrives = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-                availableDrives = possibleDrives.filter(d => {
-                    try { return fs.existsSync(d + ':\\'); } catch(e) { return false; }
-                }).map(d => d + ':\\');
+                });
+                return;
             }
 
-            if (!targetPath || targetPath.trim() === '') {
-                targetPath = engine.baseDownloadDir;
+            if (req.method === 'POST' && req.url === '/api/library/compress') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { id, ext } = JSON.parse(body);
+                        if (!id) {
+                            res.writeHead(400);
+                            return res.end(JSON.stringify({ success: false, error: 'id is required' }));
+                        }
+                        const result = compressLibraryEntry(id.toString(), { ext });
+                        if (result.success) logActivity(`Compressed ID ${id} to .${ext === 'zip' ? 'zip' : 'cbz'}`);
+                        if (!result.success) res.writeHead(400);
+                        return res.end(JSON.stringify(result));
+                    } catch (e) {
+                        res.writeHead(500);
+                        res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
             }
 
-            targetPath = path.resolve(targetPath);
+            if (req.method === 'POST' && req.url === '/api/library/batch-compress') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { ids, ext } = JSON.parse(body);
+                        if (!Array.isArray(ids) || ids.length === 0) {
+                            res.writeHead(400);
+                            return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
+                        }
+                        if (compressJob && !compressJob.finishedAt) {
+                            res.writeHead(409);
+                            return res.end(JSON.stringify({ success: false, error: 'A batch compress is already running' }));
+                        }
+                        startBatchCompressJob(ids, ext);
+                        return res.end(JSON.stringify({ success: true, started: true, total: ids.length }));
+                    } catch (e) {
+                        res.writeHead(500);
+                        res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
 
-            try {
-                if (!fs.existsSync(targetPath)) {
+            if (req.method === 'GET' && req.url === '/api/library/compress-status') {
+                return res.end(JSON.stringify({ job: compressJob }));
+            }
+
+            if (req.method === 'GET' && req.url === '/api/logs') {
+                return res.end(JSON.stringify({ log: readActivityLog() }));
+            }
+
+            if (req.method === 'GET' && req.url === '/api/logs/download') {
+                const log = readActivityLog();
+                res.setHeader('Content-Type', 'text/plain');
+                res.setHeader('Content-Disposition', `attachment; filename="nhdl-activity-${Date.now()}.log"`);
+                return res.end(log);
+            }
+
+            if (req.method === 'POST' && req.url === '/api/retry') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        let payload = {};
+                        if (body && body.trim()) {
+                            try { payload = JSON.parse(body); } catch (e) {}
+                        }
+                        const { galleryId } = payload;
+                        engine.triggerForceRetry();
+
+                        if (galleryId) {
+                            updateQueueStatus(galleryId, 'PENDING', { error: null });
+                            autoProcessQueue();
+                        }
+                        return res.end(JSON.stringify({ success: true, message: 'Force retry triggered' }));
+                    } catch (e) {
+                        res.writeHead(500);
+                        res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'GET' && req.url.startsWith('/api/fs/browse')) {
+                const urlObj = new URL(req.url, 'http://localhost');
+                let targetPath = urlObj.searchParams.get('path');
+
+                const isWindows = process.platform === 'win32';
+                let availableDrives = [];
+                if (isWindows) {
+                    const possibleDrives = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+                    availableDrives = possibleDrives.filter(d => {
+                        try { return fs.existsSync(d + ':\\'); } catch (e) { return false; }
+                    }).map(d => d + ':\\');
+                }
+
+                if (!targetPath || targetPath.trim() === '') {
+                    targetPath = engine.baseDownloadDir;
+                }
+
+                targetPath = path.resolve(targetPath);
+
+                try {
+                    if (!fs.existsSync(targetPath)) {
+                        return res.end(JSON.stringify({
+                            currentPath: targetPath,
+                            parentPath: path.dirname(targetPath) === targetPath ? null : path.dirname(targetPath),
+                            drives: availableDrives,
+                            directories: []
+                        }));
+                    }
+
+                    const dirents = fs.readdirSync(targetPath, { withFileTypes: true });
+                    const directories = [];
+
+                    for (const dirent of dirents) {
+                        try {
+                            if (dirent.isDirectory()) {
+                                if (!dirent.name.startsWith('$') && !dirent.name.startsWith('.')) {
+                                    directories.push({
+                                        name: dirent.name,
+                                        path: path.join(targetPath, dirent.name)
+                                    });
+                                }
+                            }
+                        } catch (e) {}
+                    }
+
+                    directories.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
+                    const parentPath = path.dirname(targetPath) === targetPath ? null : path.dirname(targetPath);
+
+                    return res.end(JSON.stringify({
+                        currentPath: targetPath,
+                        parentPath,
+                        drives: availableDrives,
+                        directories
+                    }));
+                } catch (err) {
                     return res.end(JSON.stringify({
                         currentPath: targetPath,
                         parentPath: path.dirname(targetPath) === targetPath ? null : path.dirname(targetPath),
                         drives: availableDrives,
-                        directories: []
+                        directories: [],
+                        error: err.message
                     }));
                 }
+            }
 
-                const dirents = fs.readdirSync(targetPath, { withFileTypes: true });
-                const directories = [];
+            res.writeHead(404);
+            return res.end(JSON.stringify({ error: 'Endpoint Not Found' }));
+        }
 
-                for (const dirent of dirents) {
-                    try {
-                        if (dirent.isDirectory()) {
-                            if (!dirent.name.startsWith('$') && !dirent.name.startsWith('.')) {
-                                directories.push({
-                                    name: dirent.name,
-                                    path: path.join(targetPath, dirent.name)
-                                });
-                            }
+        let safePath = req.url === '/' ? '/index.html' : req.url;
+        safePath = path.normalize(safePath).replace(/^(\.\.[\/\\])+/, '');
+        const filePath = path.join(WEBUI_DIST, safePath);
+
+        fs.readFile(filePath, (err, content) => {
+            if (err) {
+                if (err.code === 'ENOENT') {
+                    const indexPath = path.join(WEBUI_DIST, 'index.html');
+                    fs.readFile(indexPath, (err2, content2) => {
+                        if (err2) {
+                            res.writeHead(404, { 'Content-Type': 'text/plain' });
+                            res.end('Web UI dist not found. Run npm run build inside webui folder.');
+                        } else {
+                            res.writeHead(200, { 'Content-Type': 'text/html' });
+                            res.end(content2, 'utf-8');
                         }
-                    } catch (e) {}
+                    });
+                } else {
+                    res.writeHead(500, { 'Content-Type': 'text/plain' });
+                    res.end(`Internal Server Error: ${err.code}`);
                 }
-
-                directories.sort((a, b) => a.name.localeCompare(b.name, undefined, { sensitivity: 'base' }));
-                const parentPath = path.dirname(targetPath) === targetPath ? null : path.dirname(targetPath);
-
-                return res.end(JSON.stringify({
-                    currentPath: targetPath,
-                    parentPath,
-                    drives: availableDrives,
-                    directories
-                }));
-            } catch (err) {
-                return res.end(JSON.stringify({
-                    currentPath: targetPath,
-                    parentPath: path.dirname(targetPath) === targetPath ? null : path.dirname(targetPath),
-                    drives: availableDrives,
-                    directories: [],
-                    error: err.message
-                }));
-            }
-        }
-
-        res.writeHead(404);
-        return res.end(JSON.stringify({ error: 'Endpoint Not Found' }));
-    }
-
-    // Static Asset Serving from webui/dist
-    let safePath = req.url === '/' ? '/index.html' : req.url;
-    safePath = path.normalize(safePath).replace(/^(\.\.[\/\\])+/, '');
-    const filePath = path.join(WEBUI_DIST, safePath);
-
-    fs.readFile(filePath, (err, content) => {
-        if (err) {
-            if (err.code === 'ENOENT') {
-                const indexPath = path.join(WEBUI_DIST, 'index.html');
-                fs.readFile(indexPath, (err2, content2) => {
-                    if (err2) {
-                        res.writeHead(404, { 'Content-Type': 'text/plain' });
-                        res.end('Web UI dist not found. Run npm run build inside webui folder.');
-                    } else {
-                        res.writeHead(200, { 'Content-Type': 'text/html' });
-                        res.end(content2, 'utf-8');
-                    }
-                });
             } else {
-                res.writeHead(500, { 'Content-Type': 'text/plain' });
-                res.end(`Internal Server Error: ${err.code}`);
+                const extname = String(path.extname(filePath)).toLowerCase();
+                const contentType = mimeTypes[extname] || 'application/octet-stream';
+                res.writeHead(200, { 'Content-Type': contentType });
+                res.end(content, 'utf-8');
             }
-        } else {
-            const extname = String(path.extname(filePath)).toLowerCase();
-            const contentType = mimeTypes[extname] || 'application/octet-stream';
-            res.writeHead(200, { 'Content-Type': contentType });
-            res.end(content, 'utf-8');
-        }
+        });
+    };
+}
+
+const server = http.createServer(createRequestHandler());
+
+if (require.main === module) {
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`\x1b[32m[+] NHDL Web Daemon aktif pada http://0.0.0.0:${PORT}\x1b[0m`);
+        console.log(`[+] Web UI Dashboard: http://localhost:${PORT}`);
+
+        try {
+            const resetCount = resetStuckQueueItems();
+            if (resetCount > 0) {
+                console.log(`[+] Startup recovery: reset ${resetCount} stuck ON_PROGRESS item(s) back to PENDING.`);
+                logActivity(`Startup recovery: reset ${resetCount} stuck ON_PROGRESS item(s) to PENDING`);
+            }
+        } catch (e) {}
+
+        try {
+            const result = rescanLibrary(engine.baseDownloadDir);
+            if (result.relocated > 0 || result.pruned > 0) {
+                console.log(`[+] Library rescan: relocated/added ${result.relocated}, pruned ${result.pruned} (no folder on disk).`);
+            }
+            logActivity(`Startup rescan: ${result.relocated} relocated/added, ${result.pruned} pruned, ${result.unchanged} unchanged`);
+        } catch (e) {}
+
+        autoProcessQueue();
     });
-});
+}
 
-server.listen(PORT, '0.0.0.0', () => {
-    console.log(`\x1b[32m[+] NHDL Web Daemon aktif pada http://0.0.0.0:${PORT}\x1b[0m`);
-    console.log(`[+] Web UI Dashboard: http://localhost:${PORT}`);
-
-    // One-shot startup scan only (not a recurring interval) to pick up any folders that
-    // were moved while the server was down. Never runs again on its own after this.
-    try {
-        const result = rescanLibrary(engine.baseDownloadDir);
-        if (result.relocated > 0 || result.pruned > 0) {
-            console.log(`[+] Library rescan: relocated ${result.relocated}, pruned ${result.pruned} (no folder on disk).`);
-        }
-        logActivity(`Startup rescan: ${result.relocated} relocated, ${result.pruned} pruned, ${result.unchanged} unchanged`);
-    } catch (e) {}
-
-    autoProcessQueue();
-});
+module.exports = { server, engine, createRequestHandler };

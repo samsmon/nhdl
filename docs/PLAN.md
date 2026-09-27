@@ -98,10 +98,10 @@ Task:
 - [x] `core/engine.js`: ambil item berikutnya dari `queue` (status `PENDING`, urut `priority DESC, id`), update status/progress per baris; hapus `progress.json`
 - [x] Config: `config.json` → `settings`
 - [x] Logger: `activity.log`/`error.log` → `events` (batasi, mis. simpan 10k baris terakhir)
-- [ ] `server/index.js`: endpoint pakai query DB; tambah import `list.txt` (upload/paste) dan export
+- [x] `server/index.js`: endpoint pakai query DB; tambah import `list.txt` (upload/paste) dan export
 - [x] Rescan folder download untuk mengisi `library`
 - [ ] Hapus kode dan file lama: `list_status.txt`, `progress.json`, `library.json`, `config.json`, log `.txt`; tambah `data/` ke `.gitignore` dan volume di `docker-compose.yml`
-- [ ] Saat startup, item berstatus `ON_PROGRESS` dikembalikan ke `PENDING` (server mati di tengah download tidak boleh meninggalkan item stuck)
+- [x] Saat startup, item berstatus `ON_PROGRESS` dikembalikan ke `PENDING` (server mati di tengah download tidak boleh meninggalkan item stuck)
 - [x] Test dengan `node:test` bawaan (`npm test`, tanpa dependency) di `test/`: `core/db.js` (migrasi skema, UNIQUE gallery_id), alur `PENDING → ON_PROGRESS → DONE/ERROR`, reset saat startup, import/export `list.txt`. Pakai DB sementara, jangan `data/nhdl.db`
 - [ ] Uji manual: tambah 1000 link, download beberapa, restart server di tengah download → status tetap konsisten
 
