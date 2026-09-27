@@ -383,6 +383,51 @@ test('BUG 2: re-importing DONE item whose file is missing resets to PENDING and 
     }
 });
 
+test('BUG 3: migrates downloadDir, downloadFormat, and autoContinueBatches from legacy config.json when settings table is empty without overwriting existing settings or modifying config.json', () => {
+    const ctx = createTempDb();
+    const tempDir = path.dirname(ctx.dbPath);
+    const configPath = path.join(tempDir, 'config.json');
+    const originalConfigContent = JSON.stringify({
+        downloadDir: 'D:\\Manga\\NHDL_Custom',
+        downloadFormat: 'folder',
+        autoContinueBatches: false
+    }, null, 2);
+    fs.writeFileSync(configPath, originalConfigContent, 'utf-8');
+
+    try {
+        // 1. Settings table is empty + config.json exists -> should copy settings and log event
+        const migrated = dbMod.migrateLegacyConfigJson(configPath, ctx.db);
+        assert.strictEqual(migrated, true);
+        assert.strictEqual(dbMod.getSetting('downloadDir', null, ctx.db), 'D:\\Manga\\NHDL_Custom');
+        assert.strictEqual(dbMod.getSetting('downloadFormat', null, ctx.db), 'folder');
+        assert.strictEqual(dbMod.getSetting('autoContinueBatches', null, ctx.db), false);
+
+        // Verify event logged in events table
+        const events = dbMod.getEvents({ limit: 10 }, ctx.db);
+        assert.ok(events.some(e => e.message === 'Migrated settings from config.json'));
+
+        // Verify config.json is untouched
+        assert.strictEqual(fs.readFileSync(configPath, 'utf-8'), originalConfigContent);
+
+        // 2. Settings already populated -> subsequent migration with different config.json must NOT overwrite
+        const newConfigPath = path.join(tempDir, 'config2.json');
+        fs.writeFileSync(newConfigPath, JSON.stringify({
+            downloadDir: 'E:\\OtherDir',
+            downloadFormat: 'zip',
+            autoContinueBatches: true
+        }), 'utf-8');
+
+        const migratedAgain = dbMod.migrateLegacyConfigJson(newConfigPath, ctx.db);
+        assert.strictEqual(migratedAgain, false);
+        assert.strictEqual(dbMod.getSetting('downloadDir', null, ctx.db), 'D:\\Manga\\NHDL_Custom');
+        assert.strictEqual(dbMod.getSetting('downloadFormat', null, ctx.db), 'folder');
+        assert.strictEqual(dbMod.getSetting('autoContinueBatches', null, ctx.db), false);
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+
 
 
 

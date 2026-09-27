@@ -129,6 +129,7 @@ function initDb(dbPath = DEFAULT_DB_PATH) {
     db.exec(`PRAGMA journal_mode=WAL;`);
     db.exec(`PRAGMA foreign_keys=ON;`);
     runMigrations(db);
+    migrateLegacyConfigJson(path.join(ROOT_DIR, 'config.json'), db);
 
     activeDb = db;
     activeDbPath = dbPath;
@@ -714,6 +715,45 @@ function getAllSettings(db = getDb()) {
     return out;
 }
 
+function migrateLegacyConfigJson(configPath = path.join(ROOT_DIR, 'config.json'), db = getDb()) {
+    try {
+        const countRow = db.prepare(`SELECT COUNT(*) AS cnt FROM settings`).get();
+        if (countRow && Number(countRow.cnt) > 0) {
+            return false;
+        }
+        if (!configPath || !fs.existsSync(configPath)) {
+            return false;
+        }
+        const raw = fs.readFileSync(configPath, 'utf-8');
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object') {
+            return false;
+        }
+
+        let copied = 0;
+        if (parsed.downloadDir !== undefined) {
+            setSetting('downloadDir', parsed.downloadDir, db);
+            copied++;
+        }
+        if (parsed.downloadFormat !== undefined) {
+            setSetting('downloadFormat', parsed.downloadFormat, db);
+            copied++;
+        }
+        if (parsed.autoContinueBatches !== undefined) {
+            setSetting('autoContinueBatches', parsed.autoContinueBatches, db);
+            copied++;
+        }
+
+        if (copied > 0) {
+            logEvent({ level: 'info', message: 'Migrated settings from config.json' }, db);
+            return true;
+        }
+        return false;
+    } catch (e) {
+        return false;
+    }
+}
+
 // Events (activity & error logs)
 function logEvent({ level = 'info', galleryId = null, message = '', maxRows = 10000 }, db = getDb()) {
     const gid = galleryId !== null && galleryId !== undefined && String(galleryId).trim() !== ''
@@ -793,6 +833,7 @@ module.exports = {
     getSetting,
     setSetting,
     getAllSettings,
+    migrateLegacyConfigJson,
     logEvent,
     getEvents
 };

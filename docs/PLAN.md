@@ -104,6 +104,7 @@ Task:
 - [x] Saat startup, item berstatus `ON_PROGRESS` dikembalikan ke `PENDING` (server mati di tengah download tidak boleh meninggalkan item stuck)
 - [x] Test dengan `node:test` bawaan (`npm test`, tanpa dependency) di `test/`: `core/db.js` (migrasi skema, UNIQUE gallery_id), alur `PENDING → ON_PROGRESS → DONE/ERROR`, reset saat startup, import/export `list.txt`. Pakai DB sementara, jangan `data/nhdl.db`
 - [x] Uji manual: tambah 1000 link, download beberapa, restart server di tengah download → status tetap konsisten
+- [x] Perbaikan review Fase 1: (1) `requeueFailedItems()` untuk mencoba ulang item `ERROR`/`COOLDOWN`/`PAUSED` dengan `retries < maxRetries`; (2) kembalikan item `DONE`/`SKIPPED` ke `PENDING` + hapus entry `library` basi bila file sudah hilang di disk saat `importListText` atau `_runBatchBody`; (3) migrasi otomatis satu kali dari `config.json` lama ke tabel `settings` bila `settings` masih kosong
 
 ## Fase 2 — Backend: push delta, bukan polling
 - [x] Tulis `docs/API.md` dulu: semua endpoint REST (method, path, body, response) dan format event SSE. Frontend (Fase 3–4) dan backend Go (Fase 6) wajib mengikuti kontrak ini
@@ -180,3 +181,4 @@ Task:
 | 2026-09-27 | 1 | Fase 1 selesai: migrasi penuh ke SQLite (`core/db.js`, `queue`, `library`, `settings`, `events`), rescan marker, startup reset `ON_PROGRESS`, dan 10/10 test lulus |
 | 2026-09-27 | 8 | Tambah Fase 8: README khusus AI agent (`docs/AI_AGENT.md`) + pemicu di README utama |
 | 2026-09-27 | 2 | Fase 2 selesai: kontrak `docs/API.md`, endpoint SSE `GET /api/events` (`snapshot` + delta `item`/`progress`/`engine`), dan test SSE lulus (12/12) |
+| 2026-09-27 | 1 | Perbaikan 3 bug regresi review Fase 1 (`requeueFailedItems`, reset `DONE` tanpa file + hapus `library` basi, migrasi `config.json` ke `settings`) + 3 test baru lulus (15/15) |
