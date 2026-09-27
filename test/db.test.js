@@ -507,6 +507,100 @@ test('A1: unmounted/unhealthy download folder aborts rescan and _runBatchBody wi
     }
 });
 
+test('A3: _runBatchBody pre-pass resets DONE with missing file to PENDING, keeps valid DONE untouched, and re-processes ERROR with retries < 5', async () => {
+    const ctx = createTempDb();
+    const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-a3-dl-'));
+    const DownloaderEngine = require('../core/engine');
+
+    try {
+        const validCbz = path.join(dlDir, 'Valid_900002.cbz');
+        fs.writeFileSync(validCbz, Buffer.from('PK\x03\x04valid-cbz-data'));
+        const missingCbz = path.join(dlDir, 'Missing_900001.cbz');
+
+        // 1. 900001: DONE in queue, but library file is missing on disk -> should become PENDING & be processed
+        dbMod.upsertLibraryEntry({
+            galleryId: 900001,
+            title: 'Missing File Gallery',
+            format: 'cbz',
+            path: missingCbz,
+            pages: 12
+        }, ctx.db);
+        dbMod.enqueueGallery({
+            galleryId: 900001,
+            title: 'Missing File Gallery',
+            status: 'DONE',
+            pagesDone: 12,
+            pagesTotal: 12
+        }, ctx.db);
+
+        // 2. 900002: DONE in queue, and library file exists on disk -> must stay DONE and not be re-downloaded
+        dbMod.upsertLibraryEntry({
+            galleryId: 900002,
+            title: 'Valid File Gallery',
+            format: 'cbz',
+            path: validCbz,
+            pages: 16
+        }, ctx.db);
+        dbMod.enqueueGallery({
+            galleryId: 900002,
+            title: 'Valid File Gallery',
+            status: 'DONE',
+            pagesDone: 16,
+            pagesTotal: 16
+        }, ctx.db);
+
+        // 3. 900003: ERROR with retries = 2 (< 5) -> must be re-queued to PENDING and processed
+        dbMod.enqueueGallery({
+            galleryId: 900003,
+            title: 'Transient Error Gallery',
+            status: 'ERROR',
+            error: 'Network timeout',
+            retries: 2
+        }, ctx.db);
+
+        // 4. 900004: ERROR with retries = 5 (>= 5) -> must remain ERROR and NOT be processed
+        dbMod.enqueueGallery({
+            galleryId: 900004,
+            title: 'Permanent Error Gallery',
+            status: 'ERROR',
+            error: 'Max retries reached',
+            retries: 5
+        }, ctx.db);
+
+        const eng = new DownloaderEngine({ baseDownloadDir: dlDir, skipStartupJitter: true });
+        const processedIds = [];
+        const statusDuringProcess = {};
+
+        eng.processGallery = async (galleryId) => {
+            const numId = Number(galleryId);
+            const rowBefore = dbMod.getQueueItem(numId, ctx.db);
+            statusDuringProcess[numId] = rowBefore.status;
+            processedIds.push(numId);
+            dbMod.updateQueueStatus(numId, 'DONE', { pagesDone: 10, pagesTotal: 10 }, ctx.db);
+            return { status: 'SUCCESS', numPages: 10, skipped: false };
+        };
+
+        await eng._runBatchBody();
+
+        // Both 900001 (missing DONE) and 900003 (ERROR retries < 5) must have been reset to PENDING and processed
+        assert.deepStrictEqual(processedIds, [900001, 900003]);
+        assert.strictEqual(statusDuringProcess[900001], 'PENDING');
+        assert.strictEqual(statusDuringProcess[900003], 'PENDING');
+
+        // Stale library entry for 900001 was pruned by pre-pass
+        assert.strictEqual(dbMod.getLibraryEntry(900001, ctx.db), null);
+        // Valid library entry for 900002 remains intact and status stays DONE
+        assert.ok(dbMod.getLibraryEntry(900002, ctx.db));
+        assert.strictEqual(dbMod.getQueueItem(900002, ctx.db).status, 'DONE');
+        // 900004 (retries = 5) remains ERROR
+        assert.strictEqual(dbMod.getQueueItem(900004, ctx.db).status, 'ERROR');
+    } finally {
+        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
+        ctx.cleanup();
+    }
+});
+
+
 
 
 

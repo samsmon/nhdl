@@ -114,7 +114,7 @@ Task:
 - [x] Test untuk endpoint SSE: snapshot awal + event delta setelah `UPDATE` di `queue`
 - [x] **A1 (Review)**: Pengaman folder download tidak ter-mount (`isDownloadDirHealthy(dir)`, batalkan `rescanLibrary()` bila folder tidak ada/kosong atau >50% dari ≥10 entri hilang, lewati pre-pass `DONE→PENDING` di `_runBatchBody`, set status `Download folder unavailable` + SSE event)
 - [x] **A2 (Review)**: Isolasi `initDb()` dari `config.json` asli saat test (`legacyConfigPath` / `NHDL_LEGACY_CONFIG`)
-- [ ] **A3 (Review)**: Unit test pre-pass `_runBatchBody` (`DONE` tanpa file → `PENDING`, `DONE` valid tetap `DONE`, `ERROR` `retries < 5` diproses ulang)
+- [x] **A3 (Review)**: Unit test pre-pass `_runBatchBody` (`DONE` tanpa file → `PENDING`, `DONE` valid tetap `DONE`, `ERROR` `retries < 5` diproses ulang)
 
 ## Fase 3 — Fondasi frontend
 - [ ] Migrasi ke Svelte 5 (runes)
@@ -185,3 +185,4 @@ Task:
 | 2026-09-27 | 8 | Tambah Fase 8: README khusus AI agent (`docs/AI_AGENT.md`) + pemicu di README utama |
 | 2026-09-27 | 2 | Fase 2 selesai: kontrak `docs/API.md`, endpoint SSE `GET /api/events` (`snapshot` + delta `item`/`progress`/`engine`), dan test SSE lulus (12/12) |
 | 2026-09-27 | 1 | Perbaikan 3 bug regresi review Fase 1 (`requeueFailedItems`, reset `DONE` tanpa file + hapus `library` basi, migrasi `config.json` ke `settings`) + 3 test baru lulus (15/15) |
+| 2026-09-27 | 2 | Perbaikan review Bagian A selesai: A1 (`isDownloadDirHealthy` + proteksi unmounted drive), A2 (isolasi `legacyConfigPath`), A3 (unit test pre-pass `_runBatchBody`) — 17/17 test lulus |
