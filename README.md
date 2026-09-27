@@ -1,22 +1,20 @@
-# NHDL (NHentai Batch Downloader)
+# NHDL (Batch Downloader for a certain site ( ͡° ͜ʖ ͡°))
 
 A high-performance, modular Node.js tool designed to download and archive galleries efficiently and reliably. Features human-like smart delays, Cloudflare SNI bypass, ISP DNS unblocking, concurrent image downloads, byte-level file integrity verification, and a persistent library tracker.
 
-The project is structured into two decoupled, standalone editions:
-1. **CLI Edition (`cli/`)**: A pure, zero-dependency terminal downloader with interactive prompts and ANSI progress bars. Ideal for command line environments, cron jobs, and lightweight scripts.
-2. **Web App Edition (`server/` & `webui/`)**: A full-stack daemon serving a REST API and a responsive Svelte dashboard with live progress and cooldown tracking. Ideal for Docker, NAS, and remote homelab setups.
+It runs as a web daemon (`server/`) serving a REST API and a Svelte dashboard (`webui/`) with live progress and cooldown tracking. Ideal for local use, Docker, NAS, and remote homelab setups.
 
 ---
 
 ## Features
 
-- **Decoupled Modular Architecture**: Shared core engine (`core/`) with clean interfaces for both CLI and Web App.
+- **Modular Architecture**: Core engine (`core/`) decoupled from the web daemon (`server/`).
 - **Bypass ISP DNS Hijacking**: Maps all target domains directly to Cloudflare edge IPs, avoiding local DNS redirection (e.g. Internet Positif).
 - **Cloudflare WAF Mitigation & Smart Delays**: Intelligent randomized delay algorithm based on page count and history to avoid HTTP 429 rate limits.
 - **Library Tracker (`library.json`)**: Persistent indexing of all downloaded titles, folder locations, and page counts. Skips network requests instantly if files already exist on disk.
 - **Auto-Resume & Integrity Verification**: Verifies downloaded files down to the byte level (>2KB) and re-queues corrupted or incomplete images automatically.
 - **Live Progress & Cooldown Tracking**: Live updates of current download progress, total pages, elapsed percentage, and smart delay cooldown timers.
-- **Zero Runtime Dependencies for Backend**: Both `core/`, `cli/`, and `server/` use native Node.js APIs without requiring third-party runtime packages.
+- **Zero Runtime Dependencies for Backend**: Both `core/` and `server/` use native Node.js APIs without requiring third-party runtime packages.
 
 ---
 
@@ -29,9 +27,6 @@ nhdl/
 │   ├── tracker.js      # Library indexer (library.json) and list tracker (list_status.txt)
 │   └── utils.js        # File verification, name sanitization, delay calculations
 │
-├── cli/
-│   └── index.js        # Standalone CLI interface (0 dependencies)
-│
 ├── server/
 │   └── index.js        # Web App daemon, REST API, and static asset server (0 dependencies)
 │
@@ -39,36 +34,13 @@ nhdl/
 │   ├── src/
 │   └── dist/           # Production compiled frontend bundle
 │
-├── nhentai-dl.js       # Backward-compatibility router
 ├── Dockerfile          # Multi-stage container build
 └── docker-compose.yml  # Homelab deployment template
 ```
 
 ---
 
-## Usage: CLI Edition
-
-The CLI edition is completely zero-dependency and runs directly with Node.js.
-
-### 1. Interactive Menu
-```bash
-node cli/index.js
-# Or using npm
-npm run cli
-```
-
-### 2. Direct CLI Arguments
-```bash
-# Download a single gallery ID
-node cli/index.js 468614
-
-# Process an entire text file
-node cli/index.js list.txt
-```
-
----
-
-## Usage: Web App Edition (Homelab & Docker)
+## Usage
 
 The Web App edition runs an HTTP server on port 8080 serving a real-time Svelte dashboard.
 
@@ -81,7 +53,7 @@ Start the web daemon:
 ```bash
 node server/index.js
 # Or using npm
-npm run server
+npm start
 ```
 Open your browser at:
 `http://localhost:8080`
@@ -102,8 +74,8 @@ docker-compose up -d --build
 
 The `list.txt` file accepts multiple formats interchangeably:
 - Raw gallery ID: `468614`
-- Full URL: `https://nhentai.net/g/468614/`
-- Markdown or OneTab exports: `[Title](https://nhentai.net/g/468614/)`
+- Full URL: `https://certain.site/g/468614/`
+- Markdown or OneTab exports: `[Title](https://certain.site/g/468614/)`
 - Comments: Lines starting with `#` are ignored.
 
 ---

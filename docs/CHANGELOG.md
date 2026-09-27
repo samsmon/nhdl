@@ -1,0 +1,47 @@
+# Changelog
+
+Catatan semua aktivitas di proyek ini, baik perubahan manual maupun oleh AI agent.
+Entri terbaru di atas.
+
+Format: `YYYY-MM-DD · Aktor · Fase` lalu daftar perubahan.
+Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
+
+---
+
+## 2026-09-27 · AI (Claude Code, Opus 5.5) · Fase 0 (lanjutan)
+- `core/utils.js`: karakter kontrol mentah di regex `sanitizeName` diganti escape (`\x00-\x1f`, `\uXXXX`); output diverifikasi identik. Git kini membaca file ini sebagai teks.
+- Hapus `webui/src/lib/Counter.svelte`.
+- `start.bat`: auto-build Web UI kalau `webui/dist` belum ada.
+- `docs/PLAN.md`: tambah test `node:test`, reset `ON_PROGRESS` saat startup, `docs/API.md` sebelum Fase 2.
+- `AGENTS.md`: aturan git (commit/push atas nama user, tanpa atribusi AI, kerja di branch `rework`) dan pola fitur DB → REST → SSE.
+- Buat branch `rework`.
+
+## 2026-09-27 · Manual (Maja) · —
+- Menyetujui semua rekomendasi; menetapkan aturan bahwa commit dan push wajib atas nama user.
+
+## 2026-09-27 · AI (Claude Code, Opus 5.5) · Docs
+- Nama situs di semua dokumentasi diganti menjadi "certain site ( ͡° ͜ʖ ͡°)"; domain contoh menjadi `certain.site` (README, `docs/ARCHITECTURE.md`, `list.txt.example`, deskripsi `package.json`).
+- Identifier kode (`nhentaiApi.js`, `NHENTAI_API_KEY`, domain di dalam kode) sengaja tidak diubah.
+
+## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 0
+- Pelajari seluruh codebase (`server/`, `core/`, `webui/`) dan buat `docs/ARCHITECTURE.md` berisi peta arsitektur lengkap, alur `DownloaderEngine`, kontrak REST API, format state/marker file, dan struktur `App.svelte` (1766 baris) agar sesi berikutnya tidak perlu membaca ulang source code.
+- `AGENTS.md`: tambahkan rujukan ke `docs/ARCHITECTURE.md`.
+
+## 2026-09-27 · AI (Claude Code, Opus 5.5) · Plan
+- `docs/PLAN.md`: tambah Fase 1 "Pindah semua data ke SQLite" (keputusan, skema tabel `queue`/`library`/`settings`/`events`, pemetaan file lama, task). Fase SSE, frontend, layout, benchmark, dan Go bergeser menjadi Fase 2–6.
+
+## 2026-09-27 · Manual (Maja) · Plan
+- Memutuskan semua data (link, status, progress, library, config, log) disimpan di SQLite, bukan file teks. Data lama tidak dimigrasi.
+
+## 2026-09-27 · AI (Claude Code, Opus 5.5) · Fase 0
+- Hapus CLI: `cli/index.js` dan router `nhentai-dl.js`.
+- `package.json`: `main` dan `npm start` diarahkan ke `server/index.js`; bin `nhdl` dan script `cli` dihapus.
+- `start.bat` menjalankan `node server/index.js`.
+- README: bagian CLI dihapus.
+- Tambah `docs/PLAN.md` (rencana rework + status) dan `docs/CHANGELOG.md` ini.
+- Tambah `AGENTS.md` (aturan logging untuk semua agent), dengan `GEMINI.md` dan `CLAUDE.md` merujuk ke sana.
+- Pembagian kerja: rework UI dan kode dikerjakan user lewat Antigravity (Gemini 3.8 Flash High).
+
+## 2026-09-27 · Manual (Maja) · —
+- `git pull`: update `core/engine.js`, `core/tracker.js`, `core/utils.js` (b88919e).
+- Memutuskan arah rework: UI ala qBittorrent/IDM, Svelte + GSAP, CLI dihapus, migrasi bertahap.
