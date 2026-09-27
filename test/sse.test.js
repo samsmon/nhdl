@@ -5,6 +5,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 
+process.env.NHDL_LEGACY_CONFIG = '';
+
 const {
     initDb,
     closeDb,
@@ -17,7 +19,7 @@ const { createRequestHandler, engine } = require('../server/index');
 function createTempEnv() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-sse-test-'));
     const dbPath = path.join(dir, 'test.db');
-    initDb(dbPath);
+    initDb(dbPath, { legacyConfigPath: path.join(dir, 'nonexistent-config.json') });
     return {
         dir,
         dbPath,

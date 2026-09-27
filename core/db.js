@@ -109,8 +109,8 @@ function runMigrations(db) {
     return currentVersion;
 }
 
-function initDb(dbPath = DEFAULT_DB_PATH) {
-    if (activeDb && activeDbPath === dbPath) {
+function initDb(dbPath = DEFAULT_DB_PATH, options = {}) {
+    if (activeDb && activeDbPath === dbPath && options.legacyConfigPath === undefined) {
         return activeDb;
     }
     if (activeDb) {
@@ -129,7 +129,15 @@ function initDb(dbPath = DEFAULT_DB_PATH) {
     db.exec(`PRAGMA journal_mode=WAL;`);
     db.exec(`PRAGMA foreign_keys=ON;`);
     runMigrations(db);
-    migrateLegacyConfigJson(path.join(ROOT_DIR, 'config.json'), db);
+
+    const legacyConfigPath = options.legacyConfigPath !== undefined
+        ? options.legacyConfigPath
+        : (process.env.NHDL_LEGACY_CONFIG !== undefined
+            ? process.env.NHDL_LEGACY_CONFIG
+            : path.join(ROOT_DIR, 'config.json'));
+    if (legacyConfigPath) {
+        migrateLegacyConfigJson(legacyConfigPath, db);
+    }
 
     activeDb = db;
     activeDbPath = dbPath;

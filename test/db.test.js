@@ -3,12 +3,16 @@ const assert = require('node:assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+process.env.NHDL_LEGACY_CONFIG = '';
 const dbMod = require('../core/db');
 
-function createTempDb() {
+function createTempDb(options = {}) {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-db-test-'));
     const dbPath = path.join(tmpDir, 'test.db');
-    const db = dbMod.initDb(dbPath);
+    const legacyConfigPath = options.legacyConfigPath !== undefined
+        ? options.legacyConfigPath
+        : path.join(tmpDir, 'nonexistent-config.json');
+    const db = dbMod.initDb(dbPath, { legacyConfigPath });
     return {
         db,
         dbPath,
