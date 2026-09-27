@@ -152,6 +152,23 @@ Task:
 - [ ] Test: suite `db` yang sama dijalankan ke SQLite dan PostgreSQL (Postgres lewat `TEST_DATABASE_URL`, di-skip kalau tidak ada); test export → import menghasilkan data identik; import ke DB jenis lain (SQLite → Postgres)
 - [ ] Uji manual di server: rebuild container → antrian dan library tetap ada
 
+## Fase 8 — README khusus AI agent
+Tujuan: AI agent (milik user mana pun yang memakai repo ini) bisa deploy, mengelola, memodifikasi, dan merawat NHDL tanpa harus membaca seluruh source code.
+
+Keputusan:
+- File baru `docs/AI_AGENT.md`, ditulis untuk dibaca agent: ringkas, berupa langkah dan perintah yang bisa langsung dijalankan, tanpa narasi pemasaran.
+- Pembagian dengan file yang sudah ada: `AGENTS.md` = aturan kerja saat **mengembangkan** repo ini (git, changelog, pola arsitektur); `docs/AI_AGENT.md` = panduan **mengoperasikan** aplikasi (deploy, kelola, maintain). `AGENTS.md` menautkan ke `docs/AI_AGENT.md`, bukan menduplikasi isinya.
+- `README.md` utama diberi blok pemicu di bagian paling atas, mis.:
+  > **If you are an AI agent:** read [docs/AI_AGENT.md](docs/AI_AGENT.md) before deploying, managing, modifying, or maintaining this project.
+
+Task:
+- [ ] **Deploy**: prasyarat (Node ≥ 22.13 / Docker), lokal (`start.bat`, `npm start`), Docker Compose, mode SQLite vs PostgreSQL (`DATABASE_URL`), daftar lengkap env var beserta default, port, dan cara verifikasi server sehat (endpoint + output yang diharapkan)
+- [ ] **Manage**: cara menambah antrian (UI, API, import `list.txt`), pause/resume, membaca log (`events`), cek dan ganti API key, backup/export/import database, `npm run check:archives`
+- [ ] **Modify**: peta modul singkat (tautan ke `docs/ARCHITECTURE.md` dan `docs/API.md`), pola fitur baru DB → REST → SSE, cara menambah migrasi skema, cara menjalankan test
+- [ ] **Maintain**: upgrade versi (pull, rebuild, migrasi otomatis), troubleshooting berdasarkan gejala (Cloudflare challenge/403, DNS ISP diblokir, item stuck `ON_PROGRESS`, rate limit 429, DB tidak bisa connect), dan hal yang **tidak boleh** dilakukan agent (menghapus `data/`/volume DB, commit secret, mengubah identitas git)
+- [ ] Blok pemicu di `README.md` + tautan dari `AGENTS.md`
+- [ ] Validasi: minta agent baru (sesi bersih) mendeploy dan mengoperasikan NHDL hanya berbekal `README.md`; catat bagian yang membuatnya bingung lalu perbaiki dokumennya
+
 ## Log
 | Tanggal | Fase | Catatan |
 |---|---|---|
@@ -160,3 +177,4 @@ Task:
 | 2026-09-27 | 0 | `docs/ARCHITECTURE.md` dibuat & ditautkan di `AGENTS.md` sebagai referensi lengkap codebase lintas sesi |
 | 2026-09-27 | 0 | Fase 0 selesai: fix `utils.js`, hapus Counter, `start.bat` auto-build, branch `rework`. Plan: tambah test, reset startup, `docs/API.md`, pola fitur |
 | 2026-09-27 | 7 | Tambah Fase 7: PostgreSQL terpusat (via `DATABASE_URL`) + backup/export/import di Settings |
+| 2026-09-27 | 8 | Tambah Fase 8: README khusus AI agent (`docs/AI_AGENT.md`) + pemicu di README utama |
