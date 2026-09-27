@@ -9,6 +9,7 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 2
+- `server/index.js` & `test/sse.test.js`: implementasikan endpoint SSE `GET /api/events` (`snapshot` awal + delta real-time `item`, `progress`, `engine` serta heartbeat `: ping`), pertahankan `GET /api/status` untuk kompatibilitas, dan tambahkan unit test SSE (`test/sse.test.js`, total 12/12 test lulus).
 - `core/db.js`: tambahkan helper `formatQueueRow()` dan pastikan seluruh mutasi tabel `queue` (`enqueueGallery`, `updateQueueItem`, `deleteQueueItem`, `deleteQueueBatch`, `clearCompletedQueue`, `resetStuckQueueItems`, `importListText`) meng-emit event delta terstruktur pada `dbEvents`.
 - Buat `docs/API.md` berisi spesifikasi lengkap seluruh endpoint REST API (`/api/login`, `/api/logout`, `/api/status`, `/api/queue`, `/api/queue/import`, `/api/queue/export`, `/api/control`, `/api/retry`, `/api/config`, `/api/config/verify-key`, `/api/library/*`, `/api/logs/*`, `/api/fs/browse`) serta format stream SSE `GET /api/events` (`snapshot`, `item`, `progress`, `engine`).
 

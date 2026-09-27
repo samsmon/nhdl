@@ -8,6 +8,8 @@ loadEnvFile(ROOT_DIR);
 
 const {
     initDb,
+    dbEvents,
+    formatQueueRow,
     resetStuckQueueItems,
     getQueueItems,
     getMaxBatch,
@@ -213,28 +215,103 @@ function createRequestHandler() {
                 return res.end();
             }
 
-            if (req.method === 'GET' && req.url === '/api/status') {
-                const rows = getQueueItems();
-                const items = rows.map(r => {
-                    const displayStatus = r.error ? `${r.status} - ${r.error}` : r.status;
-                    const displayUrl = r.title ? `${r.url} | ${r.title}` : r.url;
-                    return {
-                        id: r.id,
-                        galleryId: r.gallery_id,
-                        status: displayStatus,
-                        rawStatus: r.status,
-                        url: displayUrl,
-                        title: r.title,
-                        batch: r.batch || 1,
-                        priority: r.priority || 0,
-                        pagesDone: r.pages_done || 0,
-                        pagesTotal: r.pages_total || 0,
-                        error: r.error || null,
-                        retries: r.retries || 0,
-                        format: r.format || null
-                    };
+            if (req.method === 'GET' && (req.url === '/api/events' || req.url.startsWith('/api/events?'))) {
+                res.writeHead(200, {
+                    'Content-Type': 'text/event-stream; charset=utf-8',
+                    'Cache-Control': 'no-cache, no-transform',
+                    'Connection': 'keep-alive',
+                    'Access-Control-Allow-Origin': '*'
                 });
 
+                const sendSse = (eventName, payload) => {
+                    if (res.writableEnded || res.destroyed) return;
+                    res.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
+                };
+
+                const items = getQueueItems().map(formatQueueRow);
+                const batchCount = Math.max(1, getMaxBatch());
+                sendSse('snapshot', {
+                    items,
+                    batchCount,
+                    engineStatus: engine.getStatus(),
+                    liveProgress: engine.currentProgress,
+                    autoContinueBatches: engine.autoContinueBatches
+                });
+
+                const onDbItem = (evt) => {
+                    const payload = {
+                        type: evt.type,
+                        batchCount: evt.batchCount ?? Math.max(1, getMaxBatch())
+                    };
+                    if (evt.item) payload.item = evt.item;
+                    if (evt.galleryId !== undefined) payload.galleryId = evt.galleryId;
+                    if (evt.batch !== undefined) payload.batch = evt.batch;
+                    if (evt.removedIds !== undefined) payload.removedIds = evt.removedIds;
+                    sendSse('item', payload);
+                };
+                dbEvents.on('item', onDbItem);
+
+                const onEngineProgress = () => {
+                    sendSse('progress', {
+                        liveProgress: engine.currentProgress,
+                        engineStatus: engine.getStatus()
+                    });
+                };
+                engine.on('progress', onEngineProgress);
+                engine.on('cooldown', onEngineProgress);
+
+                const engineEventNames = [
+                    'paused',
+                    'resumed',
+                    'stopped',
+                    'restarted',
+                    'batch_start',
+                    'batch_complete',
+                    'circuit_breaker',
+                    'config_updated'
+                ];
+                const engineHandlers = new Map();
+                for (const evtName of engineEventNames) {
+                    const handler = (detail) => {
+                        sendSse('engine', {
+                            type: evtName,
+                            engineStatus: engine.getStatus(),
+                            liveProgress: engine.currentProgress,
+                            autoContinueBatches: engine.autoContinueBatches,
+                            detail: detail || null
+                        });
+                    };
+                    engineHandlers.set(evtName, handler);
+                    engine.on(evtName, handler);
+                }
+
+                const heartbeat = setInterval(() => {
+                    if (!res.writableEnded && !res.destroyed) {
+                        res.write(': ping\n\n');
+                    }
+                }, 25000);
+                if (heartbeat.unref) heartbeat.unref();
+
+                let cleaned = false;
+                const cleanup = () => {
+                    if (cleaned) return;
+                    cleaned = true;
+                    clearInterval(heartbeat);
+                    dbEvents.off('item', onDbItem);
+                    engine.off('progress', onEngineProgress);
+                    engine.off('cooldown', onEngineProgress);
+                    for (const [evtName, handler] of engineHandlers.entries()) {
+                        engine.off(evtName, handler);
+                    }
+                };
+
+                req.on('close', cleanup);
+                res.on('close', cleanup);
+                return;
+            }
+
+            if (req.method === 'GET' && req.url === '/api/status') {
+                const items = getQueueItems().map(formatQueueRow);
                 const batchCount = Math.max(1, getMaxBatch());
                 const rawList = exportListText();
                 const errorContent = readErrorLog();

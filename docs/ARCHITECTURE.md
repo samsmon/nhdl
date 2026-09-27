@@ -130,15 +130,16 @@ Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
 
 ---
 
-## 4. Kontrak REST API (`server/index.js`)
+## 4. Kontrak REST API & SSE (`server/index.js` & `docs/API.md`)
 
-Port default: `8080`. Semua response berformat JSON (kecuali `/api/logs/download` dan halaman login HTML).
+Port default: `8080`. Spesifikasi lengkap request/response dan payload SSE ada di [`docs/API.md`](API.md).
 
 | Method | Endpoint | Fungsi & Payload |
 |---|---|---|
+| `GET` | `/api/events` | Stream Server-Sent Events (`text/event-stream`): `snapshot` awal saat terkoneksi, diikuti event delta `item` (`dbEvents`), `progress`, dan `engine` |
 | `POST` | `/api/login` | `{ password }` -> Set cookie `nhdl_session` (HttpOnly, 30 hari) |
 | `POST` | `/api/logout` | Hapus sesi & cookie |
-| `GET` | `/api/status` | Baca `list.txt`, `list_status.txt`, `error.log` dari disk + `engine.currentProgress` & `engine.getStatus()`. Return `{ items, batchCount, rawList, errors, liveProgress, engineStatus, autoContinueBatches }` |
+| `GET` | `/api/status` | Endpoint kompatibilitas: baca tabel SQLite `queue` & `events` + `engine.currentProgress` & `engine.getStatus()`. Return `{ items, batchCount, rawList, errors, liveProgress, engineStatus, autoContinueBatches }` |
 | `POST` | `/api/queue` | `{ text }` -> Tulis `list.txt`, panggil `syncListTracker()`, auto-start `engine.runBatch()` jika idle |
 | `POST` | `/api/control` | `{ action: 'start' \| 'pause' \| 'resume' \| 'restart' }` -> Kontrol `engine` |
 | `POST` | `/api/retry` | `{ galleryId? }` -> `engine.triggerForceRetry()`, jika ada `galleryId` set `PENDING` & `autoProcessQueue()` |

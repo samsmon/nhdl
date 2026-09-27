@@ -108,9 +108,9 @@ Task:
 ## Fase 2 — Backend: push delta, bukan polling
 - [x] Tulis `docs/API.md` dulu: semua endpoint REST (method, path, body, response) dan format event SSE. Frontend (Fase 3–4) dan backend Go (Fase 6) wajib mengikuti kontrak ini
 - [x] Setiap perubahan baris `queue` di-emit sebagai event dari `core/db.js`
-- [ ] Endpoint SSE `/api/events`: snapshot awal + event delta (`item`, `progress`, `engine`)
-- [ ] `/api/status` tetap ada untuk kompatibilitas sampai frontend pindah
-- [ ] Test untuk endpoint SSE: snapshot awal + event delta setelah `UPDATE` di `queue`
+- [x] Endpoint SSE `/api/events`: snapshot awal + event delta (`item`, `progress`, `engine`)
+- [x] `/api/status` tetap ada untuk kompatibilitas sampai frontend pindah
+- [x] Test untuk endpoint SSE: snapshot awal + event delta setelah `UPDATE` di `queue`
 
 ## Fase 3 — Fondasi frontend
 - [ ] Migrasi ke Svelte 5 (runes)
@@ -179,3 +179,4 @@ Task:
 | 2026-09-27 | 7 | Tambah Fase 7: PostgreSQL terpusat (via `DATABASE_URL`) + backup/export/import di Settings |
 | 2026-09-27 | 1 | Fase 1 selesai: migrasi penuh ke SQLite (`core/db.js`, `queue`, `library`, `settings`, `events`), rescan marker, startup reset `ON_PROGRESS`, dan 10/10 test lulus |
 | 2026-09-27 | 8 | Tambah Fase 8: README khusus AI agent (`docs/AI_AGENT.md`) + pemicu di README utama |
+| 2026-09-27 | 2 | Fase 2 selesai: kontrak `docs/API.md`, endpoint SSE `GET /api/events` (`snapshot` + delta `item`/`progress`/`engine`), dan test SSE lulus (12/12) |
