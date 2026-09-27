@@ -1,45 +1,83 @@
-const fs = require('fs');
-const path = require('path');
-const { atomicWriteFileSync } = require('./utils');
+const { logEvent, getEvents } = require('./db');
 
-const ROOT_DIR = path.resolve(__dirname, '..');
-// Lives inside the active download dir (a persistent volume) instead of ROOT_DIR (the
-// container's writable layer, wiped on every image rebuild) — see setLogDir().
-let ACTIVITY_LOG = path.join(ROOT_DIR, 'activity.log');
-const MAX_LOG_LINES = 5000;
+const MAX_EVENT_ROWS = 10000;
+const MAX_ACTIVITY_READ = 5000;
+const MAX_ERROR_READ = 200;
 
-function setLogDir(dir) {
-    if (dir) ACTIVITY_LOG = path.join(dir, 'activity.log');
+function setLogDir() {
+    // Kept as a no-op for backward compatibility; all logs now live in SQLite `events` table.
 }
 
-// Full audit trail of everything the app does (queue edits, downloads, control actions,
-// renames, compresses, rescans, config changes) — separate from error.log, which only
-// holds failures. Capped so it stays a normal-sized text file instead of growing forever.
-function logActivity(message) {
-    const time = new Date().toISOString();
-    const line = `[${time}] ${message}`;
-    try {
-        fs.appendFileSync(ACTIVITY_LOG, line + '\n', 'utf-8');
+function inferLevelAndGallery(message, explicitLevel, explicitGalleryId) {
+    const str = String(message || '');
+    let level = explicitLevel;
+    if (!level) {
+        if (/^(FATAL|ERROR|CIRCUIT BREAKER)\b/i.test(str)) level = 'error';
+        else if (/^(WARN|RATE LIMIT|\[PLACEHOLDER\])/i.test(str)) level = 'warn';
+        else level = 'info';
+    }
 
-        const content = fs.readFileSync(ACTIVITY_LOG, 'utf-8');
-        const lines = content.split('\n').filter(l => l.trim() !== '');
-        if (lines.length > MAX_LOG_LINES) {
-            const trimmed = lines.slice(lines.length - MAX_LOG_LINES);
-            atomicWriteFileSync(ACTIVITY_LOG, trimmed.join('\n') + '\n');
-        }
+    let galleryId = explicitGalleryId ?? null;
+    if (galleryId === null || galleryId === undefined) {
+        const m = str.match(/\bID:?\s*(\d{1,10})\b/i);
+        if (m) galleryId = parseInt(m[1], 10);
+    }
+
+    return { level, galleryId };
+}
+
+function logActivity(message, options = {}) {
+    const { level, galleryId } = inferLevelAndGallery(message, options.level, options.galleryId);
+    try {
+        logEvent({
+            level,
+            galleryId,
+            message: String(message || ''),
+            maxRows: MAX_EVENT_ROWS
+        });
     } catch (e) {
-        // Can't write activity.log (e.g. disk went read-only) — still surface it via
-        // stdout so `docker logs` captures it instead of the app going silent.
-        console.log(`${line} [activity.log write failed: ${e.code || e.message}]`);
+        console.log(`[${new Date().toISOString()}] ${message} [sqlite events write failed: ${e.message}]`);
     }
 }
 
-function readActivityLog() {
+function logErrorEvent(galleryId, message) {
+    const cleanMsg = String(message || '');
     try {
-        return fs.existsSync(ACTIVITY_LOG) ? fs.readFileSync(ACTIVITY_LOG, 'utf-8') : '';
+        logEvent({
+            level: 'error',
+            galleryId,
+            message: `ID: ${galleryId} - ${cleanMsg}`,
+            maxRows: MAX_EVENT_ROWS
+        });
+    } catch (e) {
+        console.error(`[${new Date().toISOString()}] ID: ${galleryId} - ${cleanMsg} [sqlite events write failed: ${e.message}]`);
+    }
+}
+
+function readActivityLog(limit = MAX_ACTIVITY_READ) {
+    try {
+        const rows = getEvents({ limit });
+        if (!rows || rows.length === 0) return '';
+        return rows.map(r => `[${r.ts}] ${r.message}`).join('\n') + '\n';
     } catch (e) {
         return '';
     }
 }
 
-module.exports = { logActivity, readActivityLog, setLogDir, get ACTIVITY_LOG() { return ACTIVITY_LOG; } };
+function readErrorLog(limit = MAX_ERROR_READ) {
+    try {
+        const rows = getEvents({ level: 'error', limit });
+        if (!rows || rows.length === 0) return '';
+        return rows.map(r => `[${r.ts}] ${r.message}`).join('\n') + '\n';
+    } catch (e) {
+        return '';
+    }
+}
+
+module.exports = {
+    logActivity,
+    logErrorEvent,
+    readActivityLog,
+    readErrorLog,
+    setLogDir
+};

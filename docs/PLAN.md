@@ -97,7 +97,7 @@ Task:
 - [ ] `core/tracker.js`: ganti baca/tulis `list_status.txt` dan `library.json` dengan tabel `queue` dan `library`
 - [ ] `core/engine.js`: ambil item berikutnya dari `queue` (status `PENDING`, urut `priority DESC, id`), update status/progress per baris; hapus `progress.json`
 - [ ] Config: `config.json` → `settings`
-- [ ] Logger: `activity.log`/`error.log` → `events` (batasi, mis. simpan 10k baris terakhir)
+- [x] Logger: `activity.log`/`error.log` → `events` (batasi, mis. simpan 10k baris terakhir)
 - [ ] `server/index.js`: endpoint pakai query DB; tambah import `list.txt` (upload/paste) dan export
 - [ ] Rescan folder download untuk mengisi `library`
 - [ ] Hapus kode dan file lama: `list_status.txt`, `progress.json`, `library.json`, `config.json`, log `.txt`; tambah `data/` ke `.gitignore` dan volume di `docker-compose.yml`
