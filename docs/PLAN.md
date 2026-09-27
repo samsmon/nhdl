@@ -107,7 +107,7 @@ Task:
 
 ## Fase 2 — Backend: push delta, bukan polling
 - [x] Tulis `docs/API.md` dulu: semua endpoint REST (method, path, body, response) dan format event SSE. Frontend (Fase 3–4) dan backend Go (Fase 6) wajib mengikuti kontrak ini
-- [ ] Setiap perubahan baris `queue` di-emit sebagai event dari `core/db.js`
+- [x] Setiap perubahan baris `queue` di-emit sebagai event dari `core/db.js`
 - [ ] Endpoint SSE `/api/events`: snapshot awal + event delta (`item`, `progress`, `engine`)
 - [ ] `/api/status` tetap ada untuk kompatibilitas sampai frontend pindah
 - [ ] Test untuk endpoint SSE: snapshot awal + event delta setelah `UPDATE` di `queue`

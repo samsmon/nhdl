@@ -152,12 +152,27 @@ function closeDb() {
 
 // Startup recovery: any item left in ON_PROGRESS when the server died must be reset to PENDING
 function resetStuckQueueItems(db = getDb()) {
+    const stuckRows = db.prepare(`SELECT gallery_id FROM queue WHERE status = 'ON_PROGRESS'`).all();
     const stmt = db.prepare(`
         UPDATE queue
         SET status = 'PENDING', updated_at = datetime('now')
         WHERE status = 'ON_PROGRESS'
     `);
     const res = stmt.run();
+    if (res.changes > 0) {
+        const batchCount = Math.max(1, getMaxBatch(db));
+        for (const r of stuckRows) {
+            const updated = getQueueItem(r.gallery_id, db);
+            if (updated) {
+                dbEvents.emit('item', {
+                    type: 'updated',
+                    item: formatQueueRow(updated),
+                    rawRow: updated,
+                    batchCount
+                });
+            }
+        }
+    }
     return Number(res.changes || 0);
 }
 
@@ -167,6 +182,27 @@ function normalizeGalleryId(galleryId) {
         throw new Error(`Invalid gallery_id: ${galleryId}`);
     }
     return num;
+}
+
+function formatQueueRow(r) {
+    if (!r) return null;
+    const displayStatus = r.error ? `${r.status} - ${r.error}` : r.status;
+    const displayUrl = r.title ? `${r.url} | ${r.title}` : r.url;
+    return {
+        id: r.id,
+        galleryId: r.gallery_id,
+        status: displayStatus,
+        rawStatus: r.status,
+        url: displayUrl,
+        title: r.title,
+        batch: r.batch || 1,
+        priority: r.priority || 0,
+        pagesDone: r.pages_done || 0,
+        pagesTotal: r.pages_total || 0,
+        error: r.error || null,
+        retries: r.retries || 0,
+        format: r.format || null
+    };
 }
 
 function enqueueGallery(item, db = getDb()) {
@@ -189,12 +225,18 @@ function enqueueGallery(item, db = getDb()) {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
-    const info = stmt.run(
+    stmt.run(
         galleryId, url, title, status, batch, priority,
         pagesDone, pagesTotal, error, retries, format
     );
     const row = getQueueItem(galleryId, db);
-    dbEvents.emit('item', { type: 'inserted', item: row });
+    const batchCount = Math.max(1, getMaxBatch(db));
+    dbEvents.emit('item', {
+        type: 'inserted',
+        item: formatQueueRow(row),
+        rawRow: row,
+        batchCount
+    });
     return row;
 }
 
@@ -282,7 +324,13 @@ function updateQueueItem(galleryId, fields = {}, db = getDb()) {
     db.prepare(`UPDATE queue SET ${sets.join(', ')} WHERE gallery_id = ?`).run(...params);
     const updated = getQueueItem(id, db);
     if (updated) {
-        dbEvents.emit('item', { type: 'updated', item: updated });
+        const batchCount = Math.max(1, getMaxBatch(db));
+        dbEvents.emit('item', {
+            type: 'updated',
+            item: formatQueueRow(updated),
+            rawRow: updated,
+            batchCount
+        });
     }
     return updated;
 }
@@ -299,7 +347,8 @@ function deleteQueueItem(galleryId, db = getDb()) {
     const id = normalizeGalleryId(galleryId);
     const res = db.prepare(`DELETE FROM queue WHERE gallery_id = ?`).run(id);
     if (res.changes > 0) {
-        dbEvents.emit('item', { type: 'deleted', galleryId: id });
+        const batchCount = Math.max(1, getMaxBatch(db));
+        dbEvents.emit('item', { type: 'deleted', galleryId: id, batchCount });
     }
     return Number(res.changes || 0);
 }
@@ -307,16 +356,27 @@ function deleteQueueItem(galleryId, db = getDb()) {
 function deleteQueueBatch(batchNum, db = getDb()) {
     const res = db.prepare(`DELETE FROM queue WHERE batch = ?`).run(batchNum);
     if (res.changes > 0) {
-        dbEvents.emit('batch_deleted', { batch: batchNum });
+        const batchCount = Math.max(1, getMaxBatch(db));
+        dbEvents.emit('batch_deleted', { batch: batchNum, batchCount });
+        dbEvents.emit('item', { type: 'batch_deleted', batch: batchNum, batchCount });
     }
     return Number(res.changes || 0);
 }
 
 function clearCompletedQueue(db = getDb()) {
+    const rows = db.prepare(`
+        SELECT gallery_id FROM queue
+        WHERE status = 'DONE' OR status LIKE 'SKIPPED%'
+    `).all();
     const res = db.prepare(`
         DELETE FROM queue
         WHERE status = 'DONE' OR status LIKE 'SKIPPED%'
     `).run();
+    if (res.changes > 0) {
+        const batchCount = Math.max(1, getMaxBatch(db));
+        const removedIds = rows.map(r => Number(r.gallery_id));
+        dbEvents.emit('item', { type: 'cleared', removedIds, batchCount });
+    }
     return Number(res.changes || 0);
 }
 
@@ -387,10 +447,9 @@ function importListText(text, options = {}, db = getDb()) {
         if (replace) {
             const keepSet = new Set(galleryIds);
             const existingRows = db.prepare(`SELECT gallery_id FROM queue`).all();
-            const delStmt = db.prepare(`DELETE FROM queue WHERE gallery_id = ?`);
             for (const r of existingRows) {
                 if (!keepSet.has(Number(r.gallery_id))) {
-                    delStmt.run(r.gallery_id);
+                    deleteQueueItem(r.gallery_id, db);
                 }
             }
         }
@@ -649,6 +708,7 @@ module.exports = {
     getSchemaVersion,
     runMigrations,
     resetStuckQueueItems,
+    formatQueueRow,
     enqueueGallery,
     getQueueItem,
     getNextPendingItem,
