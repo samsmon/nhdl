@@ -1,6 +1,7 @@
 # NHDL — aturan untuk semua AI agent (Claude Code, Antigravity/Gemini, dll.)
 
 ## Dokumentasi & pencatatan
+- Peta arsitektur lengkap, struktur modul, format data, event engine, dan kontrak API ada di `docs/ARCHITECTURE.md` — baca file tersebut terlebih dahulu di sesi baru agar tidak perlu membaca ulang seluruh source code dari awal.
 - Rencana rework dan status task ada di `docs/PLAN.md`. Perbarui checklist (`[ ]`/`[~]`/`[x]`) dan tabel Log setiap menyelesaikan task.
 - Catat setiap perubahan di `docs/CHANGELOG.md` (entri terbaru di atas, aktor `AI (<agent/model>)`, mis. `AI (Antigravity, Gemini 3.8 Flash High)`).
 - Kalau menemukan perubahan manual dari user yang belum tercatat (lihat `git log`), tambahkan entri dengan aktor `Manual (<nama>)`.

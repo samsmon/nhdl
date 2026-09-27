@@ -92,7 +92,7 @@ Pemetaan file lama → tabel:
 | `activity.log`, `error.log` | `events` |
 
 Task:
-- [ ] Naikkan Docker base image ke `node:24-alpine` (Dockerfile, kedua stage) dan set `engines.node >= 22.13` di `package.json`
+- [x] Naikkan Docker base image ke `node:24-alpine` (Dockerfile, kedua stage) dan set `engines.node >= 22.13` di `package.json`
 - [ ] `core/db.js`: buka DB, jalankan migrasi skema (berbasis `schema_version`), ekspor fungsi query (bukan SQL mentah di mana-mana)
 - [ ] `core/tracker.js`: ganti baca/tulis `list_status.txt` dan `library.json` dengan tabel `queue` dan `library`
 - [ ] `core/engine.js`: ambil item berikutnya dari `queue` (status `PENDING`, urut `priority DESC, id`), update status/progress per baris; hapus `progress.json`

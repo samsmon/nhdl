@@ -1,5 +1,5 @@
 # Stage 1: Build Web UI
-FROM node:20-alpine AS builder
+FROM node:24-alpine AS builder
 WORKDIR /app/webui
 COPY webui/package*.json ./
 RUN npm install
@@ -7,7 +7,7 @@ COPY webui/ ./
 RUN npm run build
 
 # Stage 2: Production Run
-FROM node:20-alpine
+FROM node:24-alpine
 RUN apk add --no-cache curl
 WORKDIR /app
 
