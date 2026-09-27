@@ -9,6 +9,7 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 3
+- **B2 (Pecah `App.svelte` ke komponen Svelte 5 runes)**: pecah `webui/src/App.svelte` (dari 1.767 baris menjadi 94 baris) ke dalam 10 komponen modular di `webui/src/lib/components/` (`Header.svelte`, `HudPanel.svelte`, `QueuePanel.svelte`, `BatchGroup.svelte`, `QueueItem.svelte`, `RightSidebar.svelte`, `FolderPickerModal.svelte`, `DeleteBatchModal.svelte`, `LibraryModal.svelte`, `LogsModal.svelte`) yang seluruhnya memakai Svelte 5 runes (`$state`, `$derived`, `$props`, `$effect`) dan `webui/src/lib/api.js` tanpa pemanggilan `fetch()` langsung.
 - **B1 (`webui/src/lib/api.js` & `webui/src/lib/stores/app.svelte.js`)**: buat HTTP client terpusat `webui/src/lib/api.js` untuk seluruh endpoint di `docs/API.md` dan reactive store `webui/src/lib/stores/app.svelte.js` berbasis Svelte 5 runes (`$state`, `$derived`, `SvelteMap` per `galleryId`) serta klien SSE `EventSource('/api/events')` dengan exponential reconnect backoff (1s, 2s, 5s, maks 10s), status koneksi, dan fallback polling `/api/status` 3 detik.
 
 ## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 2 (Review Fixes A1–A3)
