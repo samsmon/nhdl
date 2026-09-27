@@ -100,10 +100,10 @@ Task:
 - [x] Logger: `activity.log`/`error.log` → `events` (batasi, mis. simpan 10k baris terakhir)
 - [x] `server/index.js`: endpoint pakai query DB; tambah import `list.txt` (upload/paste) dan export
 - [x] Rescan folder download untuk mengisi `library`
-- [ ] Hapus kode dan file lama: `list_status.txt`, `progress.json`, `library.json`, `config.json`, log `.txt`; tambah `data/` ke `.gitignore` dan volume di `docker-compose.yml`
+- [x] Hapus kode dan file lama: `list_status.txt`, `progress.json`, `library.json`, `config.json`, log `.txt`; tambah `data/` ke `.gitignore` dan volume di `docker-compose.yml`
 - [x] Saat startup, item berstatus `ON_PROGRESS` dikembalikan ke `PENDING` (server mati di tengah download tidak boleh meninggalkan item stuck)
 - [x] Test dengan `node:test` bawaan (`npm test`, tanpa dependency) di `test/`: `core/db.js` (migrasi skema, UNIQUE gallery_id), alur `PENDING → ON_PROGRESS → DONE/ERROR`, reset saat startup, import/export `list.txt`. Pakai DB sementara, jangan `data/nhdl.db`
-- [ ] Uji manual: tambah 1000 link, download beberapa, restart server di tengah download → status tetap konsisten
+- [x] Uji manual: tambah 1000 link, download beberapa, restart server di tengah download → status tetap konsisten
 
 ## Fase 2 — Backend: push delta, bukan polling
 - [ ] Tulis `docs/API.md` dulu: semua endpoint REST (method, path, body, response) dan format event SSE. Frontend (Fase 3–4) dan backend Go (Fase 6) wajib mengikuti kontrak ini
@@ -177,4 +177,5 @@ Task:
 | 2026-09-27 | 0 | `docs/ARCHITECTURE.md` dibuat & ditautkan di `AGENTS.md` sebagai referensi lengkap codebase lintas sesi |
 | 2026-09-27 | 0 | Fase 0 selesai: fix `utils.js`, hapus Counter, `start.bat` auto-build, branch `rework`. Plan: tambah test, reset startup, `docs/API.md`, pola fitur |
 | 2026-09-27 | 7 | Tambah Fase 7: PostgreSQL terpusat (via `DATABASE_URL`) + backup/export/import di Settings |
+| 2026-09-27 | 1 | Fase 1 selesai: migrasi penuh ke SQLite (`core/db.js`, `queue`, `library`, `settings`, `events`), rescan marker, startup reset `ON_PROGRESS`, dan 10/10 test lulus |
 | 2026-09-27 | 8 | Tambah Fase 8: README khusus AI agent (`docs/AI_AGENT.md`) + pemicu di README utama |

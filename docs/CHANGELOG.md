@@ -8,6 +8,12 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-27 · AI (Claude Code, Opus 5.5) · Plan (Fase 8)
+- `docs/PLAN.md`: tambah Fase 8 "README khusus AI agent" (`docs/AI_AGENT.md` berisi deploy/manage/modify/maintain, blok pemicu di `README.md`, tautan dari `AGENTS.md`).
+
+## 2026-09-27 · Manual (Maja) · Plan (Fase 8)
+- Meminta README khusus AI agent untuk deploy, manage, modify, dan maintain, dengan pemicu "if you're an AI agent" di README utama.
+
 ## 2026-09-27 · AI (Claude Code, Opus 5.5) · Plan
 - `docs/PLAN.md`: tambah Fase 7 "PostgreSQL terpusat + backup/export/import" (pilih DB lewat `DATABASE_URL`, adapter SQLite/Postgres, API `core/db.js` jadi async, endpoint + menu Settings → Database, test lintas DB).
 
@@ -15,6 +21,8 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 - Meminta integrasi PostgreSQL terpusat (shared Postgres di server) supaya data tidak hilang saat rebuild, plus fitur backup dan export/import database di menu Settings.
 
 ## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 1
+- Bersihkan file state lama (`list_status.txt`, `progress.json`, `library.json`, `config.json`, `activity.log`, `error.log`), tambahkan `data/` ke `.gitignore`, dan mount volume `/app/data` di `docker-compose.yml` serta `Dockerfile`.
+- Tambah test integrasi 1.000 link + simulasi restart server di tengah download (`ON_PROGRESS → PENDING`, `DONE`/`ERROR` tetap konsisten) di `test/db.test.js` (total 10/10 test lulus).
 - `server/index.js`: pindahkan seluruh endpoint (`/api/status`, `/api/queue`, `/api/library`, `/api/retry`, `/api/control`) ke query SQLite (`core/db.js`), tambahkan endpoint `POST /api/queue/import` dan `GET /api/queue/export` untuk import/export `list.txt`, serta jalankan `resetStuckQueueItems()` (`ON_PROGRESS → PENDING`) saat startup.
 - `core/engine.js` & `scripts/find-bad-archives.js`: pindahkan penyimpanan konfigurasi (`downloadDir`, `downloadFormat`, `autoContinueBatches`) dari `config.json` ke tabel SQLite `settings`. Ubah `runBatch()`/`processGallery()` agar mengambil item antrian berikutnya dari tabel `queue` (`getNextPendingItem()`, urut `priority DESC, id ASC`) dan memperbarui status serta `pages_done`/`pages_total` per baris langsung di SQLite.
 - `core/tracker.js`: ganti baca/tulis `list_status.txt` dan `library.json` dengan tabel SQLite `queue` dan `library` (`core/db.js`). Perbarui `rescanLibrary()` agar dapat mengisi ulang tabel `library` secara otomatis dari file marker `.nhdl-id` dan `.cbz.nhdl-id` di folder download.

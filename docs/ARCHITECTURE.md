@@ -9,20 +9,22 @@ Dokumen ini adalah peta teknis lengkap codebase NHDL agar AI agent di sesi baru 
 ```text
 nhdl/
 ├── server/
-│   └── index.js                 (676 baris) — HTTP server, Auth gate, REST API, Batch compress job, Static file server
+│   └── index.js                 (495 baris) — HTTP server, Auth gate, REST API (SQLite), Batch compress job, Static file server
 ├── core/
-│   ├── engine.js               (1067 baris) — DownloaderEngine (EventEmitter), metadata fetch, CDN/API download, 429 backoff
-│   ├── tracker.js               (612 baris) — library.json, list.txt <-> list_status.txt sync, rescan (.nhdl-id), rename, CBZ compress
+│   ├── db.js                    (425 baris) — SQLite (`node:sqlite`, `data/nhdl.db` WAL mode), migrasi `schema_version`, query `queue`/`library`/`settings`/`events`
+│   ├── engine.js               (1010 baris) — DownloaderEngine (EventEmitter), ambil item `getNextPendingItem()`, metadata fetch, CDN/API download, 429 backoff
+│   ├── tracker.js               (380 baris) — Wrapper `queue` & `library` SQLite, `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), rename, CBZ compress
 │   ├── utils.js                 (233 baris) — sanitizeName (escaped control chars), getDynamicDelay, verifyImage, blank PNG, atomicWriteFileSync
 │   ├── nhentaiApi.js            (188 baris) — certain site ( ͡° ͜ʖ ͡°) API v2 wrapper via curl + Cloudflare IP bypass + Zip magic-byte check (PK\x03\x04)
 │   ├── zip.js                   (101 baris) — Zero-dependency Store-only ZIP/CBZ binary builder (PKWARE spec)
 │   ├── auth.js                   (67 baris) — In-memory session token (30d TTL) + timingSafeEqual password check (NHDL_PASSWORD)
 │   ├── env.js                    (63 baris) — Zero-dependency .env parser & updater (saveEnvValue)
-│   └── logger.js                 (46 baris) — Rotating activity.log (max 5000 baris)
+│   └── logger.js                 (75 baris) — Audit & error logger ke tabel SQLite `events` (retensi 10.000 baris)
 ├── scripts/
-│   └── find-bad-archives.js     (117 baris) — `npm run check:archives` (deteksi & `--delete` file .cbz/.zip korup/HTML challenge + cetak daftar ID)
+│   └── find-bad-archives.js     (118 baris) — `npm run check:archives` (deteksi & `--delete` file .cbz/.zip korup/HTML challenge + cetak daftar ID)
 ├── test/
-│   └── nhentaiApi.test.js        (52 baris) — Unit test `node:test` (`npm test`) untuk `downloadArchiveFile` (User-Agent & validasi signature zip)
+│   ├── db.test.js               (250 baris) — Unit & E2E test `node:test` (`core/db.js`, `rescanLibrary`, 1000-link restart consistency)
+│   └── nhentaiApi.test.js        (52 baris) — Unit test `node:test` (`downloadArchiveFile` User-Agent & validasi signature zip)
 ├── webui/
 │   ├── package.json                         — Svelte 5.57, Vite 8.3, Tailwind 4.3, GSAP 3.15, lucide-svelte
 │   └── src/

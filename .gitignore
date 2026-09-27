@@ -4,7 +4,8 @@ node_modules/
 # Build output
 webui/dist/
 
-# Runtime data / user-generated content (not source code)
+# Runtime data / SQLite database
+data/
 Download/
 *.log
 library.json

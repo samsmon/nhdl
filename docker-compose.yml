@@ -11,5 +11,6 @@ services:
       - "8098:8080"
     volumes:
       - /mnt/hdd-media/nhdl/downloads:/downloads
+      - /mnt/hdd-media/nhdl/data:/app/data
       - /mnt/hdd-media:/mnt/hdd-media
       - /mnt/hdd-music:/mnt/hdd-music

@@ -204,3 +204,49 @@ test('core/tracker.js: rescanLibrary populates SQLite library table from .nhdl-i
     }
 });
 
+test('Fase 1 E2E: add 1000 links, download several, restart mid-download -> state remains consistent', () => {
+    const ctx = createTempDb();
+    try {
+        const lines = ['# BATCH 1 FORMAT=cbz'];
+        for (let i = 1; i <= 1000; i++) {
+            lines.push(`https://nhentai.net/g/${300000 + i}/ | Gallery Title ${i}`);
+        }
+        const importSummary = dbMod.importListText(lines.join('\n'), { replace: true }, ctx.db);
+        assert.strictEqual(importSummary.added, 1000);
+        assert.strictEqual(importSummary.total, 1000);
+
+        // Simulate downloading first 5 items (DONE), 6th item interrupted mid-download (ON_PROGRESS at page 12/24), 7th item failed (ERROR)
+        for (let i = 1; i <= 5; i++) {
+            dbMod.updateQueueStatus(300000 + i, 'DONE', { pagesDone: 20, pagesTotal: 20 }, ctx.db);
+        }
+        dbMod.updateQueueStatus(300006, 'ON_PROGRESS', { pagesDone: 12, pagesTotal: 24 }, ctx.db);
+        dbMod.updateQueueStatus(300007, 'ERROR', { error: 'Socket Timeout' }, ctx.db);
+
+        // Simulate server restart mid-download: close DB, reopen same DB file, and run startup resetStuckQueueItems()
+        dbMod.closeDb();
+        const reopenedDb = dbMod.initDb(ctx.dbPath);
+        const resetCount = dbMod.resetStuckQueueItems(reopenedDb);
+        assert.strictEqual(resetCount, 1);
+
+        const allRows = dbMod.getQueueItems({}, reopenedDb);
+        assert.strictEqual(allRows.length, 1000);
+
+        const doneRows = dbMod.getQueueItems({ status: 'DONE' }, reopenedDb);
+        const pendingRows = dbMod.getQueueItems({ status: 'PENDING' }, reopenedDb);
+        const errorRows = dbMod.getQueueItems({ status: 'ERROR' }, reopenedDb);
+
+        assert.strictEqual(doneRows.length, 5);
+        assert.strictEqual(errorRows.length, 1);
+        assert.strictEqual(pendingRows.length, 994); // 993 untouched + 1 recovered from ON_PROGRESS
+
+        // Next item to process after restart must be the recovered item (300006)
+        const nextUp = dbMod.getNextPendingItem(reopenedDb);
+        assert.strictEqual(nextUp.gallery_id, 300006);
+        assert.strictEqual(nextUp.pages_done, 12);
+        assert.strictEqual(nextUp.pages_total, 24);
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+

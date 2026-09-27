@@ -20,6 +20,6 @@ ENV TZ=Asia/Jakarta
 ENV WEB_GUI=true
 
 EXPOSE 8080
-VOLUME ["/downloads"]
+VOLUME ["/downloads", "/app/data"]
 
 CMD ["node", "server/index.js"]
