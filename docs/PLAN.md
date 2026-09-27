@@ -117,9 +117,9 @@ Task:
 - [x] **A3 (Review)**: Unit test pre-pass `_runBatchBody` (`DONE` tanpa file → `PENDING`, `DONE` valid tetap `DONE`, `ERROR` `retries < 5` diproses ulang)
 
 ## Fase 3 — Fondasi frontend
-- [ ] Migrasi ke Svelte 5 (runes)
-- [ ] Pecah `App.svelte` menjadi komponen + store
-- [ ] Ganti polling dengan klien SSE
+- [~] Migrasi ke Svelte 5 (runes)
+- [~] Pecah `App.svelte` menjadi komponen + store (`webui/src/lib/api.js` + `webui/src/lib/stores/app.svelte.js` selesai)
+- [x] Ganti polling dengan klien SSE (`EventSource('/api/events')` + backoff reconnect + fallback polling 3s)
 
 ## Fase 4 — Layout qBittorrent/IDM
 - [ ] Sidebar filter (All / Downloading / Completed / Failed / Paused)

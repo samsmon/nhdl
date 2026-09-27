@@ -964,7 +964,7 @@ class DownloaderEngine extends EventEmitter {
                 await sleep(1000 + Math.floor(Math.random() * 2000));
             }
 
-            if (hasMorePending && !this.isStopped && !wasFreeSkip) {
+            if (hasMorePending && !this.isStopped && !wasFreeSkip && !this.skipStartupJitter) {
                 if (processedCount % this.batchSize === 0) {
                     const currentBatch = Math.ceil(processedCount / this.batchSize);
                     const totalSeconds = this.batchRestMinutes * 60;

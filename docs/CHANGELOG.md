@@ -8,6 +8,9 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 3
+- **B1 (`webui/src/lib/api.js` & `webui/src/lib/stores/app.svelte.js`)**: buat HTTP client terpusat `webui/src/lib/api.js` untuk seluruh endpoint di `docs/API.md` dan reactive store `webui/src/lib/stores/app.svelte.js` berbasis Svelte 5 runes (`$state`, `$derived`, `SvelteMap` per `galleryId`) serta klien SSE `EventSource('/api/events')` dengan exponential reconnect backoff (1s, 2s, 5s, maks 10s), status koneksi, dan fallback polling `/api/status` 3 detik.
+
 ## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 2 (Review Fixes A1–A3)
 - **A3 (Unit test pre-pass `_runBatchBody`)**: tambahkan test integrasi `_runBatchBody` (dengan `skipStartupJitter: true`, DB sementara, dan stub `processGallery`) di `test/db.test.js` yang memverifikasi item `DONE` tanpa file di disk kembali ke `PENDING`, item `DONE` dengan file valid tetap `DONE`, serta item `ERROR` dengan `retries < 5` diproses ulang (total 17/17 test lulus).
 - **A2 (Isolasi `config.json` pada test)**: tambahkan dukungan opsi `{ legacyConfigPath }` pada `initDb(dbPath, options)` dan variabel environment `NHDL_LEGACY_CONFIG` di `core/db.js` agar database sementara pada `test/` tidak membaca `config.json` milik mesin developer.
