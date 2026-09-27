@@ -7,6 +7,7 @@
     "nhdl-server": "./server/index.js"
   },
   "scripts": {
+    "test": "node --test",
     "start": "node server/index.js",
     "server": "node server/index.js",
     "build:ui": "npm --prefix webui run build",

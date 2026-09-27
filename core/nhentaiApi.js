@@ -132,6 +132,21 @@ function resolveFlagsForUrl(url) {
     return '';
 }
 
+// A real zip/cbz starts with the local-file-header signature "PK\x03\x04".
+function isZipFile(filePath) {
+    let fd;
+    try {
+        fd = fs.openSync(filePath, 'r');
+        const buf = Buffer.alloc(4);
+        fs.readSync(fd, buf, 0, 4, 0);
+        return buf.equals(Buffer.from([0x50, 0x4b, 0x03, 0x04]));
+    } catch (e) {
+        return false;
+    } finally {
+        if (fd !== undefined) try { fs.closeSync(fd); } catch (e) {}
+    }
+}
+
 // Downloads the presigned archive URL straight to disk.
 // Retries twice on transient failures (a cold connection blip shouldn't force a fall back
 // to the much slower per-page CDN path) before giving up — the presigned URL is usually
@@ -141,14 +156,21 @@ async function downloadArchiveFile(url, destPath, attempts = 3) {
     // abort if the transfer stalls (drops under ~1KB/s for 15s straight) instead of hanging
     // forever on a half-open connection — the `timeout` exec option below is a hard backstop
     // in case curl itself ignores those flags for some reason.
-    const curlCmd = `${CURL_BIN} -skL ${CURL_EXTRA_FLAGS} ${resolveFlagsForUrl(url)} --connect-timeout 10 --max-time 180 --speed-limit 1000 --speed-time 15 -o "${destPath}" "${url}"`;
+    // The browser User-Agent is required: without it Cloudflare answers the archive host
+    // with a ~13KB "Just a moment..." HTML challenge (HTTP 403) instead of the zip.
+    const curlCmd = `${CURL_BIN} -skL ${CURL_EXTRA_FLAGS} ${resolveFlagsForUrl(url)} -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" --connect-timeout 10 --max-time 180 --speed-limit 1000 --speed-time 15 -w "%{http_code}" -o "${destPath}" "${url}"`;
     let lastReason = '';
 
     for (let attempt = 1; attempt <= attempts; attempt++) {
         try {
-            await execAsync(curlCmd, { encoding: 'utf-8', windowsHide: true, maxBuffer: 1024 * 1024 * 10, timeout: 200000 });
-            if (!fs.existsSync(destPath) || fs.statSync(destPath).size === 0) {
+            const { stdout } = await execAsync(curlCmd, { encoding: 'utf-8', windowsHide: true, maxBuffer: 1024 * 1024 * 10, timeout: 200000 });
+            const status = stdout.trim();
+            if (status !== '200') {
+                lastReason = `Server balikin HTTP ${status || 'unknown'} (bukan file archive)`;
+            } else if (!fs.existsSync(destPath) || fs.statSync(destPath).size === 0) {
                 lastReason = 'File hasil download kosong/gagal ditulis';
+            } else if (!isZipFile(destPath)) {
+                lastReason = 'File hasil download bukan zip (kemungkinan halaman HTML/challenge)';
             } else {
                 return { success: true };
             }
