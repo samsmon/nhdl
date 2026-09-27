@@ -269,7 +269,8 @@ function createRequestHandler() {
                     'batch_start',
                     'batch_complete',
                     'circuit_breaker',
-                    'config_updated'
+                    'config_updated',
+                    'download_dir_unavailable'
                 ];
                 const engineHandlers = new Map();
                 for (const evtName of engineEventNames) {
@@ -348,8 +349,18 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/library/rescan') {
                 try {
                     const result = rescanLibrary(engine.baseDownloadDir);
-                    logActivity(`Library rescan: ${result.relocated} relocated/added, ${result.pruned} pruned (no folder found), ${result.unchanged} unchanged`);
-                    return res.end(JSON.stringify({ success: true, ...result }));
+                    if (result.aborted) {
+                        engine.statusReason = 'Download folder unavailable';
+                        engine.emit('download_dir_unavailable', {
+                            reason: result.reason || 'Download folder unavailable',
+                            downloadDir: engine.baseDownloadDir
+                        });
+                        logActivity(`Library rescan aborted: ${result.reason || 'Download folder unavailable'}`);
+                    } else {
+                        engine.statusReason = null;
+                        logActivity(`Library rescan: ${result.relocated} relocated/added, ${result.pruned} pruned (no folder found), ${result.unchanged} unchanged`);
+                    }
+                    return res.end(JSON.stringify({ success: !result.aborted, ...result }));
                 } catch (e) {
                     res.writeHead(500);
                     return res.end(JSON.stringify({ success: false, error: e.message }));
@@ -726,15 +737,26 @@ if (require.main === module) {
             }
         } catch (e) {}
 
+        let folderHealthy = true;
         try {
             const result = rescanLibrary(engine.baseDownloadDir);
-            if (result.relocated > 0 || result.pruned > 0) {
-                console.log(`[+] Library rescan: relocated/added ${result.relocated}, pruned ${result.pruned} (no folder on disk).`);
+            if (result.aborted) {
+                folderHealthy = false;
+                engine.statusReason = 'Download folder unavailable';
+                console.warn(`[!] Startup rescan aborted: ${result.reason || 'Download folder unavailable'}`);
+                logActivity(`Startup rescan aborted: ${result.reason || 'Download folder unavailable'}`);
+            } else {
+                engine.statusReason = null;
+                if (result.relocated > 0 || result.pruned > 0) {
+                    console.log(`[+] Library rescan: relocated/added ${result.relocated}, pruned ${result.pruned} (no folder on disk).`);
+                }
+                logActivity(`Startup rescan: ${result.relocated} relocated/added, ${result.pruned} pruned, ${result.unchanged} unchanged`);
             }
-            logActivity(`Startup rescan: ${result.relocated} relocated/added, ${result.pruned} pruned, ${result.unchanged} unchanged`);
         } catch (e) {}
 
-        autoProcessQueue();
+        if (folderHealthy) {
+            autoProcessQueue();
+        }
     });
 }
 

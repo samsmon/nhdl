@@ -119,11 +119,77 @@ function inspectFolderPages(folderPath) {
     return { pages: maxPage || files.length, ext, pageExts };
 }
 
+function isDownloadDirHealthy(dir) {
+    if (!dir || typeof dir !== 'string' || !fs.existsSync(dir)) {
+        return false;
+    }
+    let dirents;
+    try {
+        const stat = fs.statSync(dir);
+        if (!stat.isDirectory()) return false;
+        dirents = fs.readdirSync(dir);
+    } catch (e) {
+        return false;
+    }
+
+    const activeEntries = getAllLibraryEntries().filter(e => !e.skipped);
+    if (activeEntries.length > 0) {
+        const visibleFiles = dirents.filter(name => !name.startsWith('.'));
+        if (visibleFiles.length === 0 && dirents.length === 0) {
+            return false;
+        }
+        if (activeEntries.length >= 10) {
+            let missingCount = 0;
+            for (const entry of activeEntries) {
+                if (!entry.path || !fs.existsSync(entry.path)) {
+                    missingCount++;
+                }
+            }
+            if (missingCount / activeEntries.length > 0.5) {
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 // Reconciles and populates the SQLite `library` table from `.nhdl-id` and `<archive>.nhdl-id`
 // marker files on disk inside `baseDownloadDir`.
 function rescanLibrary(baseDownloadDir) {
-    const result = { scanned: 0, relocated: 0, unchanged: 0, pruned: 0 };
-    if (!baseDownloadDir || !fs.existsSync(baseDownloadDir)) return result;
+    const result = { scanned: 0, relocated: 0, unchanged: 0, pruned: 0, aborted: false };
+    const activeBefore = getAllLibraryEntries().filter(e => !e.skipped);
+
+    if (!baseDownloadDir || typeof baseDownloadDir !== 'string' || !fs.existsSync(baseDownloadDir)) {
+        result.aborted = true;
+        result.reason = 'Download folder unavailable';
+        logEvent({ level: 'error', message: `Rescan aborted: Download folder does not exist (${baseDownloadDir || 'empty'})` });
+        return result;
+    }
+
+    let rootDirents;
+    try {
+        const stat = fs.statSync(baseDownloadDir);
+        if (!stat.isDirectory()) {
+            result.aborted = true;
+            result.reason = 'Download folder unavailable';
+            logEvent({ level: 'error', message: `Rescan aborted: Download path is not a directory (${baseDownloadDir})` });
+            return result;
+        }
+        rootDirents = fs.readdirSync(baseDownloadDir);
+    } catch (e) {
+        result.aborted = true;
+        result.reason = 'Download folder unavailable';
+        logEvent({ level: 'error', message: `Rescan aborted: Download folder cannot be read (${baseDownloadDir})` });
+        return result;
+    }
+
+    if (activeBefore.length > 0 && rootDirents.length === 0) {
+        result.aborted = true;
+        result.reason = 'Download folder is empty while library has entries';
+        logEvent({ level: 'error', message: `Rescan aborted: Download folder is empty while library has ${activeBefore.length} entries (${baseDownloadDir})` });
+        return result;
+    }
 
     const MAX_DEPTH = 6;
     const stack = [{ dir: baseDownloadDir, depth: 0 }];
@@ -246,9 +312,20 @@ function rescanLibrary(baseDownloadDir) {
         }
     }
 
-    const allEntries = getAllLibraryEntries();
+    const allEntries = getAllLibraryEntries().filter(e => !e.skipped);
+    const missingEntries = allEntries.filter(e => !e.path || !fs.existsSync(e.path));
+
+    if (allEntries.length >= 10 && missingEntries.length / allEntries.length > 0.5) {
+        result.aborted = true;
+        result.reason = `More than 50% of library entries missing (${missingEntries.length}/${allEntries.length})`;
+        logEvent({
+            level: 'error',
+            message: `Rescan aborted: ${missingEntries.length} of ${allEntries.length} library entries missing on disk in ${baseDownloadDir}`
+        });
+        return result;
+    }
+
     for (const entry of allEntries) {
-        if (entry.skipped) continue;
         if (entry.path && fs.existsSync(entry.path)) {
             const markerPath = entry.archived
                 ? archiveMarkerPath(entry.path)
@@ -519,6 +596,7 @@ module.exports = {
     getCachedDisplayName,
     updateListDisplayName,
     trackerFileToListPath,
+    isDownloadDirHealthy,
     rescanLibrary,
     renameLibraryEntry,
     compressLibraryEntry,

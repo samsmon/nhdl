@@ -427,6 +427,83 @@ test('BUG 3: migrates downloadDir, downloadFormat, and autoContinueBatches from 
     }
 });
 
+test('A1: unmounted/unhealthy download folder aborts rescan and _runBatchBody without deleting library entries or resetting DONE items', async () => {
+    const ctx = createTempDb();
+    const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-a1-dl-'));
+    const trackerMod = require('../core/tracker');
+    const DownloaderEngine = require('../core/engine');
+
+    try {
+        // Create 20 valid archive files + markers in dlDir and register in library & queue as DONE
+        const paths = [];
+        for (let i = 1; i <= 20; i++) {
+            const gid = 800000 + i;
+            const cbzPath = path.join(dlDir, `Gallery_${gid}.cbz`);
+            fs.writeFileSync(cbzPath, Buffer.from('PK\x03\x04valid-cbz-content'));
+            fs.writeFileSync(`${cbzPath}.nhdl-id`, String(gid), 'utf-8');
+            paths.push({ gid, cbzPath });
+
+            dbMod.upsertLibraryEntry({
+                galleryId: gid,
+                title: `Gallery ${gid}`,
+                format: 'cbz',
+                path: cbzPath,
+                pages: 10
+            }, ctx.db);
+            dbMod.enqueueGallery({
+                galleryId: gid,
+                title: `Gallery ${gid}`,
+                status: 'DONE',
+                pagesDone: 10,
+                pagesTotal: 10
+            }, ctx.db);
+        }
+
+        // Case 1: Download folder does not exist at all (unmounted drive)
+        const nonExistentDir = path.join(os.tmpdir(), 'nhdl-unmounted-disk-' + Date.now());
+        assert.strictEqual(trackerMod.isDownloadDirHealthy(nonExistentDir), false);
+        const rescanUnmounted = trackerMod.rescanLibrary(nonExistentDir);
+        assert.strictEqual(rescanUnmounted.aborted, true);
+        assert.strictEqual(rescanUnmounted.pruned, 0);
+        assert.strictEqual(dbMod.getAllLibraryEntries(ctx.db).length, 20);
+
+        const eng = new DownloaderEngine({ baseDownloadDir: nonExistentDir, skipStartupJitter: true });
+        await eng.runBatch();
+        assert.strictEqual(eng.getStatus(), 'Download folder unavailable');
+        // No DONE items should have been reset to PENDING
+        assert.strictEqual(dbMod.getQueueItems({ status: 'DONE' }, ctx.db).length, 20);
+        assert.strictEqual(dbMod.getQueueItems({ status: 'PENDING' }, ctx.db).length, 0);
+
+        // Case 2: 60% of files (12 out of 20) are missing -> rescan must abort and keep all 20 library entries
+        for (let i = 0; i < 12; i++) {
+            fs.unlinkSync(paths[i].cbzPath);
+            fs.unlinkSync(`${paths[i].cbzPath}.nhdl-id`);
+        }
+        assert.strictEqual(trackerMod.isDownloadDirHealthy(dlDir), false);
+        const rescan60Missing = trackerMod.rescanLibrary(dlDir);
+        assert.strictEqual(rescan60Missing.aborted, true);
+        assert.strictEqual(rescan60Missing.pruned, 0);
+        assert.strictEqual(dbMod.getAllLibraryEntries(ctx.db).length, 20);
+
+        // Restore 11 of the 12 deleted files so only 1 out of 20 (5%) is missing
+        for (let i = 1; i < 12; i++) {
+            fs.writeFileSync(paths[i].cbzPath, Buffer.from('PK\x03\x04valid-cbz-content'));
+            fs.writeFileSync(`${paths[i].cbzPath}.nhdl-id`, String(paths[i].gid), 'utf-8');
+        }
+
+        // Case 3: 1 out of 20 files missing (5% <= 50%) -> healthy, normal rescan prunes the 1 missing entry
+        assert.strictEqual(trackerMod.isDownloadDirHealthy(dlDir), true);
+        const rescan1Missing = trackerMod.rescanLibrary(dlDir);
+        assert.strictEqual(Boolean(rescan1Missing.aborted), false);
+        assert.strictEqual(rescan1Missing.pruned, 1);
+        assert.strictEqual(dbMod.getAllLibraryEntries(ctx.db).length, 19);
+    } finally {
+        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
+        ctx.cleanup();
+    }
+});
+
+
 
 
 

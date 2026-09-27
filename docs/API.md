@@ -55,7 +55,7 @@ Representasi progress unduhan aktif (`engine.currentProgress`), atau `null` jika
 ```
 
 ### `EngineStatus`
-String status mesin pengunduh: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'STOPPING'`.
+String status mesin pengunduh: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'STOPPING'` | `'Download folder unavailable'`.
 
 ---
 
@@ -101,7 +101,7 @@ data: {"liveProgress":{...},"engineStatus":"RUNNING"}
 ```
 
 ### 2.4. `event: engine`
-Dikirim saat status mesin pengunduh atau konfigurasi berubah (`paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`):
+Dikirim saat status mesin pengunduh atau konfigurasi berubah (`paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`, `download_dir_unavailable`):
 ```
 event: engine
 data: {"type":"paused","engineStatus":"PAUSED","liveProgress":null,"autoContinueBatches":true}
@@ -152,7 +152,7 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 | Method | Path | Body | Response (`200 OK`) | Keterangan |
 |---|---|---|---|---|
 | `GET` | `/api/library` | — | `{"items": LibraryItem[], "total": number}` | Mengambil daftar galeri di tabel `library` yang tidak berstatus `skipped`. |
-| `POST` | `/api/library/rescan` | — | `{"success":true, "relocated": number, "pruned": number, "unchanged": number}` | Memindai ulang folder unduhan berdasarkan file marker `.nhdl-id` dan `.cbz.nhdl-id`. |
+| `POST` | `/api/library/rescan` | — | `{"success":true, "scanned": number, "relocated": number, "pruned": number, "unchanged": number, "aborted"?: boolean, "reason"?: string}` | Memindai ulang folder unduhan berdasarkan file marker `.nhdl-id` dan `.cbz.nhdl-id` (dibatalkan dengan `aborted: true` jika folder tidak sehat/tidak ter-mount). |
 | `POST` | `/api/library/rename` | `{"id": string\|number, "newName": string}` | `{"success":true, "oldPath": string, "newPath": string, "newTitle": string}` | Mengubah nama folder/arsip di disk, memperbarui `ComicInfo.xml`, serta memperbarui tabel `library` dan `queue`. |
 | `POST` | `/api/library/compress` | `{"id": string\|number, "ext"?: "cbz"\|"zip"}` | `{"success":true, "archivePath": string, "archiveExt": string, "skipped"?: boolean}` | Mengompres folder galeri menjadi arsip `.cbz`/`.zip` (`STORE` level 0) dan menghapus folder aslinya. |
 | `POST` | `/api/library/batch-compress` | `{"ids": (string\|number)[], "ext"?: "cbz"\|"zip"}` | `{"success":true, "started":true, "total": number}` | Memulai job kompresi massal di latar belakang (`409 Conflict` jika job masih berjalan). |

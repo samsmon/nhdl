@@ -112,6 +112,9 @@ Task:
 - [x] Endpoint SSE `/api/events`: snapshot awal + event delta (`item`, `progress`, `engine`)
 - [x] `/api/status` tetap ada untuk kompatibilitas sampai frontend pindah
 - [x] Test untuk endpoint SSE: snapshot awal + event delta setelah `UPDATE` di `queue`
+- [x] **A1 (Review)**: Pengaman folder download tidak ter-mount (`isDownloadDirHealthy(dir)`, batalkan `rescanLibrary()` bila folder tidak ada/kosong atau >50% dari ≥10 entri hilang, lewati pre-pass `DONE→PENDING` di `_runBatchBody`, set status `Download folder unavailable` + SSE event)
+- [ ] **A2 (Review)**: Isolasi `initDb()` dari `config.json` asli saat test (`legacyConfigPath` / `NHDL_LEGACY_CONFIG`)
+- [ ] **A3 (Review)**: Unit test pre-pass `_runBatchBody` (`DONE` tanpa file → `PENDING`, `DONE` valid tetap `DONE`, `ERROR` `retries < 5` diproses ulang)
 
 ## Fase 3 — Fondasi frontend
 - [ ] Migrasi ke Svelte 5 (runes)

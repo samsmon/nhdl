@@ -8,6 +8,9 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 2 (Review Fix A1)
+- **A1 (`isDownloadDirHealthy` & proteksi unmounted drive)**: tambahkan `isDownloadDirHealthy(dir)` di `core/tracker.js` untuk memastikan folder download ada, dapat dibaca, tidak kosong saat `library` memiliki entri, serta membatalkan `rescanLibrary()` (`aborted: true`) bila >50% dari minimal 10 entri `library` hilang di disk. Lewati pre-pass `DONE→PENDING` di `_runBatchBody` (`core/engine.js`) dan hentikan run dengan status `'Download folder unavailable'` + event SSE `download_dir_unavailable` bila folder tidak sehat.
+
 ## 2026-09-27 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 1 (Review Fixes)
 - **BUG 1 (`requeueFailedItems`)**: tambahkan `requeueFailedItems({ maxRetries = 5 })` di `core/db.js` untuk mengembalikan baris `ERROR`, `COOLDOWN`, dan `PAUSED` dengan `retries < maxRetries` ke `PENDING` (`error = NULL`), dipanggil di awal `_runBatchBody` (`core/engine.js`), `/api/retry` global, dan aksi `resume`/`start`/`restart` di `/api/control` (`server/index.js`). Per-item `/api/retry` kini juga mereset `retries = 0`.
 - **BUG 2 (`importListText` & `_runBatchBody` stale `DONE`)**: kembalikan baris `DONE` atau `SKIPPED` (selain skip permanen `entry.skipped`) ke `PENDING` (`pages_done = 0, error = NULL`) serta hapus entri `library` basi (`deleteLibraryEntry`) apabila file di disk sudah dihapus saat `importListText` maupun pre-pass `_runBatchBody`.

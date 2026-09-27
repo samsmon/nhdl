@@ -8,7 +8,7 @@ const path = require('path');
 const dns = require('dns');
 
 const { sanitizeName, toTitleCase, getDynamicDelay, verifyImage, writeBlankPlaceholderImage, sleep, withFsRetryAsync } = require('./utils');
-const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery } = require('./tracker');
+const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery, isDownloadDirHealthy } = require('./tracker');
 const { logActivity, setLogDir } = require('./logger');
 const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');
 const {
@@ -20,7 +20,9 @@ const {
     enqueueGallery,
     updateQueueItem,
     requeueFailedItems,
-    deleteLibraryEntry
+    deleteLibraryEntry,
+    getAllLibraryEntries,
+    logEvent
 } = require('./db');
 
 dns.setServers(['1.1.1.1', '8.8.8.8']);
@@ -50,8 +52,12 @@ class DownloaderEngine extends EventEmitter {
         const savedDownloadFormat = (rawFormat === 'folder' || rawFormat === 'zip' || rawFormat === 'cbz') ? rawFormat : 'cbz';
         const savedAutoContinue = getSetting('autoContinueBatches', true) !== false;
 
-        this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || savedDownloadDir || path.join(__dirname, '..', 'Download');
-        if (!fs.existsSync(this.baseDownloadDir)) fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+        const defaultDownloadDir = path.join(__dirname, '..', 'Download');
+        this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || savedDownloadDir || defaultDownloadDir;
+        const hasLibraryEntries = getAllLibraryEntries().some(e => !e.skipped);
+        if (!fs.existsSync(this.baseDownloadDir) && !hasLibraryEntries && path.resolve(this.baseDownloadDir) === path.resolve(defaultDownloadDir)) {
+            fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+        }
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
         this.downloadFormat = options.downloadFormat || savedDownloadFormat;
@@ -65,6 +71,7 @@ class DownloaderEngine extends EventEmitter {
         this.isPaused = false;
         this.forceRetry = false;
         this.currentProgress = null;
+        this.statusReason = null;
 
         this.consecutiveRateLimits = 0;
         this.circuitBreakerTripped = false;
@@ -77,12 +84,14 @@ class DownloaderEngine extends EventEmitter {
 
     resume() {
         this.isPaused = false;
+        this.statusReason = null;
         this.consecutiveRateLimits = 0;
         this.circuitBreakerTripped = false;
         this.emit('resumed');
     }
 
     getStatus() {
+        if (this.statusReason) return this.statusReason;
         if (this.isPaused) return 'PAUSED';
         if (!this.isRunning) return 'IDLE';
         if (this.currentProgress) {
@@ -95,6 +104,7 @@ class DownloaderEngine extends EventEmitter {
     setDownloadDir(newDir) {
         if (!newDir || typeof newDir !== 'string') return;
         this.baseDownloadDir = path.resolve(newDir);
+        this.statusReason = null;
         if (!fs.existsSync(this.baseDownloadDir)) fs.mkdirSync(this.baseDownloadDir, { recursive: true });
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
@@ -778,6 +788,20 @@ class DownloaderEngine extends EventEmitter {
     }
 
     async _runBatchBody(galleryIds = null) {
+        if (!isDownloadDirHealthy(this.baseDownloadDir)) {
+            this.statusReason = 'Download folder unavailable';
+            logEvent({
+                level: 'error',
+                message: `Run aborted: Download folder unavailable (${this.baseDownloadDir})`
+            });
+            this.emit('download_dir_unavailable', {
+                reason: 'Download folder unavailable',
+                downloadDir: this.baseDownloadDir
+            });
+            return;
+        }
+        this.statusReason = null;
+
         const library = loadLibrary();
         if (Array.isArray(galleryIds) && galleryIds.length > 0) {
             for (const rawId of galleryIds) {
