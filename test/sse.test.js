@@ -236,3 +236,112 @@ test('GET /api/events streams progress and engine events', async () => {
         env.cleanup();
     }
 });
+
+test('Fase 3 verification: 1000-item queue import via API, 2-tab real-time SSE sync, and payload/filter benchmark', async () => {
+    const env = createTempEnv();
+    const srv = http.createServer(createRequestHandler());
+
+    await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const port = srv.address().port;
+
+    try {
+        // 1. Import 1,000 gallery IDs via POST /api/import (without auto-running engine)
+        engine.isRunning = true; // prevent autoProcessQueue from making network calls
+        const idsText = Array.from({ length: 1000 }, (_, i) => String(100001 + i)).join('\n');
+        const tImportStart = performance.now();
+        const importRes = await new Promise((resolve, reject) => {
+            const req = http.request(
+                `http://127.0.0.1:${port}/api/queue/import`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' }
+                },
+                (res) => {
+                    let body = '';
+                    res.setEncoding('utf8');
+                    res.on('data', c => { body += c; });
+                    res.on('end', () => resolve(JSON.parse(body)));
+                }
+            );
+            req.on('error', reject);
+            req.write(JSON.stringify({ text: idsText, format: 'cbz' }));
+            req.end();
+        });
+        const importMs = performance.now() - tImportStart;
+        assert.equal(importRes.success, true);
+        assert.equal(importRes.added, 1000);
+
+        // 2. Open 2 concurrent SSE streams (simulating 2 browser tabs)
+        const tab1Events = [];
+        const tab2Events = [];
+        let tab1Req = null;
+        let tab2Req = null;
+        let deltaBytes = 0;
+
+        const connectTab = (eventsArr) => new Promise((resolve, reject) => {
+            let buf = '';
+            const req = http.get(`http://127.0.0.1:${port}/api/events`, (res) => {
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => {
+                    buf += chunk;
+                    const parsed = parseSseFrames(buf);
+                    buf = parsed.remainder;
+                    for (const evt of parsed.events) {
+                        eventsArr.push(evt);
+                        if (evt.event === 'snapshot') resolve(req);
+                        if (evt.event === 'item') deltaBytes = Buffer.byteLength(JSON.stringify(evt.data));
+                    }
+                });
+                res.on('error', reject);
+            });
+            req.on('error', reject);
+        });
+
+        const tSnapStart = performance.now();
+        [tab1Req, tab2Req] = await Promise.all([connectTab(tab1Events), connectTab(tab2Events)]);
+        const snapMs = performance.now() - tSnapStart;
+
+        assert.equal(tab1Events[0].data.items.length, 1000);
+        assert.equal(tab2Events[0].data.items.length, 1000);
+
+        // 3. Mutate item 100500 status via updateQueueStatus and verify BOTH tabs receive the SSE item delta in real time
+        const tSyncStart = performance.now();
+        updateQueueStatus(100500, 'DONE', { pagesDone: 32, pagesTotal: 32 });
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for 2-tab SSE sync')), 2000);
+            const check = setInterval(() => {
+                const t1Updated = tab1Events.some(e => e.event === 'item' && e.data.type === 'updated' && e.data.item.galleryId === 100500 && e.data.item.rawStatus === 'DONE');
+                const t2Updated = tab2Events.some(e => e.event === 'item' && e.data.type === 'updated' && e.data.item.galleryId === 100500 && e.data.item.rawStatus === 'DONE');
+                if (t1Updated && t2Updated) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 5);
+        });
+        const syncMs = performance.now() - tSyncStart;
+
+        if (tab1Req) tab1Req.destroy();
+        if (tab2Req) tab2Req.destroy();
+
+        // Compare full /api/status payload size (polled every 1s on main) vs SSE item delta size
+        const fullStatusBytes = await new Promise((resolve, reject) => {
+            http.get(`http://127.0.0.1:${port}/api/status`, (res) => {
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', c => { body += c; });
+                res.on('end', () => resolve(Buffer.byteLength(body)));
+            }).on('error', reject);
+        });
+
+        assert.ok(deltaBytes < 500, `Expected SSE item delta < 500 bytes, got ${deltaBytes}`);
+        assert.ok(fullStatusBytes > 150000, `Expected full 1000-item /api/status > 150KB, got ${fullStatusBytes}`);
+        console.log(`[Fase 3 Benchmark] 1000 items import=${importMs.toFixed(1)}ms, 2-tab snapshot=${snapMs.toFixed(1)}ms, 2-tab delta sync=${syncMs.toFixed(1)}ms, SSE delta=${deltaBytes}B vs /api/status=${fullStatusBytes}B`);
+    } finally {
+        engine.isRunning = false;
+        await new Promise(resolve => srv.close(resolve));
+        env.cleanup();
+    }
+});
+

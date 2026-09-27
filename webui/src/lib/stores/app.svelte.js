@@ -99,6 +99,7 @@ class AppStore {
   #reconnectAttempt = 0;
   #fallbackPollInterval = null;
   #retryFeedbackTimeout = null;
+  #rawListSyncTimer = null;
 
   items = $derived(Array.from(itemsById.values()));
 
@@ -278,8 +279,18 @@ class AppStore {
     }
 
     if (!this.isEditingRaw) {
-      this.rawList = buildRawListFromMap(itemsById);
+      this.#scheduleRawListSync();
     }
+  }
+
+  #scheduleRawListSync() {
+    if (this.#rawListSyncTimer) return;
+    this.#rawListSyncTimer = setTimeout(() => {
+      this.#rawListSyncTimer = null;
+      if (!this.isEditingRaw) {
+        this.rawList = buildRawListFromMap(itemsById);
+      }
+    }, 80);
   }
 
   applyProgressEvent(evt) {
@@ -401,6 +412,10 @@ class AppStore {
   }
 
   disconnectSSE() {
+    if (this.#rawListSyncTimer) {
+      clearTimeout(this.#rawListSyncTimer);
+      this.#rawListSyncTimer = null;
+    }
     if (this.#reconnectTimer) {
       clearTimeout(this.#reconnectTimer);
       this.#reconnectTimer = null;

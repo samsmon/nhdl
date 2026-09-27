@@ -120,6 +120,7 @@ Task:
 - [x] Migrasi ke Svelte 5 (runes `$state`, `$derived`, `$props`, `$effect` tanpa `$:` atau `export let`)
 - [x] Pecah `App.svelte` menjadi komponen (`webui/src/lib/components/*.svelte`, `App.svelte` 94 baris) + store (`webui/src/lib/stores/app.svelte.js`, `webui/src/lib/api.js`)
 - [x] Ganti polling dengan klien SSE (`EventSource('/api/events')` + backoff reconnect + fallback polling 3s)
+- [x] **B3 (Optimasi daftar & Verifikasi Fase 3)**: hapus `animate:flip` pada item/batch antrian, hitung `filteredItems` satu kali per batch di `$derived`, cegah render DOM pada batch `collapsed`, terapkan `content-visibility: auto`, dan verifikasi 1.000 item + sinkronisasi 2 tab real-time via SSE (`import=86.6ms`, `2-tab snapshot=10.7ms`, `2-tab delta sync=19.9ms`, payload update `250B` vs `245KB` pada `/api/status` di `main`)
 
 ## Fase 4 — Layout qBittorrent/IDM
 - [ ] Sidebar filter (All / Downloading / Completed / Failed / Paused)
@@ -186,3 +187,4 @@ Task:
 | 2026-09-27 | 2 | Fase 2 selesai: kontrak `docs/API.md`, endpoint SSE `GET /api/events` (`snapshot` + delta `item`/`progress`/`engine`), dan test SSE lulus (12/12) |
 | 2026-09-27 | 1 | Perbaikan 3 bug regresi review Fase 1 (`requeueFailedItems`, reset `DONE` tanpa file + hapus `library` basi, migrasi `config.json` ke `settings`) + 3 test baru lulus (15/15) |
 | 2026-09-27 | 2 | Perbaikan review Bagian A selesai: A1 (`isDownloadDirHealthy` + proteksi unmounted drive), A2 (isolasi `legacyConfigPath`), A3 (unit test pre-pass `_runBatchBody`) — 17/17 test lulus |
+| 2026-09-27 | 3 | Fase 3 selesai: refactor `webui/` ke Svelte 5 runes + store `SvelteMap` + klien SSE (`/api/events`), pecah `App.svelte` ke 10 komponen, optimasi list 1.000 item (SSE delta `250B` vs `/api/status` `245KB`, sync 2 tab `19.9ms`) — 18/18 test lulus |
