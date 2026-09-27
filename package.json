@@ -11,7 +11,8 @@
     "start": "node server/index.js",
     "server": "node server/index.js",
     "build:ui": "npm --prefix webui run build",
-    "dev:ui": "npm --prefix webui run dev"
+    "dev:ui": "npm --prefix webui run dev",
+    "check:archives": "node scripts/find-bad-archives.js"
   },
   "keywords": [
     "downloader",
