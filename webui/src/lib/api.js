@@ -146,6 +146,42 @@ export async function fetchCompressStatus() {
   };
 }
 
+export async function pauseQueueItems(ids) {
+  const { data } = await requestJson('/api/queue/pause', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids })
+  });
+  return data;
+}
+
+export async function resumeQueueItems(ids) {
+  const { data } = await requestJson('/api/queue/resume', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids })
+  });
+  return data;
+}
+
+export async function deleteQueueItems(ids) {
+  const { data } = await requestJson('/api/queue/delete', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids })
+  });
+  return data;
+}
+
+export async function setQueuePriority(ids, action) {
+  const { data } = await requestJson('/api/queue/priority', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, action })
+  });
+  return data;
+}
+
 export async function fetchLogs(limit = 500) {
   const query = limit ? `?limit=${encodeURIComponent(limit)}` : '';
   const { data } = await requestJson(`/api/logs${query}`);
@@ -153,6 +189,13 @@ export async function fetchLogs(limit = 500) {
     ...data,
     logs: data.logs ?? data.log ?? ''
   };
+}
+
+export async function fetchGalleryLogs(galleryId, limit = 200) {
+  const { data } = await requestJson(
+    `/api/logs?galleryId=${encodeURIComponent(galleryId)}&limit=${encodeURIComponent(limit)}`
+  );
+  return Array.isArray(data) ? data : [];
 }
 
 export async function browseFs(dirPath = '') {
