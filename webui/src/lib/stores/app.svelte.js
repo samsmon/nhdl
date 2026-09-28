@@ -659,6 +659,14 @@ class AppStore {
       for (const id of evt.removedIds) {
         itemsById.delete(String(id));
       }
+    } else if (action === 'reordered' && Array.isArray(evt.items)) {
+      for (const entry of evt.items) {
+        const key = String(entry.galleryId);
+        const existing = itemsById.get(key);
+        if (existing) {
+          itemsById.set(key, { ...existing, priority: Number(entry.priority) });
+        }
+      }
     }
 
     if (!this.isEditingRaw) {

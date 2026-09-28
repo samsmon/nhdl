@@ -504,28 +504,43 @@ function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
     `).all();
     if (rows.length === 0) return { updated: 0 };
 
-    let updated = 0;
-    db.exec('BEGIN');
+    let selectedCount = 0;
+    for (let i = 0; i < rows.length; i++) {
+        if (targetSet.has(Number(rows[i].gallery_id))) selectedCount++;
+    }
+    if (selectedCount === 0) return { updated: 0 };
+
+    const changedItems = [];
+    const nowSql = new Date().toISOString().replace('T', ' ').slice(0, 19);
+    const stmt = db.prepare(`
+        UPDATE queue
+        SET priority = ?, updated_at = ?
+        WHERE gallery_id = ?
+    `);
+
+    db.exec('BEGIN IMMEDIATE');
     try {
         if (action === 'top') {
             const maxP = rows.reduce((m, r) => Math.max(m, Number(r.priority) || 0), 0);
             const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = maxP + (selectedRows.length - i);
+                const gid = Number(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
-                    updateQueueItem(selectedRows[i].gallery_id, { priority: newP }, db);
+                    stmt.run(newP, nowSql, gid);
+                    changedItems.push({ galleryId: gid, priority: newP });
                 }
-                updated++;
             }
         } else if (action === 'bottom') {
             const minP = rows.reduce((m, r) => Math.min(m, Number(r.priority) || 0), 0);
             const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = minP - (i + 1);
+                const gid = Number(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
-                    updateQueueItem(selectedRows[i].gallery_id, { priority: newP }, db);
+                    stmt.run(newP, nowSql, gid);
+                    changedItems.push({ galleryId: gid, priority: newP });
                 }
-                updated++;
             }
         } else if (action === 'up' || action === 'down') {
             const reordered = [...rows];
@@ -547,25 +562,33 @@ function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
                 }
             }
 
-            if (reordered.length <= 500) {
-                const total = reordered.length;
+            let isStrictlyDecreasing = true;
+            for (let i = 0; i < rows.length - 1; i++) {
+                if ((Number(rows[i].priority) || 0) <= (Number(rows[i + 1].priority) || 0)) {
+                    isStrictlyDecreasing = false;
+                    break;
+                }
+            }
+
+            const total = reordered.length;
+            if (isStrictlyDecreasing) {
                 for (let idx = 0; idx < total; idx++) {
-                    const desiredPriority = total - idx;
                     const r = reordered[idx];
-                    if (Number(r.priority) !== desiredPriority) {
-                        updateQueueItem(r.gallery_id, { priority: desiredPriority }, db);
-                        if (targetSet.has(Number(r.gallery_id))) updated++;
-                    } else if (targetSet.has(Number(r.gallery_id))) {
-                        updated++;
+                    const slotPriority = Number(rows[idx].priority);
+                    if (Number(r.priority) !== slotPriority) {
+                        const gid = Number(r.gallery_id);
+                        stmt.run(slotPriority, nowSql, gid);
+                        changedItems.push({ galleryId: gid, priority: slotPriority });
                     }
                 }
             } else {
-                const step = action === 'up' ? 1 : -1;
-                for (const r of rows) {
-                    if (targetSet.has(Number(r.gallery_id))) {
-                        const newP = (Number(r.priority) || 0) + step;
-                        updateQueueItem(r.gallery_id, { priority: newP }, db);
-                        updated++;
+                for (let idx = 0; idx < total; idx++) {
+                    const r = reordered[idx];
+                    const desiredPriority = total - idx;
+                    if (Number(r.priority) !== desiredPriority) {
+                        const gid = Number(r.gallery_id);
+                        stmt.run(desiredPriority, nowSql, gid);
+                        changedItems.push({ galleryId: gid, priority: desiredPriority });
                     }
                 }
             }
@@ -576,7 +599,16 @@ function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
         throw err;
     }
 
-    return { updated };
+    if (changedItems.length > 0) {
+        const batchCount = Math.max(1, getMaxBatch(db));
+        dbEvents.emit('item', {
+            type: 'reordered',
+            items: changedItems,
+            batchCount
+        });
+    }
+
+    return { updated: selectedCount };
 }
 
 function deleteQueueBatch(batchNum, db = getDb()) {

@@ -1003,4 +1003,105 @@ test('Fase 4 A3: updateQueuePriority (top, up, down, bottom) matches getNextPend
     }
 });
 
+test('updateQueuePriority > 500 items: 1000-item #500 up/down/top/bottom, multi-select 3 items up, and 5000-item normalization < 200ms with 1 SSE event', () => {
+    const ctx = createTempDb();
+    try {
+        const getOrderedGalleryIds = () =>
+            ctx.db
+                .prepare('SELECT gallery_id FROM queue ORDER BY priority DESC, id ASC')
+                .all()
+                .map((r) => Number(r.gallery_id));
+
+        // 1. Seed 1000 items with priority 0 (gallery_id 960001 .. 961000)
+        ctx.db.exec('BEGIN IMMEDIATE');
+        const ins1000 = ctx.db.prepare(
+            `INSERT INTO queue (gallery_id, url, status, priority, batch) VALUES (?, ?, 'PENDING', 0, 1)`
+        );
+        for (let i = 1; i <= 1000; i++) {
+            const gid = 960000 + i;
+            ins1000.run(gid, `https://certain.site/g/${gid}/`);
+        }
+        ctx.db.exec('COMMIT');
+
+        const item500 = 960500; // 1-based #500 (0-based index 499)
+        assert.strictEqual(getOrderedGalleryIds()[499], item500);
+
+        // #500 -> up -> #499 (0-based index 498)
+        dbMod.updateQueuePriority([item500], 'up', ctx.db);
+        let ordered = getOrderedGalleryIds();
+        assert.strictEqual(ordered.indexOf(item500) + 1, 499, 'Expected #500 up to land at #499, not #1');
+        assert.strictEqual(ordered.indexOf(960499) + 1, 500, 'Expected former #499 neighbor to swap to #500');
+
+        // From #499 -> down 2x -> #500 then #501 (and verify subsequent single-item swap only updates 2 rows)
+        const emittedEvents = [];
+        const onItem = (evt) => emittedEvents.push(evt);
+        dbMod.dbEvents.on('item', onItem);
+        try {
+            dbMod.updateQueuePriority([item500], 'down', ctx.db);
+            assert.strictEqual(getOrderedGalleryIds().indexOf(item500) + 1, 500);
+            assert.strictEqual(emittedEvents.length, 1);
+            assert.strictEqual(emittedEvents[0].type, 'reordered');
+            assert.strictEqual(emittedEvents[0].items.length, 2, 'Subsequent 1-item down should only update 2 swapped rows');
+
+            dbMod.updateQueuePriority([item500], 'down', ctx.db);
+            assert.strictEqual(getOrderedGalleryIds().indexOf(item500) + 1, 501, 'Expected down 2x to land at #501, not #1000');
+        } finally {
+            dbMod.dbEvents.off('item', onItem);
+        }
+
+        // #501 -> top -> #1 (and matches getNextPendingItem)
+        dbMod.updateQueuePriority([item500], 'top', ctx.db);
+        assert.strictEqual(getOrderedGalleryIds().indexOf(item500) + 1, 1);
+        assert.strictEqual(dbMod.getNextPendingItem(ctx.db).gallery_id, item500);
+
+        // #1 -> bottom -> #1000
+        dbMod.updateQueuePriority([item500], 'bottom', ctx.db);
+        assert.strictEqual(getOrderedGalleryIds().indexOf(item500) + 1, 1000);
+
+        // 2. Multi-select 3 consecutive items in the middle (#500, #501, #502 in current order) -> up -> #499, #500, #501 preserving internal order
+        ordered = getOrderedGalleryIds();
+        const neighborAbove = ordered[498]; // #499
+        const block3 = [ordered[499], ordered[500], ordered[501]]; // #500, #501, #502
+        dbMod.updateQueuePriority(block3, 'up', ctx.db);
+        ordered = getOrderedGalleryIds();
+        assert.deepStrictEqual(
+            [ordered[498], ordered[499], ordered[500]],
+            block3,
+            '3 consecutive selected items must move up 1 position and keep internal order'
+        );
+        assert.strictEqual(ordered[501], neighborAbove, 'The neighbor originally at #499 must now be at #502');
+
+        // 3. 5000 items with priority 0: normalization < 200ms and emits exactly 1 SSE event
+        ctx.db.exec('DELETE FROM queue');
+        ctx.db.exec('BEGIN IMMEDIATE');
+        const ins5000 = ctx.db.prepare(
+            `INSERT INTO queue (gallery_id, url, status, priority, batch) VALUES (?, ?, 'PENDING', 0, 1)`
+        );
+        for (let i = 1; i <= 5000; i++) {
+            const gid = 970000 + i;
+            ins5000.run(gid, `https://certain.site/g/${gid}/`);
+        }
+        ctx.db.exec('COMMIT');
+
+        const sse5000 = [];
+        const onItem5000 = (evt) => sse5000.push(evt);
+        dbMod.dbEvents.on('item', onItem5000);
+        try {
+            const t0 = performance.now();
+            dbMod.updateQueuePriority([972500], 'up', ctx.db);
+            const elapsedMs = performance.now() - t0;
+
+            assert.ok(elapsedMs < 200, `Expected 5000-item normalization < 200ms, got ${elapsedMs.toFixed(2)}ms`);
+            assert.strictEqual(sse5000.length, 1, `Expected exactly 1 SSE event, got ${sse5000.length}`);
+            assert.strictEqual(sse5000[0].type, 'reordered');
+            assert.strictEqual(getOrderedGalleryIds().indexOf(972500) + 1, 2499);
+        } finally {
+            dbMod.dbEvents.off('item', onItem5000);
+        }
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+
 

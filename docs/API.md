@@ -95,6 +95,11 @@ Dikirim setiap kali ada perubahan pada tabel `queue` di SQLite (`core/db.js` `db
   event: item
   data: {"type":"cleared","removedIds":[123456,234567],"batchCount":1}
   ```
+- **Perubahan urutan prioritas (`reordered`)**:
+  ```
+  event: item
+  data: {"type":"reordered","items":[{"galleryId":123456,"priority":501},{"galleryId":234567,"priority":500}],"batchCount":1}
+  ```
 
 ### 2.3. `event: progress`
 Dikirim saat halaman galeri selesai diunduh atau saat hitungan mundur jeda/cooldown berubah:
@@ -137,7 +142,7 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 | `POST` | `/api/queue/pause` | `{"ids": number[]}` | `{"success":true, "paused": number, "stopping": number[]}` | Mengubah status item `PENDING`/`ERROR`/`COOLDOWN`/`PAUSED` menjadi `STOPPED`. Untuk item `ON_PROGRESS`, engine menghentikan unduhan galeri tersebut dengan aman di batas halaman berikutnya, menyimpan progres (`pages_done`), mengubah status menjadi `STOPPED` tanpa menghapus file/halaman yang sudah terunduh, lalu melanjutkan ke item berikutnya. |
 | `POST` | `/api/queue/resume` | `{"ids": number[]}` | `{"success":true, "resumed": number}` | Mengubah status item `STOPPED` (serta `ERROR`/`COOLDOWN`/`PAUSED`) menjadi `PENDING` (`error = null`) lalu memanggil `autoProcessQueue()`. |
 | `POST` | `/api/queue/delete` | `{"ids": number[]}` | `{"success":true, "deleted": number}` | Menghapus item dari tabel `queue` saja (file di disk dan tabel `library` tidak disentuh). Item yang sedang `ON_PROGRESS` dihentikan terlebih dahulu di batas halaman berikutnya seperti pada `/api/queue/pause`. |
-| `POST` | `/api/queue/priority` | `{"ids": number[], "action": "top" \| "up" \| "down" \| "bottom"}` | `{"success":true, "updated": number}` | Mengubah kolom `priority` untuk daftar `gallery_id` yang dipilih (`getNextPendingItem()` mengurutkan berdasarkan `priority DESC, id ASC`). |
+| `POST` | `/api/queue/priority` | `{"ids": number[], "action": "top" \| "up" \| "down" \| "bottom"}` | `{"success":true, "updated": number}` | Mengubah urutan prioritas (`ORDER BY priority DESC, id ASC`) untuk ukuran antrian berapa pun dalam satu transaksi SQLite dan memancarkan satu event SSE `item` (`type: "reordered"`). Bila nilai `priority` bertabrakan (mis. semua `0`), antrian dinormalisasi ke `total - index` terlebih dahulu. |
 
 ### 3.3. Kontrol Engine & Retry
 
