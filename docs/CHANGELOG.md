@@ -9,6 +9,16 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Validasi Ketat importData Sebelum Transaksi Database (`core/db.js`, `core/db/common.js`, `core/db/sqlite.js`, `core/db/postgres.js`, `test/db.test.js`)**:
+  - Implementasikan `validateImportPayload()` di `core/db/common.js` yang dieksekusi sebelum membuka transaksi database di `core/db.js`, `core/db/sqlite.js`, dan `core/db/postgres.js`.
+  - Tolak impor jika `payload.format !== "nhdl-export"`, `version` tidak dikenal (hanya versi 1), `tables` bukan objek, atau ada tabel yang bukan array.
+  - Tolak jika `schemaVersion` (atau `schema_version`) payload lebih baru daripada schema versi aplikasi (`CURRENT_APP_SCHEMA_VERSION = 2`).
+  - Validasi setiap baris pada tabel `queue` dan `library` memiliki `gallery_id` valid; bila ada satu baris tidak valid, tolak seluruh proses impor tanpa membuka transaksi.
+  - Tolak impor mode `replace` jika file tidak berisi baris `queue` maupun `library` sama sekali, kecuali diberikan opsi eksplisit `{ allowEmpty: true }`.
+  - Tambahkan properti `format: 'nhdl-export'` pada output `exportData()` di adapter SQLite dan PostgreSQL.
+  - Tambahkan unit/integration test komprehensif di `test/db.test.js` yang memverifikasi data lama tetap utuh ketika import ditolak (34/34 test lulus).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **7.7 Docker Compose, Env Configuration & Cross-DB Tests (`docker-compose.yml`, `.env.example`, `core/db/postgres.js`, `test/db.test.js`)**:
   - Perbarui `docker-compose.yml` dengan contoh konfigurasi `DATABASE_URL` ke PostgreSQL terpusat (shared PostgreSQL), dokumentasi bahwa volume `data/` opsional saat memakai PostgreSQL (hanya diperlukan bila ingin menyimpan file backup JSON lokal di host), contoh koneksi network docker, serta memastikan kontainer tetap berjalan secara standalone dengan SQLite sebagai default.
   - Perbarui `.env.example` dengan dokumentasi variabel lingkungan `DATABASE_URL` dan `TEST_DATABASE_URL`.

@@ -1568,8 +1568,145 @@ test('Fase 7.7: PostgreSQL live test suite against real server (skipped if TEST_
 
         await postgresAdapter.deleteQueueItem(gid, pool);
         await postgresAdapter.deleteLibraryEntry(gid, pool);
+
+        // Validation test on live Postgres
+        await postgresAdapter.enqueueGallery({ galleryId: 999902, url: `https://certain.site/g/999902/`, title: 'Postgres Validation Test' }, pool);
+        await assert.rejects(async () => {
+            await postgresAdapter.importData({ hello: 'x' }, { mode: 'replace' }, pool);
+        }, /Invalid import format/);
+
+        // Verify data intact
+        const item902 = await postgresAdapter.getQueueItem(999902, pool);
+        assert.ok(item902);
+        assert.strictEqual(Number(item902.galleryId), 999902);
+        await postgresAdapter.deleteQueueItem(999902, pool);
     } finally {
         await postgresAdapter.closeDb();
+    }
+});
+
+test('Point 1: importData rejects invalid payloads, unknown versions, corrupted rows, and empty replace without allowEmpty', async () => {
+    const ctx = await createTempDb();
+    try {
+        // Seed 5 queue items and 2 library entries
+        for (let i = 1; i <= 5; i++) {
+            await dbMod.enqueueGallery({
+                galleryId: 10000 + i,
+                url: `https://certain.site/g/${10000 + i}/`,
+                title: `Item ${i}`,
+                status: 'PENDING'
+            }, ctx.db);
+        }
+        await dbMod.upsertLibraryEntry({
+            galleryId: 10001,
+            title: 'Library 1',
+            path: '/downloads/10001',
+            pages: 20
+        }, ctx.db);
+        await dbMod.upsertLibraryEntry({
+            galleryId: 10002,
+            title: 'Library 2',
+            path: '/downloads/10002',
+            pages: 15
+        }, ctx.db);
+
+        const verifyDataIntact = async () => {
+            const queueItems = await dbMod.getQueueItems({}, ctx.db);
+            const libEntries = await dbMod.getAllLibraryEntries(ctx.db);
+            assert.strictEqual(queueItems.length, 5, 'Queue items must remain intact');
+            assert.strictEqual(libEntries.length, 2, 'Library entries must remain intact');
+        };
+
+        await verifyDataIntact();
+
+        // 1. Asal-asalan payload ({ hello: "x" })
+        await assert.rejects(async () => {
+            await dbMod.importData({ hello: 'x' }, { mode: 'replace' }, ctx.db);
+        }, /Invalid import format/);
+        await verifyDataIntact();
+
+        // 2. Wrong format string
+        await assert.rejects(async () => {
+            await dbMod.importData({ format: 'wrong-format', version: 1, tables: {} }, { mode: 'replace' }, ctx.db);
+        }, /expected "nhdl-export"/);
+        await verifyDataIntact();
+
+        // 3. Unknown export version
+        await assert.rejects(async () => {
+            await dbMod.importData({ format: 'nhdl-export', version: 999, tables: {} }, { mode: 'replace' }, ctx.db);
+        }, /Unknown export version: 999/);
+        await verifyDataIntact();
+
+        // 4. Newer schemaVersion than application
+        await assert.rejects(async () => {
+            await dbMod.importData({ format: 'nhdl-export', version: 1, schemaVersion: 999, tables: { queue: [] } }, { mode: 'replace' }, ctx.db);
+        }, /is newer than application schema version/);
+        await verifyDataIntact();
+
+        // 5. tables property not an object
+        await assert.rejects(async () => {
+            await dbMod.importData({ format: 'nhdl-export', version: 1, tables: 'string' }, { mode: 'replace' }, ctx.db);
+        }, /"tables" property must be an object/);
+        await verifyDataIntact();
+
+        // 6. Table in tables is not an array
+        await assert.rejects(async () => {
+            await dbMod.importData({ format: 'nhdl-export', version: 1, tables: { queue: 'not-an-array' } }, { mode: 'replace' }, ctx.db);
+        }, /Table "queue" in import payload must be an array/);
+        await verifyDataIntact();
+
+        // 7. Corrupted queue row (invalid gallery_id)
+        await assert.rejects(async () => {
+            await dbMod.importData({
+                format: 'nhdl-export',
+                version: 1,
+                tables: {
+                    queue: [
+                        { gallery_id: 10001, url: 'https://certain.site/g/10001/' },
+                        { gallery_id: 'invalid-id-xyz', url: 'https://certain.site/g/bad/' }
+                    ]
+                }
+            }, { mode: 'replace' }, ctx.db);
+        }, /Invalid or missing gallery_id in queue row/);
+        await verifyDataIntact();
+
+        // 8. Corrupted library row (missing gallery_id)
+        await assert.rejects(async () => {
+            await dbMod.importData({
+                format: 'nhdl-export',
+                version: 1,
+                tables: {
+                    library: [
+                        { title: 'No gallery id' }
+                    ]
+                }
+            }, { mode: 'replace' }, ctx.db);
+        }, /Invalid or missing gallery_id in library row/);
+        await verifyDataIntact();
+
+        // 9. Replace mode with empty queue & library without allowEmpty
+        await assert.rejects(async () => {
+            await dbMod.importData({
+                format: 'nhdl-export',
+                version: 1,
+                tables: { queue: [], library: [] }
+            }, { mode: 'replace' }, ctx.db);
+        }, /contains no queue or library items for replace mode/);
+        await verifyDataIntact();
+
+        // 10. Replace mode with empty queue & library WITH allowEmpty: true
+        const emptyResult = await dbMod.importData({
+            format: 'nhdl-export',
+            version: 1,
+            tables: { queue: [], library: [] }
+        }, { mode: 'replace', allowEmpty: true }, ctx.db);
+        assert.strictEqual(emptyResult.success, true);
+        const finalQueue = await dbMod.getQueueItems({}, ctx.db);
+        const finalLib = await dbMod.getAllLibraryEntries(ctx.db);
+        assert.strictEqual(finalQueue.length, 0);
+        assert.strictEqual(finalLib.length, 0);
+    } finally {
+        await ctx.cleanup();
     }
 });
 

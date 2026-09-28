@@ -2,7 +2,7 @@ const { Pool } = require('pg');
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, formatQueueRow, maskDatabaseUrl } = require('./common');
+const { normalizeGalleryId, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
 
 let activePool = null;
 let activeUrl = null;
@@ -1102,6 +1102,7 @@ async function exportData(db = null) {
     }));
 
     return {
+        format: 'nhdl-export',
         version: 1,
         exported_at: new Date().toISOString(),
         db_type: 'postgres',
@@ -1117,6 +1118,9 @@ async function exportData(db = null) {
 
 async function importData(payload, options = {}, db = null) {
     const active = db || options.db || await getDb();
+    const appSchemaVer = (await getSchemaVersion(active)) || CURRENT_APP_SCHEMA_VERSION;
+    validateImportPayload(payload, options, appSchemaVer);
+
     const mode = options.mode === 'merge' ? 'merge' : 'replace';
     const tables = payload?.tables || {};
     const queueRows = Array.isArray(tables.queue) ? tables.queue : [];

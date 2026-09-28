@@ -2,7 +2,7 @@ const path = require('path');
 const sqliteAdapter = require('./db/sqlite');
 const postgresAdapter = require('./db/postgres');
 const { dbEvents } = require('./db/events');
-const { normalizeGalleryId, formatQueueRow, maskDatabaseUrl } = require('./db/common');
+const { normalizeGalleryId, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./db/common');
 
 const ROOT_DIR = path.resolve(__dirname, '..');
 const DEFAULT_DB_PATH = sqliteAdapter.DEFAULT_DB_PATH;
@@ -259,6 +259,8 @@ async function exportData(db = null) {
 
 async function importData(payload, options = {}, db = null) {
     if (!activeAdapter) await initDb();
+    const appSchemaVer = (await getSchemaVersion(db)) || CURRENT_APP_SCHEMA_VERSION;
+    validateImportPayload(payload, options, appSchemaVer);
     return await activeAdapter.importData(payload, options, db);
 }
 

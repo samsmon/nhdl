@@ -2,7 +2,7 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, formatQueueRow } = require('./common');
+const { normalizeGalleryId, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
 
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
 const DEFAULT_DB_PATH = process.env.NHDL_DB_PATH || path.join(ROOT_DIR, 'data', 'nhdl.db');
@@ -1045,6 +1045,7 @@ async function exportData(db = null) {
     const events = active.prepare(`SELECT * FROM events ORDER BY id ASC`).all();
 
     return {
+        format: 'nhdl-export',
         version: 1,
         exported_at: new Date().toISOString(),
         db_type: 'sqlite',
@@ -1060,6 +1061,9 @@ async function exportData(db = null) {
 
 async function importData(payload, options = {}, db = null) {
     const active = db || await getDb();
+    const appSchemaVer = (await getSchemaVersion(active)) || CURRENT_APP_SCHEMA_VERSION;
+    validateImportPayload(payload, options, appSchemaVer);
+
     const mode = options.mode === 'merge' ? 'merge' : 'replace';
     const tables = payload?.tables || {};
     const queueRows = Array.isArray(tables.queue) ? tables.queue : [];
