@@ -19,6 +19,7 @@ const {
     getNextPendingItem,
     enqueueGallery,
     updateQueueItem,
+    deleteQueueItem,
     requeueFailedItems,
     deleteLibraryEntry,
     getAllLibraryEntries,
@@ -80,10 +81,45 @@ class DownloaderEngine extends EventEmitter {
 
         this.consecutiveRateLimits = 0;
         this.circuitBreakerTripped = false;
+        this.stoppingGalleries = new Set();
+        this.deletingGalleries = new Set();
+        this.activeGalleryId = null;
 
         if (!isDownloadDirHealthy(this.baseDownloadDir)) {
             this.markDownloadDirUnavailable('Download folder unavailable');
         }
+    }
+
+    stopGallery(galleryId, options = {}) {
+        const gid = parseInt(String(galleryId), 10);
+        if (!Number.isFinite(gid)) return;
+        this.stoppingGalleries.add(gid);
+        if (options.deleteAfter) {
+            this.deletingGalleries.add(gid);
+        }
+    }
+
+    cancelStopGallery(galleryId) {
+        const gid = parseInt(String(galleryId), 10);
+        if (!Number.isFinite(gid)) return;
+        this.stoppingGalleries.delete(gid);
+        this.deletingGalleries.delete(gid);
+    }
+
+    isGalleryStopping(galleryId) {
+        const gid = parseInt(String(galleryId), 10);
+        return this.stoppingGalleries.has(gid);
+    }
+
+    isGalleryDeleting(galleryId) {
+        const gid = parseInt(String(galleryId), 10);
+        return this.deletingGalleries.has(gid);
+    }
+
+    clearGalleryStopFlags(galleryId) {
+        const gid = parseInt(String(galleryId), 10);
+        this.stoppingGalleries.delete(gid);
+        this.deletingGalleries.delete(gid);
     }
 
     markDownloadDirUnavailable(reason = 'Download folder unavailable') {
@@ -567,298 +603,379 @@ class DownloaderEngine extends EventEmitter {
     }
 
     async processGallery(galleryId, currentTaskNum = 1, totalTasks = 1, _trackerFile = null) {
-        updateListStatus(null, galleryId, 'ON_PROGRESS');
+        const gid = parseInt(String(galleryId), 10);
+        this.activeGalleryId = gid;
 
-        const library = loadLibrary();
-        if (library[galleryId] && library[galleryId].folder && fs.existsSync(library[galleryId].folder) && library[galleryId].pages && library[galleryId].ext) {
-            const data = library[galleryId];
-            let allValid = !!data.archived;
-            if (!allValid) {
-                const savedPageExts = data.pageExts || {};
-                allValid = true;
-                for (let j = 1; j <= data.pages; j++) {
-                    if (!verifyImage(path.join(data.folder, `${j}.${savedPageExts[j] || data.ext}`))) {
-                        allValid = false;
-                        break;
-                    }
-                }
-            }
-            if (allValid) {
-                updateListStatus(null, galleryId, 'SKIPPED - Already in Library');
-                updateListDisplayName(null, galleryId, buildDisplayName(data.title, data.author));
-                updateQueueItem(galleryId, { pagesDone: data.pages, pagesTotal: data.pages });
-                this.emit('skipped', { galleryId, title: data.title, currentTaskNum, totalTasks, reason: 'Already in Library' });
-                return { status: "SUCCESS", numPages: data.pages, skipped: true, skipReason: 'library' };
-            }
-        }
-
-        const meta = await this.fetchMetadata(galleryId);
-        if (meta.status === "RATE_LIMIT") {
-            const cached = getCachedDisplayName(null, galleryId);
-            if (cached && cached.title) {
-                const found = this.findExistingOnDisk(cached.title, cached.author);
-                if (found) {
-                    if (found.archived) {
-                        saveArchivedToLibrary(galleryId, found.title, found.path, found.archiveExt, { author: cached.author });
-                    } else {
-                        saveToLibrary(galleryId, found.title, found.path, found.pages, found.ext, found.pageExts, { author: cached.author });
-                    }
-                    updateListStatus(null, galleryId, "SKIPPED - Found on disk (metadata was 429'd)");
-                    updateQueueItem(galleryId, { pagesDone: found.pages || 0, pagesTotal: found.pages || 0 });
-                    logActivity(`SKIPPED ID ${galleryId}: found existing file on disk, avoided 429 cooldown`);
-                    this.emit('skipped', { galleryId, title: found.title, currentTaskNum, totalTasks, reason: 'Already on disk (metadata blocked by 429)' });
-                    return { status: "SUCCESS", numPages: found.pages || 0, skipped: true, skipReason: 'library' };
-                }
-            }
-            logError(galleryId, "Cloudflare Rate Limit / Challenge (429)");
-            updateListStatus(null, galleryId, "COOLDOWN - CLOUDFLARE 429");
-            return { status: "RATE_LIMIT" };
-        }
-
-        const { title, mediaId, numPages, ext, pageExts, langStr, authorStr, extraMeta } = meta;
-        const extFor = (page) => pageExts[page] || ext;
-        const sanitizedLang = sanitizeName(langStr);
-        const sanitizedAuthor = sanitizeName(authorStr);
-        const sanitizedTitle = sanitizeName(title) || galleryId;
-
-        updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
-        updateQueueItem(galleryId, { pagesTotal: numPages });
-
-        const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
-        let folderPath = path.join(parentDir, sanitizedTitle);
-
-        if (fs.existsSync(parentDir)) {
-            try {
-                const siblings = fs.readdirSync(parentDir, { withFileTypes: true });
-
-                const archiveMatch = siblings.find(d => {
-                    if (!d.isFile()) return false;
-                    const m = d.name.match(/^(.*)\.(cbz|zip)$/i);
-                    return m && m[1].startsWith(sanitizedTitle);
-                });
-                if (archiveMatch) {
-                    const archiveExt = archiveMatch.name.match(/\.(cbz|zip)$/i)[1].toLowerCase();
-                    const archivePath = path.join(parentDir, archiveMatch.name);
-                    saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages });
-                    updateListStatus(null, galleryId, "SKIPPED - Already in Library");
-                    updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
-                    updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
-                    this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Already Downloaded (Archive)' });
-                    return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
-                }
-
-                const folderMatch = siblings.find(d => d.isDirectory() && d.name.startsWith(sanitizedTitle));
-                if (folderMatch) folderPath = path.join(parentDir, folderMatch.name);
-            } catch (e) {}
-        }
-
-        const apiKey = process.env.NHENTAI_API_KEY;
-        const targetFormat = getBatchFormatForGallery(null, galleryId) || this.downloadFormat;
-        if (apiKey && (targetFormat === 'cbz' || targetFormat === 'zip')) {
-            const apiResult = await this.tryApiArchiveDownload(galleryId, targetFormat, apiKey, {
-                sanitizedTitle, title, folderPath, numPages, authorStr, langStr, extraMeta,
-                currentTaskNum, totalTasks, trackerFile: null
-            });
-            if (apiResult) return apiResult;
-        }
-
-        if (!fs.existsSync(folderPath)) {
-            try {
-                await withFsRetryAsync(() => fs.mkdirSync(folderPath, { recursive: true }), {
-                    onRetry: (e, attempt, max) => {
-                        logActivity(`WARN ID ${galleryId}: mkdir failed (${e.code}), retry ${attempt}/${max} - ${folderPath}`);
-                    }
-                });
-            } catch (e) {
-                if (e.code === 'ENOENT' || e.code === 'ENAMETOOLONG' || e.code === 'EINVAL') {
-                    folderPath = path.join(parentDir, galleryId.toString());
-                    logError(galleryId, `Folder name rejected by filesystem (${e.code}), falling back to gallery ID as folder name`);
-                    fs.mkdirSync(folderPath, { recursive: true });
+        try {
+            if (this.isGalleryStopping(gid)) {
+                if (!this.isGalleryDeleting(gid)) {
+                    updateQueueItem(galleryId, { status: 'STOPPED' });
                 } else {
-                    throw e;
+                    deleteQueueItem(galleryId);
+                }
+                this.clearGalleryStopFlags(gid);
+                return { status: "STOPPED", numPages: 0 };
+            }
+
+            updateListStatus(null, galleryId, 'ON_PROGRESS');
+
+            const library = loadLibrary();
+            if (library[galleryId] && library[galleryId].folder && fs.existsSync(library[galleryId].folder) && library[galleryId].pages && library[galleryId].ext) {
+                const data = library[galleryId];
+                let allValid = !!data.archived;
+                if (!allValid) {
+                    const savedPageExts = data.pageExts || {};
+                    allValid = true;
+                    for (let j = 1; j <= data.pages; j++) {
+                        if (!verifyImage(path.join(data.folder, `${j}.${savedPageExts[j] || data.ext}`))) {
+                            allValid = false;
+                            break;
+                        }
+                    }
+                }
+                if (allValid) {
+                    updateListStatus(null, galleryId, 'SKIPPED - Already in Library');
+                    updateListDisplayName(null, galleryId, buildDisplayName(data.title, data.author));
+                    updateQueueItem(galleryId, { pagesDone: data.pages, pagesTotal: data.pages });
+                    this.emit('skipped', { galleryId, title: data.title, currentTaskNum, totalTasks, reason: 'Already in Library' });
+                    return { status: "SUCCESS", numPages: data.pages, skipped: true, skipReason: 'library' };
                 }
             }
-        }
 
-        let completed = 0;
-        let pendingPages = [];
-
-        for (let j = 1; j <= numPages; j++) {
-            const checkPath = path.join(folderPath, `${j}.${extFor(j)}`);
-            if (verifyImage(checkPath)) {
-                completed++;
-            } else {
-                if (fs.existsSync(checkPath)) fs.unlinkSync(checkPath);
-                pendingPages.push(j);
+            const meta = await this.fetchMetadata(galleryId);
+            if (this.isGalleryStopping(gid)) {
+                if (!this.isGalleryDeleting(gid)) {
+                    updateQueueItem(galleryId, { status: 'STOPPED' });
+                } else {
+                    deleteQueueItem(galleryId);
+                }
+                this.clearGalleryStopFlags(gid);
+                return { status: "STOPPED", numPages: 0 };
             }
-        }
 
-        updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
-
-        if (completed === numPages) {
-            saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
-            this.maybeCompress(galleryId);
-            updateListStatus(null, galleryId, "SKIPPED - Files Complete");
-            this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Files 100% Complete' });
-            return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
-        }
-
-        await new Promise((resolve) => {
-            let active = 0;
-            const pageRetryCounts = new Map();
-            const pageErrors = new Map();
-            const activePages = new Map();
-            let completedBytes = 0;
-            let lastSpeedSample = { at: Date.now(), bytes: 0 };
-            let lastByteAt = Date.now();
-
-            const buildProgress = () => {
-                const percent = Math.round((completed / numPages) * 100);
-                const pagesSnapshot = [...activePages.values()].map(p => ({
-                    page: p.page,
-                    url: p.url,
-                    bytesReceived: p.bytesReceived,
-                    totalBytes: p.totalBytes,
-                    percent: p.totalBytes > 0 ? Math.round((p.bytesReceived / p.totalBytes) * 100) : 0,
-                    attempt: p.attempt,
-                    lastError: p.lastError || null
-                }));
-
-                const nowBytes = completedBytes + [...activePages.values()].reduce((sum, p) => sum + p.bytesReceived, 0);
-                const elapsedSec = Math.max((Date.now() - lastSpeedSample.at) / 1000, 0.001);
-                const speedKBps = Math.max(0, Math.round(((nowBytes - lastSpeedSample.bytes) / 1024) / elapsedSec));
-                lastSpeedSample = { at: Date.now(), bytes: nowBytes };
-
-                const stalledSeconds = Math.round((Date.now() - lastByteAt) / 1000);
-                const stalled = active > 0 && stalledSeconds >= 8;
-
-                return {
-                    galleryId,
-                    title: title.substring(0, 40),
-                    percent,
-                    completed,
-                    total: numPages,
-                    taskNum: currentTaskNum,
-                    totalTasks,
-                    activePages: pagesSnapshot,
-                    speedKBps,
-                    stalled,
-                    stalledSeconds: stalled ? stalledSeconds : 0,
-                    live: true
-                };
-            };
-
-            const heartbeat = setInterval(() => {
-                if (active === 0) return;
-                this.currentProgress = buildProgress();
-                this.emit('progress', this.currentProgress);
-            }, 1000);
-
-            const next = () => {
-                if (this.isStopped) {
-                    clearInterval(heartbeat);
-                    return resolve();
+            if (meta.status === "RATE_LIMIT") {
+                const cached = getCachedDisplayName(null, galleryId);
+                if (cached && cached.title) {
+                    const found = this.findExistingOnDisk(cached.title, cached.author);
+                    if (found) {
+                        if (found.archived) {
+                            saveArchivedToLibrary(galleryId, found.title, found.path, found.archiveExt, { author: cached.author });
+                        } else {
+                            saveToLibrary(galleryId, found.title, found.path, found.pages, found.ext, found.pageExts, { author: cached.author });
+                        }
+                        updateListStatus(null, galleryId, "SKIPPED - Found on disk (metadata was 429'd)");
+                        updateQueueItem(galleryId, { pagesDone: found.pages || 0, pagesTotal: found.pages || 0 });
+                        logActivity(`SKIPPED ID ${galleryId}: found existing file on disk, avoided 429 cooldown`);
+                        this.emit('skipped', { galleryId, title: found.title, currentTaskNum, totalTasks, reason: 'Already on disk (metadata blocked by 429)' });
+                        return { status: "SUCCESS", numPages: found.pages || 0, skipped: true, skipReason: 'library' };
+                    }
                 }
-                if (this.isPaused) {
-                    setTimeout(next, 500);
-                    return;
-                }
-                if (pendingPages.length === 0 && active === 0) {
-                    clearInterval(heartbeat);
-                    saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
-                    this.maybeCompress(galleryId);
-                    updateListStatus(null, galleryId, "DONE");
-                    updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
-                    logActivity(`[CDN] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
-                    this.currentProgress = null;
-                    this.emit('done', { galleryId, title, pages: numPages, currentTaskNum, totalTasks });
-                    return resolve();
-                }
+                logError(galleryId, "Cloudflare Rate Limit / Challenge (429)");
+                updateListStatus(null, galleryId, "COOLDOWN - CLOUDFLARE 429");
+                return { status: "RATE_LIMIT" };
+            }
 
-                while (active < this.concurrency && pendingPages.length > 0 && !this.isStopped) {
-                    const currentPage = pendingPages.shift();
-                    const pageExt = extFor(currentPage);
-                    const destPath = path.join(folderPath, `${currentPage}.${pageExt}`);
-                    const dynamicHost = this.getRandomImageHost();
-                    const imageUrl = `https://${dynamicHost}/galleries/${mediaId}/${currentPage}.${pageExt}`;
-                    const retryCount = pageRetryCounts.get(currentPage) || 0;
-                    const startDelay = retryCount > 0 ? Math.min(1000 * 2 ** retryCount, 15000) : Math.floor(Math.random() * 400);
+            const { title, mediaId, numPages, ext, pageExts, langStr, authorStr, extraMeta } = meta;
+            const extFor = (page) => pageExts[page] || ext;
+            const sanitizedLang = sanitizeName(langStr);
+            const sanitizedAuthor = sanitizeName(authorStr);
+            const sanitizedTitle = sanitizeName(title) || galleryId;
 
-                    const pageEntry = {
-                        page: currentPage,
-                        url: imageUrl,
-                        bytesReceived: 0,
-                        totalBytes: 0,
-                        attempt: retryCount + 1,
-                        lastError: pageErrors.get(currentPage) || null
+            if (!this.isGalleryDeleting(gid)) {
+                updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
+                updateQueueItem(galleryId, { pagesTotal: numPages });
+            }
+
+            const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
+            let folderPath = path.join(parentDir, sanitizedTitle);
+
+            if (fs.existsSync(parentDir)) {
+                try {
+                    const siblings = fs.readdirSync(parentDir, { withFileTypes: true });
+
+                    const archiveMatch = siblings.find(d => {
+                        if (!d.isFile()) return false;
+                        const m = d.name.match(/^(.*)\.(cbz|zip)$/i);
+                        return m && m[1].startsWith(sanitizedTitle);
+                    });
+                    if (archiveMatch) {
+                        const archiveExt = archiveMatch.name.match(/\.(cbz|zip)$/i)[1].toLowerCase();
+                        const archivePath = path.join(parentDir, archiveMatch.name);
+                        saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages });
+                        updateListStatus(null, galleryId, "SKIPPED - Already in Library");
+                        updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
+                        updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
+                        this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Already Downloaded (Archive)' });
+                        return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
+                    }
+
+                    const folderMatch = siblings.find(d => d.isDirectory() && d.name.startsWith(sanitizedTitle));
+                    if (folderMatch) folderPath = path.join(parentDir, folderMatch.name);
+                } catch (e) {}
+            }
+
+            const apiKey = process.env.NHENTAI_API_KEY;
+            const targetFormat = getBatchFormatForGallery(null, galleryId) || this.downloadFormat;
+            if (apiKey && (targetFormat === 'cbz' || targetFormat === 'zip') && !this.isGalleryStopping(gid)) {
+                const apiResult = await this.tryApiArchiveDownload(galleryId, targetFormat, apiKey, {
+                    sanitizedTitle, title, folderPath, numPages, authorStr, langStr, extraMeta,
+                    currentTaskNum, totalTasks, trackerFile: null
+                });
+                if (apiResult) return apiResult;
+            }
+
+            if (!fs.existsSync(folderPath)) {
+                try {
+                    await withFsRetryAsync(() => fs.mkdirSync(folderPath, { recursive: true }), {
+                        onRetry: (e, attempt, max) => {
+                            logActivity(`WARN ID ${galleryId}: mkdir failed (${e.code}), retry ${attempt}/${max} - ${folderPath}`);
+                        }
+                    });
+                } catch (e) {
+                    if (e.code === 'ENOENT' || e.code === 'ENAMETOOLONG' || e.code === 'EINVAL') {
+                        folderPath = path.join(parentDir, galleryId.toString());
+                        logError(galleryId, `Folder name rejected by filesystem (${e.code}), falling back to gallery ID as folder name`);
+                        fs.mkdirSync(folderPath, { recursive: true });
+                    } else {
+                        throw e;
+                    }
+                }
+            }
+
+            let completed = 0;
+            let pendingPages = [];
+
+            for (let j = 1; j <= numPages; j++) {
+                const checkPath = path.join(folderPath, `${j}.${extFor(j)}`);
+                if (verifyImage(checkPath)) {
+                    completed++;
+                } else {
+                    if (fs.existsSync(checkPath)) fs.unlinkSync(checkPath);
+                    pendingPages.push(j);
+                }
+            }
+
+            if (!this.isGalleryDeleting(gid)) {
+                updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
+            }
+
+            if (this.isGalleryStopping(gid)) {
+                const wasDeleted = this.isGalleryDeleting(gid);
+                if (!wasDeleted) {
+                    updateQueueItem(galleryId, { status: 'STOPPED', pagesDone: completed, pagesTotal: numPages });
+                } else {
+                    deleteQueueItem(galleryId);
+                }
+                this.clearGalleryStopFlags(gid);
+                return { status: "STOPPED", numPages, pagesDone: completed };
+            }
+
+            if (completed === numPages) {
+                saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
+                this.maybeCompress(galleryId);
+                updateListStatus(null, galleryId, "SKIPPED - Files Complete");
+                this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Files 100% Complete' });
+                return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
+            }
+
+            let galleryStopped = false;
+
+            await new Promise((resolve) => {
+                let active = 0;
+                const pageRetryCounts = new Map();
+                const pageErrors = new Map();
+                const activePages = new Map();
+                let completedBytes = 0;
+                let lastSpeedSample = { at: Date.now(), bytes: 0 };
+                let lastByteAt = Date.now();
+
+                const buildProgress = () => {
+                    const percent = Math.round((completed / numPages) * 100);
+                    const pagesSnapshot = [...activePages.values()].map(p => ({
+                        page: p.page,
+                        url: p.url,
+                        bytesReceived: p.bytesReceived,
+                        totalBytes: p.totalBytes,
+                        percent: p.totalBytes > 0 ? Math.round((p.bytesReceived / p.totalBytes) * 100) : 0,
+                        attempt: p.attempt,
+                        lastError: p.lastError || null
+                    }));
+
+                    const nowBytes = completedBytes + [...activePages.values()].reduce((sum, p) => sum + p.bytesReceived, 0);
+                    const elapsedSec = Math.max((Date.now() - lastSpeedSample.at) / 1000, 0.001);
+                    const speedKBps = Math.max(0, Math.round(((nowBytes - lastSpeedSample.bytes) / 1024) / elapsedSec));
+                    lastSpeedSample = { at: Date.now(), bytes: nowBytes };
+
+                    const stalledSeconds = Math.round((Date.now() - lastByteAt) / 1000);
+                    const stalled = active > 0 && stalledSeconds >= 8;
+
+                    return {
+                        galleryId,
+                        title: title.substring(0, 40),
+                        percent,
+                        completed,
+                        total: numPages,
+                        taskNum: currentTaskNum,
+                        totalTasks,
+                        activePages: pagesSnapshot,
+                        speedKBps,
+                        stalled,
+                        stalledSeconds: stalled ? stalledSeconds : 0,
+                        live: true
                     };
-                    activePages.set(currentPage, pageEntry);
+                };
 
-                    active++;
-                    sleep(startDelay)
-                        .then(() => this.downloadImage(imageUrl, destPath, dynamicHost, (received, total) => {
-                            pageEntry.bytesReceived = received;
-                            pageEntry.totalBytes = total;
-                            lastByteAt = Date.now();
-                        }))
-                        .then(() => {
-                            if (!verifyImage(destPath)) {
-                                const attempt = retryCount + 1;
-                                let failedSize = 0;
-                                try { failedSize = fs.statSync(destPath).size; } catch (e) {}
+                const heartbeat = setInterval(() => {
+                    if (active === 0) return;
+                    this.currentProgress = buildProgress();
+                    this.emit('progress', this.currentProgress);
+                }, 1000);
 
-                                if (attempt >= PLACEHOLDER_RETRY_THRESHOLD && failedSize > 0 && failedSize < PLACEHOLDER_SIZE_CEILING) {
-                                    if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
-                                    writeBlankPlaceholderImage(destPath);
-                                    logPlaceholderPage(galleryId, currentPage, title);
-                                    logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: CDN served a blank image ${attempt}x in a row - substituted a blank page instead of retrying forever`);
+                const next = () => {
+                    if (this.isStopped) {
+                        clearInterval(heartbeat);
+                        return resolve();
+                    }
+                    if (this.isGalleryStopping(gid)) {
+                        if (active === 0) {
+                            clearInterval(heartbeat);
+                            this.currentProgress = null;
+                            const wasDeleted = this.isGalleryDeleting(gid);
+                            if (!wasDeleted) {
+                                updateQueueItem(galleryId, { status: 'STOPPED', pagesDone: completed, pagesTotal: numPages });
+                                logActivity(`Paused gallery ID ${galleryId} at page boundary (${completed}/${numPages} pages saved)`);
+                            } else {
+                                deleteQueueItem(galleryId);
+                                logActivity(`Deleted gallery ID ${galleryId} from queue at page boundary`);
+                            }
+                            this.clearGalleryStopFlags(gid);
+                            galleryStopped = true;
+                            this.emit('gallery_stopped', { galleryId: gid, pagesDone: completed, pagesTotal: numPages, deleted: wasDeleted });
+                            return resolve();
+                        }
+                        return;
+                    }
+                    if (this.isPaused) {
+                        setTimeout(next, 500);
+                        return;
+                    }
+                    if (pendingPages.length === 0 && active === 0) {
+                        clearInterval(heartbeat);
+                        saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
+                        this.maybeCompress(galleryId);
+                        updateListStatus(null, galleryId, "DONE");
+                        updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
+                        logActivity(`[CDN] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
+                        this.currentProgress = null;
+                        this.emit('done', { galleryId, title, pages: numPages, currentTaskNum, totalTasks });
+                        return resolve();
+                    }
+
+                    while (active < this.concurrency && pendingPages.length > 0 && !this.isStopped && !this.isGalleryStopping(gid)) {
+                        const currentPage = pendingPages.shift();
+                        const pageExt = extFor(currentPage);
+                        const destPath = path.join(folderPath, `${currentPage}.${pageExt}`);
+                        const dynamicHost = this.getRandomImageHost();
+                        const imageUrl = `https://${dynamicHost}/galleries/${mediaId}/${currentPage}.${pageExt}`;
+                        const retryCount = pageRetryCounts.get(currentPage) || 0;
+                        const startDelay = retryCount > 0 ? Math.min(1000 * 2 ** retryCount, 15000) : Math.floor(Math.random() * 400);
+
+                        const pageEntry = {
+                            page: currentPage,
+                            url: imageUrl,
+                            bytesReceived: 0,
+                            totalBytes: 0,
+                            attempt: retryCount + 1,
+                            lastError: pageErrors.get(currentPage) || null
+                        };
+                        activePages.set(currentPage, pageEntry);
+
+                        active++;
+                        sleep(startDelay)
+                            .then(() => this.downloadImage(imageUrl, destPath, dynamicHost, (received, total) => {
+                                pageEntry.bytesReceived = received;
+                                pageEntry.totalBytes = total;
+                                lastByteAt = Date.now();
+                            }))
+                            .then(() => {
+                                if (!verifyImage(destPath)) {
+                                    const attempt = retryCount + 1;
+                                    let failedSize = 0;
+                                    try { failedSize = fs.statSync(destPath).size; } catch (e) {}
+
+                                    if (attempt >= PLACEHOLDER_RETRY_THRESHOLD && failedSize > 0 && failedSize < PLACEHOLDER_SIZE_CEILING) {
+                                        if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
+                                        writeBlankPlaceholderImage(destPath);
+                                        logPlaceholderPage(galleryId, currentPage, title);
+                                        logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: CDN served a blank image ${attempt}x in a row - substituted a blank page instead of retrying forever`);
+                                        pageRetryCounts.delete(currentPage);
+                                        pageErrors.delete(currentPage);
+                                        completedBytes += failedSize;
+                                        completed++;
+                                        if (!this.isGalleryDeleting(gid)) {
+                                            updateQueueItem(galleryId, {
+                                                status: this.isGalleryStopping(gid) ? 'STOPPED' : 'ON_PROGRESS',
+                                                pagesDone: completed,
+                                                pagesTotal: numPages
+                                            });
+                                        }
+                                        const percent = Math.round((completed / numPages) * 100);
+                                        this.currentProgress = buildProgress();
+                                        this.currentProgress.percent = percent;
+                                        this.emit('progress', this.currentProgress);
+                                    } else {
+                                        pageRetryCounts.set(currentPage, attempt);
+                                        pageErrors.set(currentPage, 'Downloaded file failed verification (corrupt/too small)');
+                                        pendingPages.unshift(currentPage);
+                                    }
+                                } else {
                                     pageRetryCounts.delete(currentPage);
                                     pageErrors.delete(currentPage);
-                                    completedBytes += failedSize;
+                                    completedBytes += pageEntry.bytesReceived;
                                     completed++;
-                                    updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
+                                    if (!this.isGalleryDeleting(gid)) {
+                                        updateQueueItem(galleryId, {
+                                            status: this.isGalleryStopping(gid) ? 'STOPPED' : 'ON_PROGRESS',
+                                            pagesDone: completed,
+                                            pagesTotal: numPages
+                                        });
+                                    }
                                     const percent = Math.round((completed / numPages) * 100);
                                     this.currentProgress = buildProgress();
                                     this.currentProgress.percent = percent;
                                     this.emit('progress', this.currentProgress);
-                                } else {
-                                    pageRetryCounts.set(currentPage, attempt);
-                                    pageErrors.set(currentPage, 'Downloaded file failed verification (corrupt/too small)');
-                                    pendingPages.unshift(currentPage);
                                 }
-                            } else {
-                                pageRetryCounts.delete(currentPage);
-                                pageErrors.delete(currentPage);
-                                completedBytes += pageEntry.bytesReceived;
-                                completed++;
-                                updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
-                                const percent = Math.round((completed / numPages) * 100);
-                                this.currentProgress = buildProgress();
-                                this.currentProgress.percent = percent;
-                                this.emit('progress', this.currentProgress);
-                            }
-                        })
-                        .catch((err) => {
-                            const attempt = retryCount + 1;
-                            pageRetryCounts.set(currentPage, attempt);
-                            pageErrors.set(currentPage, err.message);
-                            pendingPages.unshift(currentPage);
+                            })
+                            .catch((err) => {
+                                const attempt = retryCount + 1;
+                                pageRetryCounts.set(currentPage, attempt);
+                                pageErrors.set(currentPage, err.message);
+                                pendingPages.unshift(currentPage);
 
-                            if (attempt === 3 || attempt % 5 === 0) {
-                                logError(galleryId, `Page ${currentPage} (${imageUrl}) failed ${attempt}x: ${err.message}`);
-                            }
-                        })
-                        .finally(() => {
-                            activePages.delete(currentPage);
-                            active--;
-                            next();
-                        });
-                }
-            };
-            next();
-        });
+                                if (attempt === 3 || attempt % 5 === 0) {
+                                    logError(galleryId, `Page ${currentPage} (${imageUrl}) failed ${attempt}x: ${err.message}`);
+                                }
+                            })
+                            .finally(() => {
+                                activePages.delete(currentPage);
+                                active--;
+                                next();
+                            });
+                    }
+                };
+                next();
+            });
 
-        return { status: "SUCCESS", numPages, skipped: false };
+            if (galleryStopped) {
+                return { status: "STOPPED", numPages, pagesDone: completed };
+            }
+
+            return { status: "SUCCESS", numPages, skipped: false };
+        } finally {
+            if (this.activeGalleryId === gid) {
+                this.activeGalleryId = null;
+            }
+        }
     }
 
     async runBatch(galleryIds = null, trackerFile = null) {
@@ -905,6 +1022,7 @@ class DownloaderEngine extends EventEmitter {
 
         const allQueue = getQueueItems();
         for (const row of allQueue) {
+            if (row.status === 'STOPPED') continue;
             const idStr = String(row.gallery_id);
             const libEntry = library[idStr];
             if (row.status === 'PENDING') {
@@ -985,11 +1103,15 @@ class DownloaderEngine extends EventEmitter {
                 }
             }
 
+            if (result && result.status === "STOPPED") {
+                continue;
+            }
+
             const MAX_CONSECUTIVE_RATE_LIMITS = 3;
             const BASE_RATE_LIMIT_WAIT = 5 * 60;
             const MAX_RATE_LIMIT_WAIT = 60 * 60;
 
-            while (result && result.status === "RATE_LIMIT" && !this.isStopped) {
+            while (result && result.status === "RATE_LIMIT" && !this.isStopped && !this.isGalleryStopping(id)) {
                 this.consecutiveRateLimits++;
 
                 if (this.consecutiveRateLimits > MAX_CONSECUTIVE_RATE_LIMITS) {
@@ -1007,11 +1129,11 @@ class DownloaderEngine extends EventEmitter {
                 logActivity(`RATE LIMIT ID ${id}: cooling down ${waitSeconds}s (consecutive hit #${this.consecutiveRateLimits})`);
                 this.emit('rate_limit', { galleryId: id, waitSeconds, consecutiveRateLimits: this.consecutiveRateLimits });
                 for (let s = waitSeconds; s > 0; s--) {
-                    if (this.isStopped || this.forceRetry) break;
-                    while (this.isPaused && !this.isStopped && !this.forceRetry) {
+                    if (this.isStopped || this.forceRetry || this.isGalleryStopping(id)) break;
+                    while (this.isPaused && !this.isStopped && !this.forceRetry && !this.isGalleryStopping(id)) {
                         await sleep(500);
                     }
-                    if (this.isStopped || this.forceRetry) break;
+                    if (this.isStopped || this.forceRetry || this.isGalleryStopping(id)) break;
 
                     const m = Math.floor(s / 60);
                     const sRem = s % 60;
@@ -1028,11 +1150,25 @@ class DownloaderEngine extends EventEmitter {
                     this.emit('cooldown', this.currentProgress);
                     await sleep(1000);
                 }
+                if (this.isGalleryStopping(id)) {
+                    if (!this.isGalleryDeleting(id)) {
+                        updateQueueItem(id, { status: 'STOPPED' });
+                    } else {
+                        deleteQueueItem(id);
+                    }
+                    this.clearGalleryStopFlags(id);
+                    result = { status: "STOPPED" };
+                    break;
+                }
                 if (this.forceRetry) {
                     this.forceRetry = false;
                     this.currentProgress = null;
                 }
                 result = await this.processGallery(id, processedCount, totalTasksSnapshot, null);
+            }
+
+            if (result && result.status === "STOPPED") {
+                continue;
             }
 
             if (this.circuitBreakerTripped) break;

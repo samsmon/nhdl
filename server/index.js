@@ -17,7 +17,12 @@ const {
     importListText,
     exportListText,
     updateQueueStatus,
-    getAllLibraryEntries
+    pauseQueueItems,
+    resumeQueueItems,
+    deleteQueueItems,
+    updateQueuePriority,
+    getAllLibraryEntries,
+    getEvents
 } = require('../core/db');
 initDb();
 
@@ -402,6 +407,125 @@ function createRequestHandler() {
                 return res.end(listText);
             }
 
+            if (req.method === 'POST' && req.url === '/api/queue/pause') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { ids } = JSON.parse(body || '{}');
+                        if (!Array.isArray(ids)) {
+                            res.writeHead(400);
+                            return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
+                        }
+                        for (const id of ids) {
+                            const gid = parseInt(String(id), 10);
+                            if (Number.isFinite(gid) && engine.activeGalleryId === gid) {
+                                engine.stopGallery(gid, { deleteAfter: false });
+                            }
+                        }
+                        const result = pauseQueueItems(ids);
+                        for (const gid of result.stoppingIds) {
+                            engine.stopGallery(gid, { deleteAfter: false });
+                        }
+                        logActivity(`Queue paused ${result.paused} item(s)`);
+                        return res.end(JSON.stringify({
+                            success: true,
+                            paused: result.paused,
+                            stopping: result.stoppingIds
+                        }));
+                    } catch (e) {
+                        res.writeHead(400);
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/queue/resume') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { ids } = JSON.parse(body || '{}');
+                        if (!Array.isArray(ids)) {
+                            res.writeHead(400);
+                            return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
+                        }
+                        const result = resumeQueueItems(ids);
+                        for (const gid of result.resumedIds) {
+                            engine.cancelStopGallery(gid);
+                        }
+                        logActivity(`Queue resumed ${result.resumed} item(s)`);
+                        res.end(JSON.stringify({
+                            success: true,
+                            resumed: result.resumed
+                        }));
+                        autoProcessQueue();
+                    } catch (e) {
+                        res.writeHead(400);
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/queue/delete') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { ids } = JSON.parse(body || '{}');
+                        if (!Array.isArray(ids)) {
+                            res.writeHead(400);
+                            return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
+                        }
+                        for (const id of ids) {
+                            const gid = parseInt(String(id), 10);
+                            if (Number.isFinite(gid) && engine.activeGalleryId === gid) {
+                                engine.stopGallery(gid, { deleteAfter: true });
+                            }
+                        }
+                        const result = deleteQueueItems(ids);
+                        for (const gid of result.stoppingIds) {
+                            engine.stopGallery(gid, { deleteAfter: true });
+                        }
+                        logActivity(`Queue deleted ${result.deleted} item(s)`);
+                        return res.end(JSON.stringify({
+                            success: true,
+                            deleted: result.deleted
+                        }));
+                    } catch (e) {
+                        res.writeHead(400);
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/queue/priority') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', () => {
+                    try {
+                        const { ids, action } = JSON.parse(body || '{}');
+                        if (!Array.isArray(ids) || !['top', 'up', 'down', 'bottom'].includes(action)) {
+                            res.writeHead(400);
+                            return res.end(JSON.stringify({ success: false, error: 'ids array and valid action (top|up|down|bottom) are required' }));
+                        }
+                        const result = updateQueuePriority(ids, action);
+                        logActivity(`Queue priority (${action}) updated for ${result.updated} item(s)`);
+                        return res.end(JSON.stringify({
+                            success: true,
+                            updated: result.updated
+                        }));
+                    } catch (e) {
+                        res.writeHead(400);
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
             if (req.method === 'POST' && req.url === '/api/control') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
@@ -579,8 +703,30 @@ function createRequestHandler() {
                 return res.end(JSON.stringify({ job: compressJob }));
             }
 
-            if (req.method === 'GET' && req.url === '/api/logs') {
-                return res.end(JSON.stringify({ log: readActivityLog() }));
+            if (req.method === 'GET' && (req.url === '/api/logs' || req.url.startsWith('/api/logs?'))) {
+                const urlObj = new URL(req.url, 'http://localhost');
+                const galleryIdParam = urlObj.searchParams.get('galleryId');
+                const limitParam = parseInt(urlObj.searchParams.get('limit'), 10);
+                const limit = Number.isFinite(limitParam) && limitParam > 0 ? limitParam : undefined;
+
+                if (galleryIdParam !== null && galleryIdParam.trim() !== '') {
+                    try {
+                        const rows = getEvents({
+                            galleryId: galleryIdParam.trim(),
+                            limit: limit || 500
+                        });
+                        const formatted = rows.map(r => ({
+                            ts: r.ts,
+                            level: r.level,
+                            message: r.message
+                        }));
+                        return res.end(JSON.stringify(formatted));
+                    } catch (e) {
+                        return res.end(JSON.stringify([]));
+                    }
+                }
+
+                return res.end(JSON.stringify({ log: readActivityLog(limit) }));
             }
 
             if (req.method === 'GET' && req.url === '/api/logs/download') {

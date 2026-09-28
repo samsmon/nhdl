@@ -25,10 +25,13 @@ Representasi item antrian yang dikirim melalui REST (`/api/status`) maupun SSE (
   "pagesTotal": 24,
   "error": null,
   "retries": 0,
-  "format": "cbz"
+  "format": "cbz",
+  "createdAt": "2026-09-28 08:00:00",
+  "updatedAt": "2026-09-28 08:01:00"
 }
 ```
-- Nilai `rawStatus`: `'PENDING'` | `'ON_PROGRESS'` | `'PAUSED'` | `'DONE'` | `'ERROR'` | `'SKIPPED'`
+- Nilai `rawStatus`: `'PENDING'` | `'ON_PROGRESS'` | `'STOPPED'` | `'PAUSED'` | `'COOLDOWN'` | `'DONE'` | `'ERROR'` | `'SKIPPED'`
+- Status `'STOPPED'` khusus untuk item yang di-pause secara manual oleh pengguna (tidak disentuh oleh `requeueFailedItems()` maupun pre-pass `_runBatchBody`). Status `'PAUSED'` digunakan oleh *circuit breaker* saat terkena batas 429 beruntun.
 - Nilai `status`: sama dengan `rawStatus`, atau `"${rawStatus} - ${error}"` apabila kolom `error` terisi.
 
 ### `LiveProgress`
@@ -131,6 +134,10 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 | `POST` | `/api/queue` | `{"text": string, "replace"?: boolean, "format"?: string}` atau `text/plain` | `{"success":true, "added": number, "updated": number, "duplicates": number, "galleryIds": number[], "total": number}` | Mengimpor daftar URL/ID (`# BATCH N FORMAT=...`). Default `replace = true` pada `/api/queue`. |
 | `POST` | `/api/queue/import` | `{"text": string, "replace"?: boolean, "format"?: string}` atau `text/plain` | `{"success":true, "added": number, "updated": number, "duplicates": number, "galleryIds": number[], "total": number}` | Mengimpor daftar `list.txt` (upload/paste). Default `replace = false` (menambahkan/memperbarui tanpa menghapus item lain). |
 | `GET` | `/api/queue/export` | — | `text/plain` (`attachment; filename="list.txt"`) | Mengekspor seluruh isi tabel `queue` ke format teks `# BATCH N`. |
+| `POST` | `/api/queue/pause` | `{"ids": number[]}` | `{"success":true, "paused": number, "stopping": number[]}` | Mengubah status item `PENDING`/`ERROR`/`COOLDOWN`/`PAUSED` menjadi `STOPPED`. Untuk item `ON_PROGRESS`, engine menghentikan unduhan galeri tersebut dengan aman di batas halaman berikutnya, menyimpan progres (`pages_done`), mengubah status menjadi `STOPPED` tanpa menghapus file/halaman yang sudah terunduh, lalu melanjutkan ke item berikutnya. |
+| `POST` | `/api/queue/resume` | `{"ids": number[]}` | `{"success":true, "resumed": number}` | Mengubah status item `STOPPED` (serta `ERROR`/`COOLDOWN`/`PAUSED`) menjadi `PENDING` (`error = null`) lalu memanggil `autoProcessQueue()`. |
+| `POST` | `/api/queue/delete` | `{"ids": number[]}` | `{"success":true, "deleted": number}` | Menghapus item dari tabel `queue` saja (file di disk dan tabel `library` tidak disentuh). Item yang sedang `ON_PROGRESS` dihentikan terlebih dahulu di batas halaman berikutnya seperti pada `/api/queue/pause`. |
+| `POST` | `/api/queue/priority` | `{"ids": number[], "action": "top" \| "up" \| "down" \| "bottom"}` | `{"success":true, "updated": number}` | Mengubah kolom `priority` untuk daftar `gallery_id` yang dipilih (`getNextPendingItem()` mengurutkan berdasarkan `priority DESC, id ASC`). |
 
 ### 3.3. Kontrol Engine & Retry
 
@@ -162,6 +169,6 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 
 | Method | Path | Body | Response (`200 OK`) | Keterangan |
 |---|---|---|---|---|
-| `GET` | `/api/logs` | — | `{"log": string}` | Mengambil daftar log aktivitas dari tabel `events`. |
+| `GET` | `/api/logs` | — | `{"log": string}` atau `{"ts": string, "level": string, "message": string}[]` (jika query `galleryId` diberikan) | Tanpa `galleryId`: mengambil string log aktivitas dari tabel `events`. Dengan `?galleryId=<id>&limit=<n>`: mengembalikan JSON array berisi baris dari tabel `events` untuk galeri tersebut (`[{ "ts", "level", "message" }]`). |
 | `GET` | `/api/logs/download` | — | `text/plain` (`attachment; filename="nhdl-activity-<ts>.log"`) | Mengunduh log aktivitas sebagai file `.log`. |
 | `GET` | `/api/fs/browse?path=<dir>` | — | `{"currentPath": string, "parentPath": string\|null, "drives": string[], "directories": {"name": string, "path": string}[]}` | Menjelajahi daftar direktori lokal untuk pemilih folder unduhan di UI. |

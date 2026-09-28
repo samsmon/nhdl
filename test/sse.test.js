@@ -345,3 +345,84 @@ test('Fase 3 verification: 1000-item queue import via API, 2-tab real-time SSE s
     }
 });
 
+test('Fase 4 A1-A4 HTTP endpoints: /api/queue/pause, /api/queue/resume, /api/queue/priority, /api/queue/delete, and /api/logs?galleryId=', async () => {
+    const env = createTempEnv();
+    const srv = http.createServer(createRequestHandler());
+    const { logEvent, getQueueItem, getNextPendingItem } = require('../core/db');
+
+    await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const port = srv.address().port;
+
+    const requestJson = (method, urlPath, payload) => new Promise((resolve, reject) => {
+        const req = http.request(
+            `http://127.0.0.1:${port}${urlPath}`,
+            {
+                method,
+                headers: payload ? { 'Content-Type': 'application/json' } : {}
+            },
+            (res) => {
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', c => { body += c; });
+                res.on('end', () => resolve({ statusCode: res.statusCode, data: JSON.parse(body) }));
+            }
+        );
+        req.on('error', reject);
+        if (payload) req.write(JSON.stringify(payload));
+        req.end();
+    });
+
+    try {
+        engine.isRunning = true; // prevent autoProcessQueue network calls
+        enqueueGallery({ galleryId: 700001, title: 'One', status: 'PENDING', batch: 1 });
+        enqueueGallery({ galleryId: 700002, title: 'Two', status: 'PENDING', batch: 1 });
+        enqueueGallery({ galleryId: 700003, title: 'Three', status: 'ERROR', error: 'Err', batch: 1 });
+
+        // 1. Pause 700001 and 700003
+        const pauseRes = await requestJson('POST', '/api/queue/pause', { ids: [700001, 700003] });
+        assert.equal(pauseRes.statusCode, 200);
+        assert.equal(pauseRes.data.paused, 2);
+        assert.equal(getQueueItem(700001).status, 'STOPPED');
+        assert.equal(getQueueItem(700003).status, 'STOPPED');
+
+        // 2. Resume 700001
+        const resumeRes = await requestJson('POST', '/api/queue/resume', { ids: [700001] });
+        assert.equal(resumeRes.statusCode, 200);
+        assert.equal(resumeRes.data.resumed, 1);
+        assert.equal(getQueueItem(700001).status, 'PENDING');
+
+        // 3. Priority: move 700002 to top
+        const prioRes = await requestJson('POST', '/api/queue/priority', { ids: [700002], action: 'top' });
+        assert.equal(prioRes.statusCode, 200);
+        assert.equal(getNextPendingItem().gallery_id, 700002);
+
+        // 4. Per-gallery logs vs global logs
+        logEvent({ level: 'info', galleryId: 700002, message: 'Started downloading 700002' });
+        logEvent({ level: 'warn', galleryId: 700002, message: 'Retrying page 3 for 700002' });
+        logEvent({ level: 'info', galleryId: 700001, message: 'Other gallery log' });
+
+        const galleryLogsRes = await requestJson('GET', '/api/logs?galleryId=700002&limit=10');
+        assert.equal(galleryLogsRes.statusCode, 200);
+        assert.ok(Array.isArray(galleryLogsRes.data));
+        assert.equal(galleryLogsRes.data.length, 2);
+        assert.equal(galleryLogsRes.data[0].message, 'Started downloading 700002');
+        assert.equal(galleryLogsRes.data[1].level, 'warn');
+
+        const globalLogsRes = await requestJson('GET', '/api/logs');
+        assert.equal(globalLogsRes.statusCode, 200);
+        assert.equal(typeof globalLogsRes.data.log, 'string');
+        assert.ok(globalLogsRes.data.log.includes('Started downloading 700002'));
+
+        // 5. Delete 700003 from queue
+        const delRes = await requestJson('POST', '/api/queue/delete', { ids: [700003] });
+        assert.equal(delRes.statusCode, 200);
+        assert.equal(delRes.data.deleted, 1);
+        assert.equal(getQueueItem(700003), null);
+    } finally {
+        engine.isRunning = false;
+        await new Promise(resolve => srv.close(resolve));
+        env.cleanup();
+    }
+});
+
+

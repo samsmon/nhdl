@@ -123,11 +123,16 @@ Task:
 - [x] **B3 (Optimasi daftar & Verifikasi Fase 3)**: hapus `animate:flip` pada item/batch antrian, hitung `filteredItems` satu kali per batch di `$derived`, cegah render DOM pada batch `collapsed`, terapkan `content-visibility: auto`, dan verifikasi 1.000 item + sinkronisasi 2 tab real-time via SSE (`import=86.6ms`, `2-tab snapshot=10.7ms`, `2-tab delta sync=19.9ms`, payload update `250B` vs `245KB` pada `/api/status` di `main`)
 
 ## Fase 4 — Layout qBittorrent/IDM
-- [ ] Sidebar filter (All / Downloading / Completed / Failed / Paused)
-- [ ] Virtual table (kolom: judul, ID, progress, halaman, speed, ETA, status; sortable), data di-page dari server
-- [ ] Panel detail bertab (General / Pages / Log dari tabel `events`)
-- [ ] Toolbar (Add, Pause, Resume, Delete, Prioritas) + status bar
-- [ ] GSAP hanya untuk panel, dialog, dan toast
+Keputusan desain Fase 4:
+- **Virtual table di sisi client** (hapus rencana "data di-page dari server"): store sudah menyimpan seluruh item di `SvelteMap` per `galleryId` dengan sinkronisasi event delta SSE (`item`, `progress`, `engine`), sehingga filter, sort, multi-select, dan update SSE jauh lebih sederhana serta instan (`< 50ms`) di sisi client tanpa beban paging request ke server.
+- Virtualisasi ditulis sendiri (tinggi baris tetap `32px`, overscan `±10` baris) tanpa library tambahan.
+
+Task:
+- [x] **A (Backend)**: Status `STOPPED` & endpoint `POST /api/queue/pause`, `POST /api/queue/resume`, `POST /api/queue/delete`, `POST /api/queue/priority`, serta `GET /api/logs?galleryId=<id>&limit=<n>` + unit test
+- [ ] **B1 & B2 (Toolbar & Sidebar Filter)**: Toolbar (Add dialog, Resume, Pause, Delete konfirmasi, Prioritas top/up/down/bottom, Start/Pause engine, Library, Settings, Logs) + Sidebar filter real-time (All, Downloading, Queued, Completed, Stopped, Failed, daftar Batch) + kotak search
+- [ ] **B3 (Virtual Table)**: Virtual table (`#`, Judul, ID, Status, Progress, Halaman, Speed, ETA, Batch, Format; sortable, resizable kolom di `localStorage`, multi-select klik/Ctrl/Shift/Ctrl+A, keyboard Up/Down/Delete/Space, context menu klik kanan)
+- [ ] **B4–B7 (Panel Detail, Status Bar, GSAP & Responsive)**: Panel detail bertab (General / Pages / Log dari tabel `events`), Status bar (status engine termasuk peringatan `Download folder unavailable`, counter, speed, koneksi SSE), GSAP khusus dialog/context menu/toast/panel, dan layout responsif `< 768px` (drawer & bottom sheet)
+- [ ] **Verifikasi Fase 4**: Uji 5000 item status campuran (`NHDL_DB_PATH`), jumlah DOM baris tabel, waktu render & ganti filter `< 50ms`, scroll tanpa kedip, sinkronisasi 2 tab real-time, dan pastikan semua fitur lama berjalan
 
 ## Fase 5 — Benchmark
 - [ ] Ukur FPS/CPU dengan 1000 dan 5000 item, sebelum vs sesudah
@@ -190,3 +195,4 @@ Task:
 | 2026-09-27 | 3 | Fase 3 selesai: refactor `webui/` ke Svelte 5 runes + store `SvelteMap` + klien SSE (`/api/events`), pecah `App.svelte` ke 10 komponen, optimasi list 1.000 item (SSE delta `250B` vs `/api/status` `245KB`, sync 2 tab `19.9ms`) — 18/18 test lulus |
 | 2026-09-28 | 2 | Perbaikan regresi A1: buat `DOWNLOAD_DIR` otomatis bila `library` kosong, pertahankan proteksi bila `library` punya entri, dan tambah pengecekan ulang otomatis tiap 60 detik saat `Download folder unavailable` — 19/19 test lulus |
 | 2026-09-28 | 2 | Perbaikan bug auto-recovery: pisahkan flag boolean `downloadDirUnavailable` dari teks `statusReason` dan jalankan `rescanLibrary()` saat recovery agar alasan spesifik (`empty folder` / `>50% missing`) tetap memicu auto-recovery — 20/20 test lulus |
+| 2026-09-28 | 4 | **A (Backend)** selesai: status `STOPPED` (kebal `requeueFailedItems` & pre-pass), penghentian aman di batas halaman untuk `ON_PROGRESS`, endpoint `/api/queue/pause`, `/api/queue/resume`, `/api/queue/delete`, `/api/queue/priority`, serta `/api/logs?galleryId=<id>&limit=<n>` — 24/24 test lulus |

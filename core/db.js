@@ -243,7 +243,9 @@ function formatQueueRow(r) {
         pagesTotal: r.pages_total || 0,
         error: r.error || null,
         retries: r.retries || 0,
-        format: r.format || null
+        format: r.format || null,
+        createdAt: r.created_at || null,
+        updatedAt: r.updated_at || null
     };
 }
 
@@ -395,6 +397,188 @@ function deleteQueueItem(galleryId, db = getDb()) {
     return Number(res.changes || 0);
 }
 
+function pauseQueueItems(ids = [], db = getDb()) {
+    if (!Array.isArray(ids) || ids.length === 0) return { paused: 0, stoppingIds: [] };
+    let paused = 0;
+    const stoppingIds = [];
+    const pausableSet = new Set(['PENDING', 'ERROR', 'COOLDOWN', 'PAUSED', 'ON_PROGRESS']);
+
+    db.exec('BEGIN');
+    try {
+        for (const rawId of ids) {
+            let gid;
+            try { gid = normalizeGalleryId(rawId); } catch (e) { continue; }
+            const row = getQueueItem(gid, db);
+            if (!row) continue;
+            const st = String(row.status || '').toUpperCase();
+            const isPausable = pausableSet.has(st) || st.startsWith('ERROR') || st.startsWith('COOLDOWN') || st.startsWith('PAUSED');
+            if (!isPausable) continue;
+
+            if (st === 'ON_PROGRESS') {
+                stoppingIds.push(gid);
+            }
+            updateQueueItem(gid, { status: 'STOPPED' }, db);
+            paused++;
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+    }
+
+    return { paused, stoppingIds };
+}
+
+function resumeQueueItems(ids = [], db = getDb()) {
+    if (!Array.isArray(ids) || ids.length === 0) return { resumed: 0, resumedIds: [] };
+    let resumed = 0;
+    const resumedIds = [];
+    const resumableSet = new Set(['STOPPED', 'ERROR', 'COOLDOWN', 'PAUSED']);
+
+    db.exec('BEGIN');
+    try {
+        for (const rawId of ids) {
+            let gid;
+            try { gid = normalizeGalleryId(rawId); } catch (e) { continue; }
+            const row = getQueueItem(gid, db);
+            if (!row) continue;
+            const st = String(row.status || '').toUpperCase();
+            const isResumable = resumableSet.has(st) || st.startsWith('ERROR') || st.startsWith('COOLDOWN') || st.startsWith('PAUSED');
+            if (!isResumable) continue;
+
+            updateQueueItem(gid, { status: 'PENDING', error: null }, db);
+            resumed++;
+            resumedIds.push(gid);
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+    }
+
+    return { resumed, resumedIds };
+}
+
+function deleteQueueItems(ids = [], db = getDb()) {
+    if (!Array.isArray(ids) || ids.length === 0) return { deleted: 0, stoppingIds: [] };
+    let deleted = 0;
+    const stoppingIds = [];
+
+    db.exec('BEGIN');
+    try {
+        for (const rawId of ids) {
+            let gid;
+            try { gid = normalizeGalleryId(rawId); } catch (e) { continue; }
+            const row = getQueueItem(gid, db);
+            if (!row) continue;
+            if (row.status === 'ON_PROGRESS') {
+                stoppingIds.push(gid);
+            }
+            deleted += deleteQueueItem(gid, db);
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+    }
+
+    return { deleted, stoppingIds };
+}
+
+function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
+    const validActions = new Set(['top', 'up', 'down', 'bottom']);
+    if (!validActions.has(action) || !Array.isArray(ids) || ids.length === 0) {
+        return { updated: 0 };
+    }
+
+    const targetSet = new Set();
+    for (const rawId of ids) {
+        try { targetSet.add(normalizeGalleryId(rawId)); } catch (e) {}
+    }
+    if (targetSet.size === 0) return { updated: 0 };
+
+    const rows = db.prepare(`
+        SELECT id, gallery_id, priority
+        FROM queue
+        ORDER BY priority DESC, id ASC
+    `).all();
+    if (rows.length === 0) return { updated: 0 };
+
+    let updated = 0;
+    db.exec('BEGIN');
+    try {
+        if (action === 'top') {
+            const maxP = rows.reduce((m, r) => Math.max(m, Number(r.priority) || 0), 0);
+            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            for (let i = 0; i < selectedRows.length; i++) {
+                const newP = maxP + (selectedRows.length - i);
+                if (Number(selectedRows[i].priority) !== newP) {
+                    updateQueueItem(selectedRows[i].gallery_id, { priority: newP }, db);
+                }
+                updated++;
+            }
+        } else if (action === 'bottom') {
+            const minP = rows.reduce((m, r) => Math.min(m, Number(r.priority) || 0), 0);
+            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            for (let i = 0; i < selectedRows.length; i++) {
+                const newP = minP - (i + 1);
+                if (Number(selectedRows[i].priority) !== newP) {
+                    updateQueueItem(selectedRows[i].gallery_id, { priority: newP }, db);
+                }
+                updated++;
+            }
+        } else if (action === 'up' || action === 'down') {
+            const reordered = [...rows];
+            if (action === 'up') {
+                for (let i = 1; i < reordered.length; i++) {
+                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i - 1].gallery_id))) {
+                        const tmp = reordered[i - 1];
+                        reordered[i - 1] = reordered[i];
+                        reordered[i] = tmp;
+                    }
+                }
+            } else {
+                for (let i = reordered.length - 2; i >= 0; i--) {
+                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i + 1].gallery_id))) {
+                        const tmp = reordered[i + 1];
+                        reordered[i + 1] = reordered[i];
+                        reordered[i] = tmp;
+                    }
+                }
+            }
+
+            if (reordered.length <= 500) {
+                const total = reordered.length;
+                for (let idx = 0; idx < total; idx++) {
+                    const desiredPriority = total - idx;
+                    const r = reordered[idx];
+                    if (Number(r.priority) !== desiredPriority) {
+                        updateQueueItem(r.gallery_id, { priority: desiredPriority }, db);
+                        if (targetSet.has(Number(r.gallery_id))) updated++;
+                    } else if (targetSet.has(Number(r.gallery_id))) {
+                        updated++;
+                    }
+                }
+            } else {
+                const step = action === 'up' ? 1 : -1;
+                for (const r of rows) {
+                    if (targetSet.has(Number(r.gallery_id))) {
+                        const newP = (Number(r.priority) || 0) + step;
+                        updateQueueItem(r.gallery_id, { priority: newP }, db);
+                        updated++;
+                    }
+                }
+            }
+        }
+        db.exec('COMMIT');
+    } catch (err) {
+        db.exec('ROLLBACK');
+        throw err;
+    }
+
+    return { updated };
+}
+
 function deleteQueueBatch(batchNum, db = getDb()) {
     const res = db.prepare(`DELETE FROM queue WHERE batch = ?`).run(batchNum);
     if (res.changes > 0) {
@@ -542,7 +726,7 @@ function importListText(text, options = {}, db = getDb()) {
                 const updates = { batch: item.batch };
                 if (item.format) updates.format = item.format;
                 if (initialTitle && !existing.title) updates.title = initialTitle;
-                if (isValidLib && existing.status !== 'DONE') {
+                if (isValidLib && existing.status !== 'DONE' && existing.status !== 'STOPPED') {
                     updates.status = 'DONE';
                     updates.pagesDone = pagesDone;
                     updates.pagesTotal = pagesTotal;
@@ -827,6 +1011,10 @@ module.exports = {
     updateQueueItem,
     updateQueueStatus,
     deleteQueueItem,
+    pauseQueueItems,
+    resumeQueueItems,
+    deleteQueueItems,
+    updateQueuePriority,
     deleteQueueBatch,
     clearCompletedQueue,
     getMaxBatch,

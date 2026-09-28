@@ -8,6 +8,9 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 4
+- **A (Backend — Kontrol Item Antrian & Log per Galeri)**: dokumentasikan di `docs/API.md` dan implementasikan status `STOPPED` (tidak disentuh oleh `requeueFailedItems()` maupun pre-pass `_runBatchBody`), penghentian aman item `ON_PROGRESS` di batas halaman berikutnya tanpa menghapus file yang sudah terunduh (`stopGallery` di `core/engine.js`), endpoint `POST /api/queue/pause`, `POST /api/queue/resume`, `POST /api/queue/delete` (hanya menghapus baris `queue`, file disk dan tabel `library` tetap utuh), `POST /api/queue/priority` (`top`/`up`/`down`/`bottom`), serta `GET /api/logs?galleryId=<id>&limit=<n>` (mengembalikan JSON array `[{ ts, level, message }]` dari tabel `events`). Perbarui keputusan desain di `docs/PLAN.md` (virtual table di sisi client tanpa paging dari server) dan tambahkan 4 test baru di `test/db.test.js` serta `test/sse.test.js` (24/24 test lulus).
+
 ## 2026-09-28 · AI (Claude Code, Opus 5.5) · Rilis
 - Merge `rework` ke `main` (fast-forward): Fase 1 (SQLite), Fase 2 (SSE + pengaman folder download), dan Fase 3 (fondasi frontend Svelte 5) kini ada di `main`.
 - Sebelum merge sudah direview: 20/20 test lulus, uji UI 1000 item di browser (SSE real-time di dua tab, tanpa polling), dan skenario disk terlambat ter-mount pulih otomatis tanpa kehilangan data.

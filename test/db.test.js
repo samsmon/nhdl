@@ -828,3 +828,179 @@ test('Auto-recovery with downloadDirUnavailable flag: recovers from empty folder
     }
 });
 
+test('Fase 4 A1: STOPPED items are not touched by requeueFailedItems() or _runBatchBody pre-pass, and resume transitions STOPPED -> PENDING', async () => {
+    const ctx = createTempDb();
+    const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-f4-a1-'));
+    const DownloaderEngine = require('../core/engine');
+
+    try {
+        dbMod.enqueueGallery({ galleryId: 930001, status: 'PENDING', batch: 1 }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 930002, status: 'ERROR', error: 'Temp fail', retries: 1, batch: 1 }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 930003, status: 'PAUSED', error: 'Circuit breaker', retries: 2, batch: 1 }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 930004, status: 'PENDING', batch: 1 }, ctx.db);
+
+        // Pause 930001, 930002, 930003 manually -> status becomes STOPPED
+        const pauseRes = dbMod.pauseQueueItems([930001, 930002, 930003], ctx.db);
+        assert.strictEqual(pauseRes.paused, 3);
+        assert.strictEqual(dbMod.getQueueItem(930001, ctx.db).status, 'STOPPED');
+        assert.strictEqual(dbMod.getQueueItem(930002, ctx.db).status, 'STOPPED');
+        assert.strictEqual(dbMod.getQueueItem(930003, ctx.db).status, 'STOPPED');
+
+        // Calling requeueFailedItems() must NOT touch STOPPED items
+        const requeued = dbMod.requeueFailedItems({ maxRetries: 5 }, ctx.db);
+        assert.strictEqual(requeued, 0);
+        assert.strictEqual(dbMod.getQueueItem(930001, ctx.db).status, 'STOPPED');
+        assert.strictEqual(dbMod.getQueueItem(930002, ctx.db).status, 'STOPPED');
+        assert.strictEqual(dbMod.getQueueItem(930003, ctx.db).status, 'STOPPED');
+
+        // Running _runBatchBody pre-pass must NOT touch STOPPED items; only 930004 (PENDING) is processed
+        const eng = new DownloaderEngine({ baseDownloadDir: dlDir, skipStartupJitter: true });
+        const processedIds = [];
+        eng.processGallery = async (galleryId) => {
+            const numId = Number(galleryId);
+            processedIds.push(numId);
+            dbMod.updateQueueStatus(numId, 'DONE', { pagesDone: 5, pagesTotal: 5 }, ctx.db);
+            return { status: 'SUCCESS', numPages: 5, skipped: false };
+        };
+
+        await eng._runBatchBody();
+        assert.deepStrictEqual(processedIds, [930004]);
+        assert.strictEqual(dbMod.getQueueItem(930001, ctx.db).status, 'STOPPED');
+        assert.strictEqual(dbMod.getQueueItem(930002, ctx.db).status, 'STOPPED');
+        assert.strictEqual(dbMod.getQueueItem(930003, ctx.db).status, 'STOPPED');
+        assert.strictEqual(dbMod.getQueueItem(930004, ctx.db).status, 'DONE');
+
+        // Resuming 930001 transitions STOPPED -> PENDING and clears error
+        const resumeRes = dbMod.resumeQueueItems([930001, 930002], ctx.db);
+        assert.strictEqual(resumeRes.resumed, 2);
+        assert.strictEqual(dbMod.getQueueItem(930001, ctx.db).status, 'PENDING');
+        assert.strictEqual(dbMod.getQueueItem(930002, ctx.db).status, 'PENDING');
+        assert.strictEqual(dbMod.getQueueItem(930002, ctx.db).error, null);
+        assert.strictEqual(dbMod.getQueueItem(930003, ctx.db).status, 'STOPPED');
+    } finally {
+        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
+        ctx.cleanup();
+    }
+});
+
+test('Fase 4 A1 & A2: pausing an ON_PROGRESS gallery stops safely at the next page boundary, keeps downloaded files, sets STOPPED, and continues to next item; delete removes from queue without touching disk/library', async () => {
+    const ctx = createTempDb();
+    const dlDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-f4-page-boundary-'));
+    const DownloaderEngine = require('../core/engine');
+
+    try {
+        dbMod.enqueueGallery({ galleryId: 940001, status: 'PENDING', batch: 1 }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 940002, status: 'PENDING', batch: 1 }, ctx.db);
+
+        const eng = new DownloaderEngine({
+            baseDownloadDir: dlDir,
+            downloadFormat: 'folder',
+            concurrency: 1,
+            skipStartupJitter: true
+        });
+
+        // Stub fetchMetadata (0 network requests)
+        eng.fetchMetadata = async (galleryId) => ({
+            title: `Stub_Gallery_${galleryId}`,
+            mediaId: String(galleryId),
+            numPages: 5,
+            ext: 'jpg',
+            pageExts: { 1: 'jpg', 2: 'jpg', 3: 'jpg', 4: 'jpg', 5: 'jpg' },
+            langStr: 'English',
+            authorStr: 'StubAuthor',
+            extraMeta: {}
+        });
+
+        const downloadedPagesByGallery = { 940001: [], 940002: [] };
+
+        // Stub downloadImage: write a valid >2KB JPEG buffer so verifyImage(destPath) returns true.
+        // When gallery 940001 finishes downloading page 2, trigger pauseQueueItems([940001]) + eng.stopGallery(940001)!
+        eng.downloadImage = async (_url, destPath, _host, onProgress) => {
+            const m = destPath.match(/Stub_Gallery_(\d+)[\\/](\d+)\.jpg$/);
+            const gid = m ? Number(m[1]) : 0;
+            const pageNum = m ? Number(m[2]) : 0;
+
+            const fakeJpg = Buffer.alloc(3072, 0xff);
+            fs.writeFileSync(destPath, fakeJpg);
+            if (onProgress) onProgress(fakeJpg.length, fakeJpg.length);
+            downloadedPagesByGallery[gid].push(pageNum);
+
+            if (gid === 940001 && pageNum === 2) {
+                dbMod.pauseQueueItems([940001], ctx.db);
+                eng.stopGallery(940001);
+            }
+        };
+
+        await eng.runBatch();
+
+        // 1. Gallery 940001 stopped right after page 2 (did NOT download pages 3, 4, 5)
+        assert.deepStrictEqual(downloadedPagesByGallery[940001], [1, 2]);
+        const row1 = dbMod.getQueueItem(940001, ctx.db);
+        assert.strictEqual(row1.status, 'STOPPED');
+        assert.strictEqual(row1.pages_done, 2);
+        assert.strictEqual(row1.pages_total, 5);
+
+        // Downloaded page files 1.jpg and 2.jpg on disk must NOT be deleted
+        const folder940001 = path.join(dlDir, 'English', 'StubAuthor', 'Stub_Gallery_940001');
+        assert.strictEqual(fs.existsSync(path.join(folder940001, '1.jpg')), true);
+        assert.strictEqual(fs.existsSync(path.join(folder940001, '2.jpg')), true);
+        assert.strictEqual(fs.existsSync(path.join(folder940001, '3.jpg')), false);
+
+        // 2. Engine continued to gallery 940002 and downloaded all 5 pages to completion
+        assert.deepStrictEqual(downloadedPagesByGallery[940002], [1, 2, 3, 4, 5]);
+        const row2 = dbMod.getQueueItem(940002, ctx.db);
+        assert.strictEqual(row2.status, 'DONE');
+        assert.strictEqual(row2.pages_done, 5);
+        const lib2 = dbMod.getLibraryEntry(940002, ctx.db);
+        assert.ok(lib2, '940002 must be in library table');
+
+        // 3. Delete 940001 and 940002 from queue -> queue rows removed, but disk files and library table untouched!
+        const delRes = dbMod.deleteQueueItems([940001, 940002], ctx.db);
+        assert.strictEqual(delRes.deleted, 2);
+        assert.strictEqual(dbMod.getQueueItem(940001, ctx.db), null);
+        assert.strictEqual(dbMod.getQueueItem(940002, ctx.db), null);
+        assert.strictEqual(fs.existsSync(path.join(folder940001, '1.jpg')), true, 'Delete must not remove partial files on disk');
+        assert.strictEqual(fs.existsSync(path.join(folder940001, '2.jpg')), true, 'Delete must not remove partial files on disk');
+        const folder940002 = path.join(dlDir, 'English', 'StubAuthor', 'Stub_Gallery_940002');
+        assert.strictEqual(fs.existsSync(path.join(folder940002, '5.jpg')), true, 'Delete must not remove completed files on disk');
+        assert.ok(dbMod.getLibraryEntry(940002, ctx.db), 'Delete must not remove entry from library table');
+    } finally {
+        try { fs.rmSync(dlDir, { recursive: true, force: true }); } catch (e) {}
+        ctx.cleanup();
+    }
+});
+
+test('Fase 4 A3: updateQueuePriority (top, up, down, bottom) matches getNextPendingItem() order', () => {
+    const ctx = createTempDb();
+    try {
+        dbMod.enqueueGallery({ galleryId: 950001, status: 'PENDING', batch: 1 }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 950002, status: 'PENDING', batch: 1 }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 950003, status: 'PENDING', batch: 1 }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 950004, status: 'PENDING', batch: 1 }, ctx.db);
+
+        // Initial order: 950001, 950002, 950003, 950004
+        assert.strictEqual(dbMod.getNextPendingItem(ctx.db).gallery_id, 950001);
+
+        // Move 950003 to "top" -> 950003 becomes first
+        dbMod.updateQueuePriority([950003], 'top', ctx.db);
+        assert.strictEqual(dbMod.getNextPendingItem(ctx.db).gallery_id, 950003);
+
+        // Move 950003 "down" by 1 step -> order becomes 950001, 950003, 950002, 950004
+        dbMod.updateQueuePriority([950003], 'down', ctx.db);
+        assert.strictEqual(dbMod.getNextPendingItem(ctx.db).gallery_id, 950001);
+
+        // Move 950004 "up" by 3 steps (or 2 steps then 1 step) to reach the top
+        dbMod.updateQueuePriority([950004], 'up', ctx.db); // above 950002
+        dbMod.updateQueuePriority([950004], 'up', ctx.db); // above 950003
+        dbMod.updateQueuePriority([950004], 'up', ctx.db); // above 950001
+        assert.strictEqual(dbMod.getNextPendingItem(ctx.db).gallery_id, 950004);
+
+        // Move 950004 to "bottom" -> 950001 is back at the top
+        dbMod.updateQueuePriority([950004], 'bottom', ctx.db);
+        assert.strictEqual(dbMod.getNextPendingItem(ctx.db).gallery_id, 950001);
+    } finally {
+        ctx.cleanup();
+    }
+});
+
+
