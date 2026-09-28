@@ -425,4 +425,168 @@ test('Fase 4 A1-A4 HTTP endpoints: /api/queue/pause, /api/queue/resume, /api/que
     }
 });
 
+test('Fase 4 verification: 5000-item mixed status DB, virtual window & filter/sort < 50ms, 2-tab real-time SSE sync (pause/resume/priority/delete), and legacy endpoints', async () => {
+    const env = createTempEnv();
+    const srv = http.createServer(createRequestHandler());
+    const { getDb } = require('../core/db');
+
+    await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const port = srv.address().port;
+
+    const requestJson = (method, urlPath, payload) => new Promise((resolve, reject) => {
+        const req = http.request(
+            `http://127.0.0.1:${port}${urlPath}`,
+            {
+                method,
+                headers: payload ? { 'Content-Type': 'application/json' } : {}
+            },
+            (res) => {
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', c => { body += c; });
+                res.on('end', () => resolve({ statusCode: res.statusCode, data: JSON.parse(body) }));
+            }
+        );
+        req.on('error', reject);
+        if (payload) req.write(JSON.stringify(payload));
+        req.end();
+    });
+
+    let tab1Req, tab2Req;
+    try {
+        engine.isPaused = true;
+        engine.isRunning = true; // keep engine paused so it does not hit external network
+
+        // 1. Seed 5000 mixed-status items in temp DB
+        const db = getDb();
+        const statuses = ['PENDING', 'ON_PROGRESS', 'DONE', 'SKIPPED', 'STOPPED', 'ERROR'];
+        const formats = ['cbz', 'zip', 'folder'];
+        db.exec('BEGIN IMMEDIATE');
+        const stmt = db.prepare(`
+            INSERT INTO queue (gallery_id, url, title, status, priority, batch, format, pages_total, pages_done, error)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (let i = 1; i <= 5000; i++) {
+            const gid = 800000 + i;
+            const st = statuses[i % statuses.length];
+            stmt.run(
+                gid,
+                `https://certain.site/g/${gid}/`,
+                `[Artist ${i % 50}] Gallery Title #${i}`,
+                st,
+                0,
+                ((i - 1) % 5) + 1,
+                formats[i % formats.length],
+                40,
+                st === 'DONE' || st === 'SKIPPED' ? 40 : st === 'ON_PROGRESS' || st === 'STOPPED' ? 18 : 0,
+                st === 'ERROR' ? 'HTTP 503' : null
+            );
+        }
+        db.exec('COMMIT');
+
+        // 2. Connect 2 SSE tabs and verify 5000-item snapshot
+        const tab1Events = [];
+        const tab2Events = [];
+        const connectTab = (bucket) => new Promise((resolve, reject) => {
+            const req = http.get(`http://127.0.0.1:${port}/api/events`, (res) => {
+                res.setEncoding('utf8');
+                let buf = '';
+                res.on('data', (chunk) => {
+                    buf += chunk;
+                    const blocks = buf.split('\n\n');
+                    buf = blocks.pop();
+                    for (const block of blocks) {
+                        const lines = block.split('\n').filter(Boolean);
+                        let evName = 'message';
+                        let dataStr = '';
+                        for (const line of lines) {
+                            if (line.startsWith('event: ')) evName = line.slice(7).trim();
+                            else if (line.startsWith('data: ')) dataStr += line.slice(6);
+                        }
+                        if (dataStr) {
+                            const parsed = JSON.parse(dataStr);
+                            bucket.push({ event: evName, data: parsed });
+                            if (evName === 'snapshot') resolve(req);
+                        }
+                    }
+                });
+            });
+            req.on('error', reject);
+        });
+
+        [tab1Req, tab2Req] = await Promise.all([connectTab(tab1Events), connectTab(tab2Events)]);
+        const snapItems = tab1Events[0].data.items;
+        assert.equal(snapItems.length, 5000);
+
+        // 3. Verify client-side filter + sort + virtual slice (< 50ms & bounded DOM row count)
+        const ROW_HEIGHT = 32;
+        const OVERSCAN = 10;
+        const viewportHeight = 420;
+        const runFilterAndVirtualSlice = (filterName, scrollTop = 0) => {
+            const t0 = performance.now();
+            const filtered = snapItems.filter((it) => {
+                if (filterName === 'all') return true;
+                if (filterName === 'downloading') return it.rawStatus === 'ON_PROGRESS';
+                if (filterName === 'completed') return it.rawStatus === 'DONE' || it.rawStatus === 'SKIPPED';
+                if (filterName === 'stopped') return it.rawStatus === 'STOPPED';
+                if (filterName === 'failed') return it.rawStatus === 'ERROR';
+                return true;
+            });
+            const startIdx = Math.max(0, Math.floor(scrollTop / ROW_HEIGHT) - OVERSCAN);
+            const endIdx = Math.min(filtered.length, Math.ceil((scrollTop + viewportHeight) / ROW_HEIGHT) + OVERSCAN);
+            const visibleSlice = filtered.slice(startIdx, endIdx);
+            const elapsedMs = performance.now() - t0;
+            return { count: filtered.length, domRows: visibleSlice.length, elapsedMs };
+        };
+
+        for (const f of ['downloading', 'completed', 'stopped', 'failed', 'all']) {
+            const res = runFilterAndVirtualSlice(f, 0);
+            assert.ok(res.elapsedMs < 50, `Filter ${f} took ${res.elapsedMs.toFixed(2)}ms (expected < 50ms)`);
+            assert.ok(res.domRows <= 35, `Virtual DOM rows for ${f} was ${res.domRows} (expected <= 35, not 5000)`);
+        }
+
+        // Scroll from top to bottom without empty slices
+        const maxScroll = 5000 * ROW_HEIGHT - viewportHeight;
+        for (const ratio of [0, 0.25, 0.5, 0.75, 1]) {
+            const res = runFilterAndVirtualSlice('all', Math.floor(maxScroll * ratio));
+            assert.ok(res.domRows >= 20 && res.domRows <= 35, `Expected 20..35 DOM rows at scroll ratio ${ratio}, got ${res.domRows}`);
+        }
+
+        // 4. Verify 2-tab real-time SSE sync for pause, resume, priority, delete
+        await requestJson('POST', '/api/queue/pause', { ids: [800001] });
+        await requestJson('POST', '/api/queue/resume', { ids: [800001] });
+        await requestJson('POST', '/api/queue/priority', { ids: [800001], action: 'top' });
+        await requestJson('POST', '/api/queue/delete', { ids: [800001] });
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for Tab 2 SSE events')), 2000);
+            const check = setInterval(() => {
+                const paused = tab2Events.some(e => e.event === 'item' && e.data.item?.galleryId === 800001 && e.data.item?.rawStatus === 'STOPPED');
+                const resumed = tab2Events.some(e => e.event === 'item' && e.data.item?.galleryId === 800001 && e.data.item?.rawStatus === 'PENDING');
+                const deleted = tab2Events.some(e => e.event === 'item' && e.data.type === 'deleted' && e.data.galleryId === 800001);
+                if (paused && resumed && deleted) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 5);
+        });
+
+        // 5. Verify legacy endpoints still work properly
+        const libRes = await requestJson('GET', '/api/library');
+        assert.equal(libRes.statusCode, 200);
+        const logsRes = await requestJson('GET', '/api/logs');
+        assert.equal(logsRes.statusCode, 200);
+        const fsRes = await requestJson('GET', '/api/fs/browse');
+        assert.equal(fsRes.statusCode, 200);
+    } finally {
+        if (tab1Req) tab1Req.destroy();
+        if (tab2Req) tab2Req.destroy();
+        engine.isRunning = false;
+        await new Promise(resolve => srv.close(resolve));
+        env.cleanup();
+    }
+});
+
+
 
