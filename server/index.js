@@ -24,8 +24,11 @@ const {
     getAllLibraryEntries,
     getEvents,
     getDbInfo,
+    getSetting,
+    setSetting,
     exportData,
     importData,
+    getBackupDir,
     createBackup,
     listBackups,
     restoreBackup,
@@ -580,7 +583,10 @@ function createRequestHandler() {
                     autoContinueBatches: engine.autoContinueBatches,
                     authRequired: isAuthRequired(),
                     apiKeyConfigured: !!apiKey,
-                    apiKeyMasked: apiKey ? `${apiKey.slice(0, 4)}${'*'.repeat(Math.max(apiKey.length - 8, 4))}${apiKey.slice(-4)}` : ''
+                    apiKeyMasked: apiKey ? `${apiKey.slice(0, 4)}${'*'.repeat(Math.max(apiKey.length - 8, 4))}${apiKey.slice(-4)}` : '',
+                    backupIntervalHours: await getSetting('backupIntervalHours', 24),
+                    backupKeep: await getSetting('backupKeep', 7),
+                    lastBackupAt: await getSetting('lastBackupAt', null)
                 }));
             }
 
@@ -589,7 +595,25 @@ function createRequestHandler() {
                 req.on('data', chunk => { body += chunk.toString(); });
                 req.on('end', async () => {
                     try {
-                        const { downloadDir, downloadFormat, autoContinueBatches, apiKey } = JSON.parse(body);
+                        const { downloadDir, downloadFormat, autoContinueBatches, apiKey, backupIntervalHours, backupKeep } = JSON.parse(body);
+                        let handled = false;
+                        if (backupIntervalHours !== undefined) {
+                            const val = Math.max(0, parseInt(backupIntervalHours, 10) || 0);
+                            await setSetting('backupIntervalHours', val);
+                            handled = true;
+                        }
+                        if (backupKeep !== undefined) {
+                            const val = Math.max(1, parseInt(backupKeep, 10) || 7);
+                            await setSetting('backupKeep', val);
+                            handled = true;
+                        }
+                        if (handled) {
+                            return res.end(JSON.stringify({
+                                success: true,
+                                backupIntervalHours: await getSetting('backupIntervalHours', 24),
+                                backupKeep: await getSetting('backupKeep', 7)
+                            }));
+                        }
                         if (typeof autoContinueBatches === 'boolean') {
                             await engine.setAutoContinueBatches(autoContinueBatches);
                             return res.end(JSON.stringify({ success: true, autoContinueBatches: engine.autoContinueBatches }));
@@ -840,7 +864,12 @@ function createRequestHandler() {
 
             if (req.method === 'GET' && req.url === '/api/db/info') {
                 res.setHeader('Content-Type', 'application/json');
-                return res.end(JSON.stringify(getDbInfo()));
+                const info = getDbInfo();
+                info.backupIntervalHours = await getSetting('backupIntervalHours', 24);
+                info.backupKeep = await getSetting('backupKeep', 7);
+                info.lastBackupAt = await getSetting('lastBackupAt', null);
+                info.backupDir = getBackupDir();
+                return res.end(JSON.stringify(info));
             }
 
             if (req.method === 'GET' && req.url === '/api/db/export') {

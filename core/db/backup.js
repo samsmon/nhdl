@@ -2,17 +2,23 @@ const fs = require('fs');
 const path = require('path');
 
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
-const BACKUP_DIR = path.join(ROOT_DIR, 'data', 'backups');
+
+function getBackupDir() {
+    return process.env.NHDL_BACKUP_DIR
+        ? path.resolve(process.env.NHDL_BACKUP_DIR)
+        : path.join(ROOT_DIR, 'data', 'backups');
+}
 
 function getDbModule() {
     return require('../db');
 }
 
 function ensureBackupDir() {
-    if (!fs.existsSync(BACKUP_DIR)) {
-        fs.mkdirSync(BACKUP_DIR, { recursive: true });
+    const dir = getBackupDir();
+    if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
     }
-    return BACKUP_DIR;
+    return dir;
 }
 
 function getSafeFilename(filename) {
@@ -24,13 +30,17 @@ function getSafeFilename(filename) {
     return base;
 }
 
-async function createBackup(db = null, customName = null) {
+async function createBackup(db = null, customName = null, keepOverride = null) {
     const dir = ensureBackupDir();
     const now = new Date();
     const pad = (n) => String(n).padStart(2, '0');
     const timestamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    const filename = customName ? getSafeFilename(customName) : `nhdl-backup-${timestamp}.json`;
-    const fullPath = path.join(dir, filename);
+    let filename = customName ? getSafeFilename(customName) : `nhdl-backup-${timestamp}.json`;
+    let fullPath = path.join(dir, filename);
+    if (!customName && fs.existsSync(fullPath)) {
+        filename = `nhdl-backup-${timestamp}-${now.getMilliseconds()}.json`;
+        fullPath = path.join(dir, filename);
+    }
 
     const data = await getDbModule().exportData(db);
     const jsonStr = JSON.stringify(data, null, 2);
@@ -38,8 +48,15 @@ async function createBackup(db = null, customName = null) {
 
     const stats = fs.statSync(fullPath);
 
-    // Rotate: keep latest 7 backups
-    rotateBackups(7);
+    let keep = keepOverride;
+    if (keep === null || keep === undefined) {
+        try {
+            keep = await getDbModule().getSetting('backupKeep', 7, db);
+        } catch {
+            keep = 7;
+        }
+    }
+    rotateBackups(Number(keep) || 7);
 
     return {
         filename,
@@ -67,18 +84,20 @@ function listBackups() {
         } catch (e) {}
     }
 
-    backups.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+    backups.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt) || b.filename.localeCompare(a.filename));
     return backups;
 }
 
 function rotateBackups(keep = 7) {
     try {
+        const dir = ensureBackupDir();
+        const maxKeep = (typeof keep === 'number' && keep > 0) ? keep : 7;
         const backups = listBackups();
-        if (backups.length > keep) {
-            const toDelete = backups.slice(keep);
+        if (backups.length > maxKeep) {
+            const toDelete = backups.slice(maxKeep);
             for (const b of toDelete) {
                 try {
-                    fs.unlinkSync(path.join(BACKUP_DIR, b.filename));
+                    fs.unlinkSync(path.join(dir, b.filename));
                 } catch (e) {}
             }
         }
@@ -113,18 +132,58 @@ function deleteBackup(filename) {
 }
 
 let autoBackupTimer = null;
+let lastAttemptTime = 0;
 
-function setupAutoBackup(engine, intervalMs = 24 * 60 * 60 * 1000) {
-    if (autoBackupTimer) clearInterval(autoBackupTimer);
-    autoBackupTimer = setInterval(async () => {
+async function checkAndRunScheduledBackup(engine = null) {
+    const db = getDbModule();
+    try {
+        const intervalHours = Number(await db.getSetting('backupIntervalHours', 24));
+        if (!Number.isFinite(intervalHours) || intervalHours <= 0) {
+            return false; // 0 = disabled
+        }
+
+        const lastBackupAt = await db.getSetting('lastBackupAt', null);
+        const now = Date.now();
+        const intervalMs = intervalHours * 60 * 60 * 1000;
+
+        const isDue = !lastBackupAt || (now - new Date(lastBackupAt).getTime() >= intervalMs);
+        if (!isDue) return false;
+
+        // If previous attempt failed, wait at least 10 minutes before retrying
+        if (lastAttemptTime > 0 && (now - lastAttemptTime) < 10 * 60 * 1000) {
+            return false;
+        }
+
+        lastAttemptTime = now;
+        const keep = Number(await db.getSetting('backupKeep', 7)) || 7;
+        const res = await createBackup(null, null, keep);
+        await db.setSetting('lastBackupAt', new Date().toISOString());
+        lastAttemptTime = 0;
+
         try {
-            if (engine && !engine.isRunning && !engine.currentProgress) {
-                const res = await createBackup();
-                const { logActivity } = require('../logger');
-                await logActivity(`Automated daily backup created: ${res.filename}`);
-            }
-        } catch (e) {}
-    }, intervalMs);
+            const { logActivity } = require('../logger');
+            await logActivity(`Automated scheduled backup created: ${res.filename}`);
+        } catch {}
+        return res;
+    } catch (err) {
+        try {
+            const { logActivity } = require('../logger');
+            await logActivity(`Automated backup attempt failed (will retry in 10m): ${err.message}`, 'warn');
+        } catch {}
+        return false;
+    }
+}
+
+function setupAutoBackup(engine, checkIntervalMs = 60 * 1000) {
+    if (autoBackupTimer) clearInterval(autoBackupTimer);
+
+    setTimeout(() => {
+        checkAndRunScheduledBackup(engine).catch(() => {});
+    }, 3000);
+
+    autoBackupTimer = setInterval(() => {
+        checkAndRunScheduledBackup(engine).catch(() => {});
+    }, checkIntervalMs);
     if (autoBackupTimer.unref) autoBackupTimer.unref();
     return autoBackupTimer;
 }
@@ -137,12 +196,14 @@ function stopAutoBackup() {
 }
 
 module.exports = {
-    BACKUP_DIR,
+    get BACKUP_DIR() { return getBackupDir(); },
+    getBackupDir,
     createBackup,
     listBackups,
     restoreBackup,
     deleteBackup,
     rotateBackups,
+    checkAndRunScheduledBackup,
     setupAutoBackup,
     stopAutoBackup
 };

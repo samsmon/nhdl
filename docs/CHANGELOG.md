@@ -9,6 +9,16 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Otomatisasi Backup & Penjadwalan Database (`core/db/backup.js`, `core/db.js`, `server/index.js`, `docs/API.md`, `webui/src/lib/components/FolderPickerModal.svelte`, `webui/src/lib/api.js`, `test/db.test.js`)**:
+  - Konfigurasi jadwal backup otomatis via DB settings: `backupIntervalHours` (default 24 jam, 0 = dinonaktifkan), `backupKeep` (default 7 file retensi).
+  - Simpan timestamp pencadangan terakhir di tabel `settings` (`lastBackupAt`) agar jadwal tidak reset setiap kali server/kontainer di-restart.
+  - Scheduler aman dijalankan saat mesin engine sedang aktif (operasi baca database tidak mengganggu unduhan); bila terjadi kegagalan, sistem otomatis mengulang percobaan tiap 10 menit.
+  - Dukung penentuan direktori folder backup kustom melalui environment variable `NHDL_BACKUP_DIR`.
+  - Pemangkasan retensi backup (`rotateBackups`) otomatis mempertahankan `backupKeep` file backup terbaru dan menghapus file terlama.
+  - Tambahkan kartu pengaturan "Scheduled Backups" di tab Database Web UI lengkap dengan input interval jam, kuota retensi, estimasi waktu backup berikutnya, dan lokasi folder backup aktif.
+  - Tambahkan unit dan integration test di `test/db.test.js` untuk memverifikasi scheduling, rotasi, penolakan saat disabled (interval 0), override `NHDL_BACKUP_DIR`, serta endpoint API `/api/config` & `/api/db/info` (37/37 test lulus, build UI 0 warning).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Backup Otomatis Pre-Import / Pre-Restore Mode Replace (`server/index.js`, `docs/API.md`, `webui/src/lib/components/FolderPickerModal.svelte`, `test/db.test.js`)**:
   - Implementasikan pembuatan backup otomatis `nhdl-backup-pre-import-<ts>.json` di `POST /api/db/import` dan `POST /api/db/restore` sebelum data dikosongkan pada mode `replace`.
   - Jika pembuatan backup gagal, proses import/restore dibatalkan dan server mengembalikan error 500.

@@ -155,8 +155,8 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 
 | Method | Path | Body | Response (`200 OK`) | Keterangan |
 |---|---|---|---|---|
-| `GET` | `/api/config` | — | `{"downloadDir": string, "downloadFormat": "folder"\|"cbz"\|"zip", "autoContinueBatches": boolean, "authRequired": boolean, "apiKeyConfigured": boolean, "apiKeyMasked": string}` | Membaca pengaturan aktif dari tabel `settings` dan status API key dari `.env`. |
-| `POST` | `/api/config` | Salah satu dari: `{"downloadDir": string}`, `{"downloadFormat": "folder"\|"cbz"\|"zip"}`, `{"autoContinueBatches": boolean}`, atau `{"apiKey": string}` | `{"success":true, ...}` | Menyimpan pengaturan ke tabel `settings` (atau `NHENTAI_API_KEY` ke `.env`). |
+| `GET` | `/api/config` | — | `{"downloadDir": string, "downloadFormat": "folder"\|"cbz"\|"zip", "autoContinueBatches": boolean, "authRequired": boolean, "apiKeyConfigured": boolean, "apiKeyMasked": string, "backupIntervalHours": number, "backupKeep": number, "lastBackupAt": string\|null}` | Membaca pengaturan aktif dari tabel `settings` dan status API key dari `.env`. |
+| `POST` | `/api/config` | Salah satu dari: `{"downloadDir": string}`, `{"downloadFormat": "folder"\|"cbz"\|"zip"}`, `{"autoContinueBatches": boolean}`, `{"apiKey": string}`, `{"backupIntervalHours": number}`, atau `{"backupKeep": number}` | `{"success":true, ...}` | Menyimpan pengaturan ke tabel `settings` (atau `NHENTAI_API_KEY` ke `.env`). |
 | `POST` | `/api/config/verify-key` | `{"apiKey"?: string}` | `{"valid": boolean, "user"?: object, "rateLimit"?: object, "error"?: string}` | Memverifikasi keabsahan API key ke API v2 certain site ( ͡° ͜ʖ ͡°). |
 
 ### 3.5. Library
@@ -182,11 +182,11 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 
 | Method | Path | Body | Response (`200 OK`) | Keterangan |
 |---|---|---|---|---|
-| `GET` | `/api/db/info` | — | `{"type": "sqlite" \| "postgres", "connected": boolean, "path"?: string, "host"?: string, "port"?: string, "database"?: string, "detail"?: string, "maskedUrl"?: string}` | Menampilkan informasi database yang sedang aktif (jenis, status koneksi, path/host, tanpa password). |
+| `GET` | `/api/db/info` | — | `{"type": "sqlite" \| "postgres", "connected": boolean, "path"?: string, "host"?: string, "port"?: string, "database"?: string, "detail"?: string, "maskedUrl"?: string, "backupIntervalHours": number, "backupKeep": number, "lastBackupAt": string\|null, "backupDir": string}` | Menampilkan informasi database yang sedang aktif (jenis, status koneksi, path/host, tanpa password), konfigurasi backup terjadwal, dan path folder backup aktif. |
 | `GET` | `/api/db/export` | — | `application/json` (`attachment; filename="nhdl-export-<YYYY-MM-DD-HHmmss>.json"`) | Mengunduh seluruh database (`queue`, `library`, `settings`, `events`, `schema_version`) dalam format JSON independen basis data. |
 | `POST` | `/api/db/import` | `{"mode": "replace" \| "merge", "data": object}` | `{"success":true, "mode": "replace" \| "merge", "imported": {"queue": number, "library": number, "settings": number, "events": number}, "preImportBackup"?: string}` | Mengimpor data JSON dalam satu transaksi. Mode `replace` membuat backup otomatis `nhdl-backup-pre-import-<ts>.json` terlebih dahulu sebelum mengosongkan tabel (bila backup gagal, import dibatalkan). Mengembalikan `409 Conflict` (`{"success":false,"error":"Pause engine first","needsPause":true}`) bila `engine.isRunning` atau ada item `ON_PROGRESS`. |
-| `POST` | `/api/db/backup` | `{}` | `{"success":true, "filename": string, "size": number, "createdAt": string}` | Membuat backup instan ke folder `data/backups/nhdl-backup-YYYY-MM-DD-HHmmss.json` dan memangkas retensi (menyimpan 7 backup terakhir). |
-| `GET` | `/api/db/backups` | — | `{"backups": [{"filename": string, "size": number, "createdAt": string}]}` | Mengambil daftar file backup yang tersimpan di direktori `data/backups/`. |
+| `POST` | `/api/db/backup` | `{}` | `{"success":true, "filename": string, "size": number, "createdAt": string}` | Membuat backup instan ke folder backup aktif (`data/backups/` atau `NHDL_BACKUP_DIR`) dan memangkas retensi sesuai `backupKeep` (default 7). |
+| `GET` | `/api/db/backups` | — | `{"backups": [{"filename": string, "size": number, "createdAt": string}]}` | Mengambil daftar file backup yang tersimpan di direktori backup aktif (`data/backups/` atau `NHDL_BACKUP_DIR`). |
 | `POST` | `/api/db/restore` | `{"filename": string, "mode"?: "replace" \| "merge"}` | `{"success":true, "filename": string, "restored": object, "preImportBackup"?: string}` | Memulihkan (*restore*) isi database dari file backup lokal tertentu (default mode `replace`). Dalam mode `replace`, backup otomatis `nhdl-backup-pre-import-<ts>.json` dibuat terlebih dahulu sebelum restore dijalankan. Mengembalikan `409 Conflict` (`{"success":false,"error":"Pause engine first","needsPause":true}`) bila `engine.isRunning` atau ada item `ON_PROGRESS`. |
-| `DELETE` | `/api/db/backups/:name` | — | `{"success":true, "deleted": string}` | Menghapus file backup tertentu di `data/backups/`. |
+| `DELETE` | `/api/db/backups/:name` | — | `{"success":true, "deleted": string}` | Menghapus file backup tertentu di folder backup aktif. |
 

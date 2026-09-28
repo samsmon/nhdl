@@ -268,3 +268,13 @@ export async function importDbData(dataPayload, mode = 'merge') {
   return data;
 }
 
+export async function saveBackupSettings(settings) {
+  const { ok, data } = await requestJson('/api/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings)
+  });
+  if (!ok) throw new Error(data?.error || 'Failed to save backup settings');
+  return data;
+}
+

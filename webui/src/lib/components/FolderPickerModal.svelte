@@ -13,7 +13,8 @@
     Upload,
     Archive,
     Trash2,
-    FileJson
+    FileJson,
+    Clock
   } from 'lucide-svelte';
   import gsap from 'gsap';
   import { appStore } from '../stores/app.svelte.js';
@@ -57,6 +58,39 @@
 
   // Pre-import backup display state (Point 3)
   let lastPreImportBackup = $state(null);
+
+  // Scheduled backup settings state (Point 4)
+  let backupIntervalInput = $state(24);
+  let backupKeepInput = $state(7);
+  let savingBackupSettings = $state(false);
+
+  let nextBackupDisplay = $derived.by(() => {
+    const hours = Number(dbInfo?.backupIntervalHours ?? backupIntervalInput);
+    if (!Number.isFinite(hours) || hours <= 0) return 'Disabled (interval = 0)';
+    if (!dbInfo?.lastBackupAt) return 'Pending / Soon';
+    const last = new Date(dbInfo.lastBackupAt).getTime();
+    if (isNaN(last)) return 'Pending / Soon';
+    const nextMs = last + hours * 3600 * 1000;
+    const diffMs = nextMs - Date.now();
+    if (diffMs <= 0) return 'Due now';
+    return formatDate(new Date(nextMs).toISOString());
+  });
+
+  async function handleSaveBackupSettings() {
+    savingBackupSettings = true;
+    try {
+      await api.saveBackupSettings({
+        backupIntervalHours: Number(backupIntervalInput),
+        backupKeep: Number(backupKeepInput)
+      });
+      appStore.showToast('Backup schedule settings saved', 'success');
+      await loadDbData();
+    } catch (e) {
+      appStore.showToast(e.message || 'Failed to save backup settings', 'error');
+    } finally {
+      savingBackupSettings = false;
+    }
+  }
 
   async function handlePauseEngine() {
     pausingEngine = true;
@@ -171,6 +205,12 @@
       ]);
       dbInfo = info;
       backups = list || [];
+      if (info?.backupIntervalHours !== undefined) {
+        backupIntervalInput = info.backupIntervalHours;
+      }
+      if (info?.backupKeep !== undefined) {
+        backupKeepInput = info.backupKeep;
+      }
     } catch (e) {
       appStore.showToast(e.message || 'Failed to load database info', 'error');
     } finally {
@@ -705,13 +745,76 @@
             {/if}
           </div>
 
-          <!-- 3. Local Backups List Section -->
+          <!-- 3. Scheduled Backups Settings Section (Point 4) -->
+          <div class="bg-[#121212] border border-[#262626] rounded p-3 space-y-3">
+            <div class="flex items-center justify-between border-b border-[#222] pb-2">
+              <div class="flex items-center gap-2">
+                <Clock class="w-4 h-4 text-[#a3e635]" />
+                <span class="font-semibold text-white uppercase tracking-wider">Scheduled Backups</span>
+              </div>
+              <div class="flex flex-wrap items-center gap-3 text-[10px]">
+                {#if dbInfo?.lastBackupAt}
+                  <span class="text-[#888]">Last: {formatDate(dbInfo.lastBackupAt)}</span>
+                {/if}
+                <span class="text-[#a3e635]">Next: {nextBackupDisplay}</span>
+              </div>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label for="backup-interval-input" class="block text-[11px] text-[#aaa] mb-1 font-semibold">
+                  Backup Interval (Hours)
+                </label>
+                <input
+                  id="backup-interval-input"
+                  type="number"
+                  min="0"
+                  max="720"
+                  bind:value={backupIntervalInput}
+                  class="w-full bg-[#1c1c1c] border border-[#333] focus:border-[#a3e635] rounded px-2.5 py-1.5 text-xs text-white outline-none"
+                  placeholder="24"
+                />
+                <span class="text-[10px] text-[#666] mt-0.5 block">0 = disabled, default 24h</span>
+              </div>
+
+              <div>
+                <label for="backup-keep-input" class="block text-[11px] text-[#aaa] mb-1 font-semibold">
+                  Backups to Keep
+                </label>
+                <input
+                  id="backup-keep-input"
+                  type="number"
+                  min="1"
+                  max="100"
+                  bind:value={backupKeepInput}
+                  class="w-full bg-[#1c1c1c] border border-[#333] focus:border-[#a3e635] rounded px-2.5 py-1.5 text-xs text-white outline-none"
+                  placeholder="7"
+                />
+                <span class="text-[10px] text-[#666] mt-0.5 block">Max backup snapshots retained (default 7)</span>
+              </div>
+            </div>
+
+            <div class="flex items-center justify-between pt-1">
+              <span class="text-[10px] text-[#666] break-all">
+                Directory: {dbInfo?.backupDir || 'data/backups'}
+              </span>
+              <button
+                onclick={handleSaveBackupSettings}
+                disabled={savingBackupSettings}
+                class="px-3 py-1.5 rounded bg-[#a3e635] hover:bg-[#bef264] text-black font-semibold text-xs transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {savingBackupSettings ? 'Saving...' : 'Save Schedule'}
+              </button>
+            </div>
+          </div>
+
+          <!-- 4. Local Backups List Section -->
           <div class="bg-[#121212] border border-[#262626] rounded p-3 space-y-3">
             <div class="flex items-center justify-between border-b border-[#222] pb-2">
               <div class="flex items-center gap-2">
                 <Archive class="w-4 h-4 text-[#a3e635]" />
                 <span class="font-semibold text-white uppercase tracking-wider">Stored Backups</span>
-                <span class="text-[10px] text-[#666]">({backups.length} / 7 kept in data/backups/)</span>
+                <span class="text-[10px] text-[#666]">({backups.length} / {backupKeepInput || 7} kept)</span>
               </div>
               <button
                 onclick={loadDbData}

@@ -1883,4 +1883,121 @@ test('Point 3: automatic pre-import backup is created before replace mode import
     }
 });
 
+test('Point 4: automated backup scheduling, retention rotation, NHDL_BACKUP_DIR override, and settings API', async () => {
+    const tmpBackupDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-custom-backups-'));
+    const prevBackupDir = process.env.NHDL_BACKUP_DIR;
+    process.env.NHDL_BACKUP_DIR = tmpBackupDir;
+
+    const ctx = await createTempDb();
+    const { createRequestHandler } = require('../server/index');
+    const http = require('http');
+
+    const srv = http.createServer(createRequestHandler());
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+
+    const request = (method, urlPath, body = null) => {
+        return new Promise((resolve, reject) => {
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port,
+                path: urlPath,
+                method,
+                headers: { 'Content-Type': 'application/json' }
+            }, res => {
+                let data = '';
+                res.on('data', chunk => { data += chunk.toString(); });
+                res.on('end', () => {
+                    let json = null;
+                    try { json = JSON.parse(data); } catch (e) {}
+                    resolve({ statusCode: res.statusCode, data, json });
+                });
+            });
+            req.on('error', reject);
+            if (body) req.write(body);
+            req.end();
+        });
+    };
+
+    try {
+        // 1. Verify NHDL_BACKUP_DIR is respected
+        assert.strictEqual(dbMod.BACKUP_DIR, tmpBackupDir);
+        const b1 = await dbMod.createBackup(ctx.db, 'nhdl-backup-custom-1.json');
+        assert.strictEqual(fs.existsSync(path.join(tmpBackupDir, 'nhdl-backup-custom-1.json')), true);
+        const list1 = dbMod.listBackups();
+        assert.strictEqual(list1.length, 1);
+        assert.strictEqual(list1[0].filename, 'nhdl-backup-custom-1.json');
+
+        // 2. Test rotation with backupKeep = 3
+        await dbMod.setSetting('backupKeep', 3, ctx.db);
+        for (let i = 2; i <= 5; i++) {
+            await new Promise(r => setTimeout(r, 20)); // Ensure distinct mtime
+            await dbMod.createBackup(ctx.db, `nhdl-backup-custom-${i}.json`);
+        }
+        const listRotated = dbMod.listBackups();
+        assert.strictEqual(listRotated.length, 3, 'Should keep only the 3 newest backups');
+        const filenames = listRotated.map(b => b.filename);
+        assert.ok(filenames.includes('nhdl-backup-custom-5.json'));
+        assert.ok(filenames.includes('nhdl-backup-custom-4.json'));
+        assert.ok(filenames.includes('nhdl-backup-custom-3.json'));
+        assert.ok(!filenames.includes('nhdl-backup-custom-1.json'), 'Oldest backup should have been rotated out');
+        assert.ok(!filenames.includes('nhdl-backup-custom-2.json'), 'Second oldest backup should have been rotated out');
+
+        // 3. Test checkAndRunScheduledBackup
+        // Initially lastBackupAt is unset -> should trigger backup and set lastBackupAt
+        await dbMod.setSetting('lastBackupAt', null, ctx.db);
+        await dbMod.setSetting('backupIntervalHours', 24, ctx.db);
+        const scheduled1 = await dbMod.checkAndRunScheduledBackup();
+        assert.ok(scheduled1, 'Should trigger backup when lastBackupAt is null');
+        const lastBackupAt1 = await dbMod.getSetting('lastBackupAt', null, ctx.db);
+        assert.ok(lastBackupAt1, 'lastBackupAt should be recorded in settings');
+
+        // Second call immediately -> should be skipped (not due)
+        const scheduled2 = await dbMod.checkAndRunScheduledBackup();
+        assert.strictEqual(scheduled2, false, 'Should skip when not due');
+
+        // Set lastBackupAt to 25 hours ago -> should trigger backup and update lastBackupAt
+        const pastDate = new Date(Date.now() - 25 * 3600 * 1000).toISOString();
+        await dbMod.setSetting('lastBackupAt', pastDate, ctx.db);
+        const scheduled3 = await dbMod.checkAndRunScheduledBackup();
+        assert.ok(scheduled3, 'Should trigger backup when due');
+        const lastBackupAt3 = await dbMod.getSetting('lastBackupAt', null, ctx.db);
+        assert.notStrictEqual(lastBackupAt3, pastDate, 'lastBackupAt should be updated');
+
+        // Set backupIntervalHours to 0 (disabled) -> should return false
+        await dbMod.setSetting('backupIntervalHours', 0, ctx.db);
+        await dbMod.setSetting('lastBackupAt', pastDate, ctx.db);
+        const scheduledDisabled = await dbMod.checkAndRunScheduledBackup();
+        assert.strictEqual(scheduledDisabled, false, 'Should return false when interval is 0 (disabled)');
+
+        // 4. Test API endpoints
+        // POST /api/config to update backup schedule settings
+        const postConfigRes = await request('POST', '/api/config', JSON.stringify({
+            backupIntervalHours: 12,
+            backupKeep: 5
+        }));
+        assert.strictEqual(postConfigRes.statusCode, 200);
+        assert.strictEqual(postConfigRes.json.success, true);
+        assert.strictEqual(postConfigRes.json.backupIntervalHours, 12);
+        assert.strictEqual(postConfigRes.json.backupKeep, 5);
+
+        // GET /api/db/info returns backup info
+        const infoRes = await request('GET', '/api/db/info');
+        assert.strictEqual(infoRes.statusCode, 200);
+        assert.strictEqual(infoRes.json.backupIntervalHours, 12);
+        assert.strictEqual(infoRes.json.backupKeep, 5);
+        assert.strictEqual(infoRes.json.backupDir, tmpBackupDir);
+        assert.ok('lastBackupAt' in infoRes.json);
+    } finally {
+        if (prevBackupDir !== undefined) {
+            process.env.NHDL_BACKUP_DIR = prevBackupDir;
+        } else {
+            delete process.env.NHDL_BACKUP_DIR;
+        }
+        try { fs.rmSync(tmpBackupDir, { recursive: true, force: true }); } catch (e) {}
+        await new Promise(r => srv.close(r));
+        await ctx.cleanup();
+    }
+});
+
 
