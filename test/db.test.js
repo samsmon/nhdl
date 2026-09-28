@@ -1293,3 +1293,107 @@ test('Fase 7.4: HTTP endpoints /api/db/* (info, export, backup, backups, restore
     }
 });
 
+test('Fase 7.5: autoMigrateSqliteToPostgres transfers data when Postgres is empty and renames SQLite to .migrated', async () => {
+    const ctx = await createTempDb();
+    const tempDir = path.dirname(ctx.dbPath);
+    const mockSqlitePath = path.join(tempDir, 'source-test.db');
+
+    try {
+        // Seed a standalone SQLite db file
+        const { DatabaseSync } = require('node:sqlite');
+        const sDb = new DatabaseSync(mockSqlitePath);
+        sDb.exec(`
+            CREATE TABLE schema_version (version INTEGER NOT NULL);
+            INSERT INTO schema_version (version) VALUES (2);
+            CREATE TABLE queue (
+                id INTEGER PRIMARY KEY,
+                gallery_id INTEGER NOT NULL UNIQUE,
+                url TEXT NOT NULL,
+                title TEXT,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                batch INTEGER NOT NULL DEFAULT 1,
+                priority INTEGER NOT NULL DEFAULT 0,
+                pages_done INTEGER NOT NULL DEFAULT 0,
+                pages_total INTEGER NOT NULL DEFAULT 0,
+                error TEXT,
+                retries INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now')),
+                updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+                format TEXT
+            );
+            CREATE TABLE library (
+                gallery_id INTEGER PRIMARY KEY,
+                title TEXT NOT NULL,
+                path TEXT NOT NULL,
+                pages INTEGER,
+                format TEXT,
+                language TEXT,
+                artist TEXT,
+                added_at TEXT NOT NULL DEFAULT (datetime('now')),
+                meta TEXT
+            );
+            CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+            CREATE TABLE events (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, level TEXT NOT NULL, gallery_id INTEGER, message TEXT NOT NULL);
+
+            INSERT INTO queue (gallery_id, url, title, status) VALUES (770001, 'https://certain.site/g/770001/', 'Migrated Title', 'PENDING');
+            INSERT INTO library (gallery_id, title, path) VALUES (770001, 'Migrated Lib Title', '/tmp/path');
+        `);
+        sDb.close();
+
+        // 1. Mock empty Postgres pool
+        let importedPayload = null;
+        let importedOptions = null;
+        const postgresAdapter = require('../core/db/postgres');
+        const origImportData = postgresAdapter.importData;
+        postgresAdapter.importData = async (data, opts) => {
+            importedPayload = data;
+            importedOptions = opts;
+            return {
+                success: true,
+                imported: { queue: data.tables.queue.length, library: data.tables.library.length, settings: 0, events: 0 }
+            };
+        };
+
+        const mockPoolEmpty = {
+            async query(sql) {
+                if (sql.includes('FROM queue') || sql.includes('FROM library')) {
+                    return { rows: [{ cnt: 0 }] };
+                }
+                return { rows: [] };
+            }
+        };
+
+        try {
+            const res = await dbMod.autoMigrateSqliteToPostgres(mockPoolEmpty, { sqlitePath: mockSqlitePath });
+            assert.ok(res.migrated);
+            assert.strictEqual(res.imported.queue, 1);
+            assert.strictEqual(res.imported.library, 1);
+            assert.strictEqual(importedOptions.mode, 'replace');
+            assert.strictEqual(fs.existsSync(mockSqlitePath), false, 'Original SQLite file must have been renamed');
+            assert.strictEqual(fs.existsSync(`${mockSqlitePath}.migrated`), true, 'SQLite file must exist as .migrated');
+
+            // 2. Call again on same path: file no longer exists, returns false
+            const res2 = await dbMod.autoMigrateSqliteToPostgres(mockPoolEmpty, { sqlitePath: mockSqlitePath });
+            assert.strictEqual(res2, false);
+
+            // 3. Test non-empty Postgres: returns false
+            const mockPoolNonEmpty = {
+                async query(sql) {
+                    if (sql.includes('FROM queue')) return { rows: [{ cnt: 5 }] };
+                    return { rows: [{ cnt: 0 }] };
+                }
+            };
+            fs.writeFileSync(mockSqlitePath, 'dummy');
+            const res3 = await dbMod.autoMigrateSqliteToPostgres(mockPoolNonEmpty, { sqlitePath: mockSqlitePath });
+            assert.strictEqual(res3, false, 'Must not migrate if Postgres is non-empty');
+        } finally {
+            postgresAdapter.importData = origImportData;
+        }
+    } finally {
+        try { fs.unlinkSync(mockSqlitePath); } catch (e) {}
+        try { fs.unlinkSync(`${mockSqlitePath}.migrated`); } catch (e) {}
+        await ctx.cleanup();
+    }
+});
+
+

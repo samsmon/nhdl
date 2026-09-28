@@ -31,7 +31,12 @@ async function initDb(dbPathOrUrl = null, options = {}) {
             : (options.databaseUrl || process.env.DATABASE_URL);
         activeType = 'postgres';
         activeAdapter = postgresAdapter;
-        return await postgresAdapter.initDb(url, options);
+        const pool = await postgresAdapter.initDb(url, options);
+        if (options.skipAutoMigrate !== true) {
+            const { autoMigrateSqliteToPostgres } = require('./db/auto-migrate');
+            await autoMigrateSqliteToPostgres(pool, options);
+        }
+        return pool;
     } else {
         const targetPath = (typeof dbPathOrUrl === 'string' && !dbPathOrUrl.startsWith('postgres://') && !dbPathOrUrl.startsWith('postgresql://'))
             ? dbPathOrUrl
@@ -312,5 +317,6 @@ module.exports = {
     deleteBackup: backupMod.deleteBackup,
     rotateBackups: backupMod.rotateBackups,
     setupAutoBackup: backupMod.setupAutoBackup,
-    stopAutoBackup: backupMod.stopAutoBackup
+    stopAutoBackup: backupMod.stopAutoBackup,
+    autoMigrateSqliteToPostgres: require('./db/auto-migrate').autoMigrateSqliteToPostgres
 };

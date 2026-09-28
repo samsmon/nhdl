@@ -9,6 +9,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **7.5 Migrasi Otomatis SQLite ke PostgreSQL pada Startup (`core/db/auto-migrate.js`, `core/db.js`)**:
+  - Implementasikan modul deteksi dan migrasi otomatis `core/db/auto-migrate.js` saat NHDL berjalan dengan PostgreSQL (`DATABASE_URL`).
+  - Bila instance PostgreSQL masih kosong (tabel `queue` dan `library` sama-sama memiliki 0 baris) dan file database lokal `data/nhdl.db` memiliki data, sistem otomatis mengekspor seluruh data SQLite (`queue`, `library`, `settings`, `events`) dan mengimpornya ke PostgreSQL menggunakan mode `replace` dalam satu transaksi.
+  - Setelah migrasi berhasil, file SQLite lokal diubah namanya menjadi `data/nhdl.db.migrated` (beserta pembersihan file `-wal` dan `-shm` terkait), pesan log `[+] Migration complete...` ditampilkan di konsol, dan event audit dicatat di tabel `events`.
+  - Tambahkan unit test di `test/db.test.js` untuk memvalidasi proses migrasi otomatis dan penggantian nama file (total 31/31 test lulus, `npm run build:ui` 0 warning).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **7.4 Database Export, Import, Backup & Restore (`core/db/backup.js`, `server/index.js`, `docs/API.md`)**:
   - Dokumentasikan kontrak endpoint `/api/db/info`, `/api/db/export`, `/api/db/import`, `/api/db/backup`, `/api/db/backups`, `/api/db/restore`, dan `/api/db/backups/:name` di `docs/API.md` terlebih dahulu sebelum implementasi.
   - Implementasikan fungsi ekspor dan impor database universal (`exportData`, `importData`) pada `core/db/sqlite.js` dan `core/db/postgres.js` dengan dukungan mode `replace` (mengosongkan tabel lalu menyalin ulang dalam satu transaksi) dan `merge` (`ON CONFLICT DO NOTHING`).

@@ -157,6 +157,7 @@ Task:
 - [x] Skema dan migrasi versi PostgreSQL: `datetime('now')` → `now()`/`timestamptz`, `INTEGER PRIMARY KEY` → `bigserial`/`identity`, `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`, `PRAGMA table_info` → `information_schema`
 - [x] Koneksi: pool, retry saat Postgres belum siap waktu container start, pesan error yang jelas kalau `DATABASE_URL` salah
 - [x] Endpoint (catat dulu di `docs/API.md`): `GET /api/db/export` (download JSON), `POST /api/db/import` (upload JSON; mode *replace* atau *merge*, dalam satu transaksi), `POST /api/db/backup` + `GET /api/db/backups` (backup terjadwal/manual ke folder `data/backups/`, simpan N terakhir)
+- [x] Migrasi otomatis SQLite ke PostgreSQL pada startup bila Postgres masih kosong dan `data/nhdl.db` ditemukan (import data lalu rename ke `nhdl.db.migrated`)
 - [ ] UI menu Settings → Database: info jenis DB + status koneksi (tanpa password), tombol Export, Import (dengan konfirmasi dan pilihan replace/merge), Backup sekarang, daftar backup + restore
 - [ ] `docker-compose.yml`: contoh `DATABASE_URL` ke shared Postgres (network eksternal), hapus kebutuhan volume `data/` untuk mode Postgres (kecuali folder backup)
 - [ ] Test: suite `db` yang sama dijalankan ke SQLite dan PostgreSQL (Postgres lewat `TEST_DATABASE_URL`, di-skip kalau tidak ada); test export → import menghasilkan data identik; import ke DB jenis lain (SQLite → Postgres)
@@ -207,3 +208,4 @@ Task:
 | 2026-09-28 | 7 | 7.2: Pisahkan adapter database `core/db/sqlite.js` dan `core/db/postgres.js`, dispatch di `core/db.js` berdasarkan `DATABASE_URL`, install `pg` — 27/27 test lulus, `npm run build:ui` 0 warning |
 | 2026-09-28 | 7 | 7.3: Implementasi PostgreSQL adapter (`core/db/postgres.js`), retry pool 60 detik, dialek SQL (`BIGSERIAL`, `TIMESTAMPTZ`, `now()`), masking kredensial di log startup, dan panduan hak minimal di `docs/POSTGRES.md` — 27/27 test lulus, `npm run build:ui` 0 warning |
 | 2026-09-28 | 7 | 7.4: Catat kontrak di `docs/API.md`, implementasikan export/import JSON lintas database (`exportData`, `importData`), rotasi backup 7 file di `data/backups/`, auto-backup harian saat idle, dan endpoint `/api/db/*` (`info`, `export`, `import`, `backup`, `backups`, `restore`, `delete`) — 30/30 test lulus, `npm run build:ui` 0 warning |
+| 2026-09-28 | 7 | 7.5: Migrasi otomatis SQLite ke PostgreSQL pada startup saat Postgres kosong dan file SQLite lokal ditemukan, data ditransfer via mode replace lalu SQLite di-rename ke .migrated — 31/31 test lulus, `npm run build:ui` 0 warning |
