@@ -9,6 +9,14 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **7.4 Database Export, Import, Backup & Restore (`core/db/backup.js`, `server/index.js`, `docs/API.md`)**:
+  - Dokumentasikan kontrak endpoint `/api/db/info`, `/api/db/export`, `/api/db/import`, `/api/db/backup`, `/api/db/backups`, `/api/db/restore`, dan `/api/db/backups/:name` di `docs/API.md` terlebih dahulu sebelum implementasi.
+  - Implementasikan fungsi ekspor dan impor database universal (`exportData`, `importData`) pada `core/db/sqlite.js` dan `core/db/postgres.js` dengan dukungan mode `replace` (mengosongkan tabel lalu menyalin ulang dalam satu transaksi) dan `merge` (`ON CONFLICT DO NOTHING`).
+  - Buat modul manajemen backup `core/db/backup.js` dengan penyimpanan di `data/backups/nhdl-backup-*.json`, rotasi otomatis mempertahankan 7 file backup terbaru, pemulihan (*restore*), penghapusan, dan scheduler backup otomatis harian saat engine menganggur (*idle*).
+  - Hubungkan seluruh endpoint REST di `server/index.js` dengan penanganan error yang andal dan pencatatan audit di tabel `events`.
+  - Tambahkan 3 unit/integration test baru di `test/db.test.js` yang memverifikasi siklus penuh ekspor-impor, rotasi backup, restore data, dan seluruh endpoint HTTP (total 30/30 test lulus, `npm run build:ui` 0 warning).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **7.3 Implementasi PostgreSQL Adapter, Retry Pool & Panduan `docs/POSTGRES.md`**:
   - Implementasikan seluruh dialek PostgreSQL di `core/db/postgres.js`: migrasi skema dengan tipe data `BIGINT`/`BIGSERIAL` untuk `id` dan `gallery_id`, `TIMESTAMPTZ` dengan default `now()`, parameter terkueri `$1, $2, ...`, `ON CONFLICT (gallery_id) DO NOTHING` / `DO UPDATE`, dan query `information_schema`.
   - Tambahkan mekanisme `connectWithRetry` pada connection pool `pg.Pool` (maks 10 koneksi) yang mencoba ulang setiap 2 detik hingga 60 detik jika PostgreSQL belum siap saat container menyala.

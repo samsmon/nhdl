@@ -1065,6 +1065,184 @@ async function getEvents(options = {}, db = null) {
     }));
 }
 
+async function exportData(db = null) {
+    const active = db || await getDb();
+    const schemaVersion = await getSchemaVersion(active);
+    const queueRes = await active.query(`SELECT * FROM queue ORDER BY batch ASC, id ASC`);
+    const libRes = await active.query(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`);
+    const setRes = await active.query(`SELECT * FROM settings ORDER BY key ASC`);
+    const evtRes = await active.query(`SELECT * FROM events ORDER BY id ASC`);
+
+    const queue = queueRes.rows.map(r => ({
+        ...r,
+        id: Number(r.id),
+        gallery_id: Number(r.gallery_id),
+        batch: Number(r.batch || 1),
+        priority: Number(r.priority || 0),
+        pages_done: Number(r.pages_done || 0),
+        pages_total: Number(r.pages_total || 0),
+        retries: Number(r.retries || 0),
+        created_at: r.created_at instanceof Date ? r.created_at.toISOString() : String(r.created_at),
+        updated_at: r.updated_at instanceof Date ? r.updated_at.toISOString() : String(r.updated_at)
+    }));
+
+    const library = libRes.rows.map(r => ({
+        ...r,
+        gallery_id: Number(r.gallery_id),
+        pages: Number(r.pages || 0),
+        added_at: r.added_at instanceof Date ? r.added_at.toISOString() : String(r.added_at)
+    }));
+
+    const settings = setRes.rows;
+    const events = evtRes.rows.map(r => ({
+        ...r,
+        id: Number(r.id),
+        gallery_id: r.gallery_id ? Number(r.gallery_id) : null,
+        ts: r.ts instanceof Date ? r.ts.toISOString() : String(r.ts)
+    }));
+
+    return {
+        version: 1,
+        exported_at: new Date().toISOString(),
+        db_type: 'postgres',
+        schema_version: schemaVersion,
+        tables: {
+            queue,
+            library,
+            settings,
+            events
+        }
+    };
+}
+
+async function importData(payload, options = {}, db = null) {
+    const active = db || await getDb();
+    const mode = options.mode === 'merge' ? 'merge' : 'replace';
+    const tables = payload?.tables || {};
+    const queueRows = Array.isArray(tables.queue) ? tables.queue : [];
+    const libraryRows = Array.isArray(tables.library) ? tables.library : [];
+    const settingsRows = Array.isArray(tables.settings) ? tables.settings : [];
+    const eventsRows = Array.isArray(tables.events) ? tables.events : [];
+
+    let imported = { queue: 0, library: 0, settings: 0, events: 0 };
+
+    const client = active.connect ? await active.connect() : active;
+    const needsRelease = typeof active.connect === 'function';
+
+    try {
+        await client.query('BEGIN');
+        if (mode === 'replace') {
+            await client.query(`TRUNCATE TABLE queue, library, settings, events RESTART IDENTITY;`);
+        }
+
+        for (const r of queueRows) {
+            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
+            const url = r.url || `https://nhentai.net/g/${gid}/`;
+            const title = r.title || null;
+            const status = r.status || 'PENDING';
+            const batch = Number(r.batch || 1);
+            const priority = Number(r.priority || 0);
+            const pagesDone = Number(r.pages_done ?? r.pagesDone ?? 0);
+            const pagesTotal = Number(r.pages_total ?? r.pagesTotal ?? 0);
+            const error = r.error || null;
+            const retries = Number(r.retries || 0);
+            const createdAt = r.created_at || r.createdAt || new Date().toISOString();
+            const updatedAt = r.updated_at || r.updatedAt || new Date().toISOString();
+            const format = r.format || null;
+
+            const res = await client.query(`
+                INSERT INTO queue (
+                    gallery_id, url, title, status, batch, priority,
+                    pages_done, pages_total, error, retries, created_at, updated_at, format
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                ON CONFLICT (gallery_id) DO ${mode === 'merge' ? 'NOTHING' : `UPDATE SET
+                    url = EXCLUDED.url,
+                    title = EXCLUDED.title,
+                    status = EXCLUDED.status,
+                    batch = EXCLUDED.batch,
+                    priority = EXCLUDED.priority,
+                    pages_done = EXCLUDED.pages_done,
+                    pages_total = EXCLUDED.pages_total,
+                    error = EXCLUDED.error,
+                    retries = EXCLUDED.retries,
+                    updated_at = EXCLUDED.updated_at,
+                    format = EXCLUDED.format`}
+            `, [gid, url, title, status, batch, priority, pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format]);
+            if (res.rowCount > 0) imported.queue++;
+        }
+
+        for (const r of libraryRows) {
+            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
+            const title = r.title || 'Unknown';
+            const p = r.path || r.folder || '';
+            const pages = Number.isFinite(r.pages) ? r.pages : null;
+            const format = r.format || 'folder';
+            const language = r.language || r.lang || null;
+            const artist = r.artist || r.author || null;
+            const addedAt = r.added_at || r.addedAt || new Date().toISOString();
+            const meta = typeof r.meta === 'object' ? JSON.stringify(r.meta) : (r.meta || null);
+
+            const res = await client.query(`
+                INSERT INTO library (gallery_id, title, path, pages, format, language, artist, added_at, meta)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                ON CONFLICT (gallery_id) DO ${mode === 'merge' ? 'NOTHING' : `UPDATE SET
+                    title = EXCLUDED.title,
+                    path = EXCLUDED.path,
+                    pages = EXCLUDED.pages,
+                    format = EXCLUDED.format,
+                    language = EXCLUDED.language,
+                    artist = EXCLUDED.artist,
+                    added_at = EXCLUDED.added_at,
+                    meta = EXCLUDED.meta`}
+            `, [gid, title, p, pages, format, language, artist, addedAt, meta]);
+            if (res.rowCount > 0) imported.library++;
+        }
+
+        for (const r of settingsRows) {
+            const key = String(r.key);
+            const val = typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+            const res = await client.query(`
+                INSERT INTO settings (key, value) VALUES ($1, $2)
+                ON CONFLICT (key) DO ${mode === 'merge' ? 'NOTHING' : 'UPDATE SET value = EXCLUDED.value'}
+            `, [key, val]);
+            if (res.rowCount > 0) imported.settings++;
+        }
+
+        for (const r of eventsRows) {
+            const ts = r.ts || new Date().toISOString();
+            const level = r.level || 'info';
+            const gid = r.gallery_id ? normalizeGalleryId(r.gallery_id) : null;
+            const msg = String(r.message || '');
+            const res = await client.query(`
+                INSERT INTO events (ts, level, gallery_id, message)
+                VALUES ($1, $2, $3, $4)
+            `, [ts, level, gid, msg]);
+            if (res.rowCount > 0) imported.events++;
+        }
+
+        await client.query('COMMIT');
+    } catch (err) {
+        try { await client.query('ROLLBACK'); } catch (e) {}
+        throw err;
+    } finally {
+        if (needsRelease) client.release();
+    }
+
+    try {
+        const checkLib = await active.query(`SELECT 1 FROM library WHERE format IS NULL OR format != 'skipped' LIMIT 1`);
+        hasActiveEntriesCache = checkLib.rows.length > 0;
+    } catch (e) {}
+
+    const batchCount = Math.max(1, await getMaxBatch(active));
+    dbEvents.emit('item', { type: 'reordered', items: [], batchCount });
+
+    return {
+        success: true,
+        mode,
+        imported
+    };
+}
+
 module.exports = {
     connectWithRetry,
     dbEvents,
@@ -1105,5 +1283,7 @@ module.exports = {
     getAllSettings,
     migrateLegacyConfigJson,
     logEvent,
-    getEvents
+    getEvents,
+    exportData,
+    importData
 };

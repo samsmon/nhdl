@@ -177,3 +177,16 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 | `GET` | `/api/logs` | — | `{"log": string}` atau `{"ts": string, "level": string, "message": string}[]` (jika query `galleryId` diberikan) | Tanpa `galleryId`: mengambil string log aktivitas dari tabel `events`. Dengan `?galleryId=<id>&limit=<n>`: mengembalikan JSON array berisi baris dari tabel `events` untuk galeri tersebut (`[{ "ts", "level", "message" }]`). |
 | `GET` | `/api/logs/download` | — | `text/plain` (`attachment; filename="nhdl-activity-<ts>.log"`) | Mengunduh log aktivitas sebagai file `.log`. |
 | `GET` | `/api/fs/browse?path=<dir>` | — | `{"currentPath": string, "parentPath": string\|null, "drives": string[], "directories": {"name": string, "path": string}[]}` | Menjelajahi daftar direktori lokal untuk pemilih folder unduhan di UI. |
+
+### 3.7. Database Management (Export, Import & Backup)
+
+| Method | Path | Body | Response (`200 OK`) | Keterangan |
+|---|---|---|---|---|
+| `GET` | `/api/db/info` | — | `{"type": "sqlite" \| "postgres", "connected": boolean, "path"?: string, "host"?: string, "port"?: string, "database"?: string, "detail"?: string, "maskedUrl"?: string}` | Menampilkan informasi database yang sedang aktif (jenis, status koneksi, path/host, tanpa password). |
+| `GET` | `/api/db/export` | — | `application/json` (`attachment; filename="nhdl-export-<YYYY-MM-DD-HHmmss>.json"`) | Mengunduh seluruh database (`queue`, `library`, `settings`, `events`, `schema_version`) dalam format JSON independen basis data. |
+| `POST` | `/api/db/import` | `{"mode": "replace" \| "merge", "data": object}` | `{"success":true, "mode": "replace" \| "merge", "imported": {"queue": number, "library": number, "settings": number, "events": number}}` | Mengimpor data JSON dalam satu transaksi. Mode `replace` mengosongkan tabel terlebih dahulu; mode `merge` menyisipkan dengan `ON CONFLICT DO NOTHING`. |
+| `POST` | `/api/db/backup` | `{}` | `{"success":true, "filename": string, "size": number, "createdAt": string}` | Membuat backup instan ke folder `data/backups/nhdl-backup-YYYY-MM-DD-HHmmss.json` dan memangkas retensi (menyimpan 7 backup terakhir). |
+| `GET` | `/api/db/backups` | — | `{"backups": [{"filename": string, "size": number, "createdAt": string}]}` | Mengambil daftar file backup yang tersimpan di direktori `data/backups/`. |
+| `POST` | `/api/db/restore` | `{"filename": string, "mode"?: "replace" \| "merge"}` | `{"success":true, "filename": string, "restored": object}` | Memulihkan (*restore*) isi database dari file backup lokal tertentu (default mode `replace`). |
+| `DELETE` | `/api/db/backups/:name` | — | `{"success":true, "deleted": string}` | Menghapus file backup tertentu di `data/backups/`. |
+

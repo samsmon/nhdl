@@ -247,6 +247,18 @@ async function getEvents(options = {}, db = null) {
     return await activeAdapter.getEvents(options, db);
 }
 
+async function exportData(db = null) {
+    if (!activeAdapter) await initDb();
+    return await activeAdapter.exportData(db);
+}
+
+async function importData(payload, options = {}, db = null) {
+    if (!activeAdapter) await initDb();
+    return await activeAdapter.importData(payload, options, db);
+}
+
+const backupMod = require('./db/backup');
+
 module.exports = {
     DEFAULT_DB_PATH,
     dbEvents,
@@ -290,5 +302,15 @@ module.exports = {
     getAllSettings,
     migrateLegacyConfigJson,
     logEvent,
-    getEvents
+    getEvents,
+    exportData,
+    importData,
+    BACKUP_DIR: backupMod.BACKUP_DIR,
+    createBackup: backupMod.createBackup,
+    listBackups: backupMod.listBackups,
+    restoreBackup: backupMod.restoreBackup,
+    deleteBackup: backupMod.deleteBackup,
+    rotateBackups: backupMod.rotateBackups,
+    setupAutoBackup: backupMod.setupAutoBackup,
+    stopAutoBackup: backupMod.stopAutoBackup
 };

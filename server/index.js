@@ -23,7 +23,14 @@ const {
     updateQueuePriority,
     getAllLibraryEntries,
     getEvents,
-    getDbInfo
+    getDbInfo,
+    exportData,
+    importData,
+    createBackup,
+    listBackups,
+    restoreBackup,
+    deleteBackup,
+    setupAutoBackup
 } = require('../core/db');
 initDb();
 
@@ -831,6 +838,106 @@ function createRequestHandler() {
                 }
             }
 
+            if (req.method === 'GET' && req.url === '/api/db/info') {
+                res.setHeader('Content-Type', 'application/json');
+                return res.end(JSON.stringify(getDbInfo()));
+            }
+
+            if (req.method === 'GET' && req.url === '/api/db/export') {
+                const data = await exportData();
+                const pad = (n) => String(n).padStart(2, '0');
+                const now = new Date();
+                const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Disposition', `attachment; filename="nhdl-export-${ts}.json"`);
+                return res.end(JSON.stringify(data, null, 2));
+            }
+
+            if (req.method === 'POST' && req.url === '/api/db/import') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', async () => {
+                    try {
+                        const parsed = JSON.parse(body);
+                        const mode = parsed.mode === 'merge' ? 'merge' : 'replace';
+                        const payload = parsed.data || parsed;
+                        const result = await importData(payload, { mode });
+                        await logActivity(`Database imported: mode ${mode}, ${result.imported.queue} queue, ${result.imported.library} library`);
+                        res.setHeader('Content-Type', 'application/json');
+                        return res.end(JSON.stringify(result));
+                    } catch (e) {
+                        res.writeHead(400);
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/db/backup') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', async () => {
+                    try {
+                        let customName = null;
+                        if (body && body.trim()) {
+                            try {
+                                const parsed = JSON.parse(body);
+                                customName = parsed.name || null;
+                            } catch (e) {}
+                        }
+                        const result = await createBackup(null, customName);
+                        await logActivity(`Database backup created: ${result.filename}`);
+                        res.setHeader('Content-Type', 'application/json');
+                        return res.end(JSON.stringify({ success: true, ...result }));
+                    } catch (e) {
+                        res.writeHead(500);
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'GET' && req.url === '/api/db/backups') {
+                const backups = listBackups();
+                res.setHeader('Content-Type', 'application/json');
+                return res.end(JSON.stringify({ backups }));
+            }
+
+            if (req.method === 'POST' && req.url === '/api/db/restore') {
+                let body = '';
+                req.on('data', chunk => { body += chunk.toString(); });
+                req.on('end', async () => {
+                    try {
+                        const { filename, mode } = JSON.parse(body);
+                        if (!filename) {
+                            res.writeHead(400);
+                            return res.end(JSON.stringify({ success: false, error: 'filename is required' }));
+                        }
+                        const result = await restoreBackup(filename, mode);
+                        await logActivity(`Database restored from ${filename}`);
+                        res.setHeader('Content-Type', 'application/json');
+                        return res.end(JSON.stringify(result));
+                    } catch (e) {
+                        res.writeHead(400);
+                        return res.end(JSON.stringify({ success: false, error: e.message }));
+                    }
+                });
+                return;
+            }
+
+            if (req.method === 'DELETE' && req.url.startsWith('/api/db/backups/')) {
+                const name = decodeURIComponent(req.url.slice('/api/db/backups/'.length));
+                try {
+                    const result = deleteBackup(name);
+                    await logActivity(`Deleted backup: ${name}`);
+                    res.setHeader('Content-Type', 'application/json');
+                    return res.end(JSON.stringify(result));
+                } catch (e) {
+                    res.writeHead(404);
+                    return res.end(JSON.stringify({ success: false, error: e.message }));
+                }
+            }
+
             res.writeHead(404);
             return res.end(JSON.stringify({ error: 'Endpoint Not Found' }));
         }
@@ -904,6 +1011,10 @@ if (require.main === module) {
                 }
                 await logActivity(`Startup rescan: ${result.relocated} relocated/added, ${result.pruned} pruned, ${result.unchanged} unchanged`);
             }
+        } catch (e) {}
+
+        try {
+            setupAutoBackup(engine);
         } catch (e) {}
 
         if (folderHealthy) {

@@ -1036,6 +1036,141 @@ async function getEvents(options = {}, db = null) {
     return rows;
 }
 
+async function exportData(db = null) {
+    const active = db || await getDb();
+    const schemaVersion = await getSchemaVersion(active);
+    const queue = active.prepare(`SELECT * FROM queue ORDER BY batch ASC, id ASC`).all();
+    const library = active.prepare(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`).all();
+    const settings = active.prepare(`SELECT * FROM settings ORDER BY key ASC`).all();
+    const events = active.prepare(`SELECT * FROM events ORDER BY id ASC`).all();
+
+    return {
+        version: 1,
+        exported_at: new Date().toISOString(),
+        db_type: 'sqlite',
+        schema_version: schemaVersion,
+        tables: {
+            queue,
+            library,
+            settings,
+            events
+        }
+    };
+}
+
+async function importData(payload, options = {}, db = null) {
+    const active = db || await getDb();
+    const mode = options.mode === 'merge' ? 'merge' : 'replace';
+    const tables = payload?.tables || {};
+    const queueRows = Array.isArray(tables.queue) ? tables.queue : [];
+    const libraryRows = Array.isArray(tables.library) ? tables.library : [];
+    const settingsRows = Array.isArray(tables.settings) ? tables.settings : [];
+    const eventsRows = Array.isArray(tables.events) ? tables.events : [];
+
+    let imported = { queue: 0, library: 0, settings: 0, events: 0 };
+
+    active.exec('BEGIN IMMEDIATE');
+    try {
+        if (mode === 'replace') {
+            active.exec(`DELETE FROM queue; DELETE FROM library; DELETE FROM settings; DELETE FROM events;`);
+        }
+
+        const queueStmt = active.prepare(`
+            INSERT ${mode === 'merge' ? 'OR IGNORE' : 'OR REPLACE'} INTO queue (
+                gallery_id, url, title, status, batch, priority,
+                pages_done, pages_total, error, retries, created_at, updated_at, format
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `);
+        for (const r of queueRows) {
+            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
+            const url = r.url || `https://nhentai.net/g/${gid}/`;
+            const title = r.title || null;
+            const status = r.status || 'PENDING';
+            const batch = Number(r.batch || 1);
+            const priority = Number(r.priority || 0);
+            const pagesDone = Number(r.pages_done ?? r.pagesDone ?? 0);
+            const pagesTotal = Number(r.pages_total ?? r.pagesTotal ?? 0);
+            const error = r.error || null;
+            const retries = Number(r.retries || 0);
+            const createdAt = r.created_at || r.createdAt || new Date().toISOString();
+            const updatedAt = r.updated_at || r.updatedAt || new Date().toISOString();
+            const format = r.format || null;
+
+            const res = queueStmt.run(
+                gid, url, title, status, batch, priority,
+                pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format
+            );
+            if (res.changes > 0) imported.queue++;
+        }
+
+        const libStmt = active.prepare(`
+            INSERT INTO library (gallery_id, title, path, pages, format, language, artist, added_at, meta)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(gallery_id) DO ${mode === 'merge' ? 'NOTHING' : `UPDATE SET
+                title = excluded.title,
+                path = excluded.path,
+                pages = excluded.pages,
+                format = excluded.format,
+                language = excluded.language,
+                artist = excluded.artist,
+                added_at = excluded.added_at,
+                meta = excluded.meta`}
+        `);
+        for (const r of libraryRows) {
+            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
+            const title = r.title || 'Unknown';
+            const p = r.path || r.folder || '';
+            const pages = Number.isFinite(r.pages) ? r.pages : null;
+            const format = r.format || 'folder';
+            const language = r.language || r.lang || null;
+            const artist = r.artist || r.author || null;
+            const addedAt = r.added_at || r.addedAt || new Date().toISOString();
+            const meta = typeof r.meta === 'object' ? JSON.stringify(r.meta) : (r.meta || null);
+
+            const res = libStmt.run(gid, title, p, pages, format, language, artist, addedAt, meta);
+            if (res.changes > 0) imported.library++;
+        }
+
+        const setStmt = active.prepare(`
+            INSERT INTO settings (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO ${mode === 'merge' ? 'NOTHING' : 'UPDATE SET value = excluded.value'}
+        `);
+        for (const r of settingsRows) {
+            const key = String(r.key);
+            const val = typeof r.value === 'string' ? r.value : JSON.stringify(r.value);
+            const res = setStmt.run(key, val);
+            if (res.changes > 0) imported.settings++;
+        }
+
+        const evtStmt = active.prepare(`
+            INSERT INTO events (ts, level, gallery_id, message)
+            VALUES (?, ?, ?, ?)
+        `);
+        for (const r of eventsRows) {
+            const ts = r.ts || new Date().toISOString();
+            const level = r.level || 'info';
+            const gid = r.gallery_id ? normalizeGalleryId(r.gallery_id) : null;
+            const msg = String(r.message || '');
+            const res = evtStmt.run(ts, level, gid, msg);
+            if (res.changes > 0) imported.events++;
+        }
+
+        active.exec('COMMIT');
+    } catch (err) {
+        active.exec('ROLLBACK');
+        throw err;
+    }
+
+    const batchCount = Math.max(1, await getMaxBatch(active));
+    dbEvents.emit('item', { type: 'reordered', items: [], batchCount });
+
+    return {
+        success: true,
+        mode,
+        imported
+    };
+}
+
 module.exports = {
     DEFAULT_DB_PATH,
     dbEvents,
@@ -1076,5 +1211,7 @@ module.exports = {
     getAllSettings,
     migrateLegacyConfigJson,
     logEvent,
-    getEvents
+    getEvents,
+    exportData,
+    importData
 };

@@ -1106,3 +1106,190 @@ test('updateQueuePriority > 500 items: 1000-item #500 up/down/top/bottom, multi-
         await ctx.cleanup();
     }
 });
+
+test('Fase 7.4: exportData and importData preserves all tables and supports replace and merge modes', async () => {
+    const ctx1 = await createTempDb();
+    let exported = null;
+
+    try {
+        // 1. Seed data in ctx1
+        await dbMod.enqueueGallery({ galleryId: 740001, title: 'Item 1', status: 'PENDING', batch: 1 }, ctx1.db);
+        await dbMod.enqueueGallery({ galleryId: 740002, title: 'Item 2', status: 'DONE', batch: 2, pagesDone: 10, pagesTotal: 10 }, ctx1.db);
+        await dbMod.upsertLibraryEntry({ galleryId: 740002, title: 'Item 2 Lib', path: '/dummy/path', pages: 10, format: 'cbz' }, ctx1.db);
+        await dbMod.setSetting('testKey', { foo: 'bar', n: 42 }, ctx1.db);
+        await dbMod.logEvent({ level: 'info', message: 'Test event 7.4' }, ctx1.db);
+
+        // 2. Export from ctx1
+        exported = await dbMod.exportData(ctx1.db);
+        assert.strictEqual(exported.version, 1);
+        assert.strictEqual(exported.db_type, 'sqlite');
+        assert.ok(exported.schema_version >= 2);
+        assert.strictEqual(exported.tables.queue.length, 2);
+        assert.strictEqual(exported.tables.library.length, 1);
+        assert.ok(exported.tables.settings.some(s => s.key === 'testKey'));
+        assert.ok(exported.tables.events.some(e => e.message === 'Test event 7.4'));
+    } finally {
+        await ctx1.cleanup();
+    }
+
+    const ctx2 = await createTempDb();
+    try {
+        // 3. Import into empty ctx2 with mode 'replace'
+        const importRes = await dbMod.importData(exported, { mode: 'replace' }, ctx2.db);
+        assert.strictEqual(importRes.success, true);
+        assert.strictEqual(importRes.mode, 'replace');
+        assert.strictEqual(importRes.imported.queue, 2);
+        assert.strictEqual(importRes.imported.library, 1);
+
+        const qItems = await dbMod.getQueueItems({}, ctx2.db);
+        assert.strictEqual(qItems.length, 2);
+        assert.strictEqual(Number(qItems[0].gallery_id), 740001);
+
+        const libEntry = await dbMod.getLibraryEntry(740002, ctx2.db);
+        assert.ok(libEntry);
+        assert.strictEqual(libEntry.title, 'Item 2 Lib');
+
+        const settingVal = await dbMod.getSetting('testKey', null, ctx2.db);
+        assert.deepStrictEqual(settingVal, { foo: 'bar', n: 42 });
+
+        // 4. Test mode 'merge'
+        await dbMod.enqueueGallery({ galleryId: 740003, title: 'Item 3 in ctx2', status: 'PENDING', batch: 3 }, ctx2.db);
+        const mergeRes = await dbMod.importData(exported, { mode: 'merge' }, ctx2.db);
+        assert.strictEqual(mergeRes.success, true);
+        assert.strictEqual(mergeRes.mode, 'merge');
+
+        const qItemsMerged = await dbMod.getQueueItems({}, ctx2.db);
+        assert.strictEqual(qItemsMerged.length, 3, 'Merge mode must retain existing item 740003 and not delete it');
+    } finally {
+        await ctx2.cleanup();
+    }
+});
+
+test('Fase 7.4: backup management (createBackup, listBackups, restoreBackup, deleteBackup, 7-backup rotation)', async () => {
+    const ctx = await createTempDb();
+    const createdFiles = [];
+
+    try {
+        await dbMod.enqueueGallery({ galleryId: 750001, title: 'Backup Test Item' }, ctx.db);
+        await dbMod.setSetting('backupConfig', 'valid', ctx.db);
+
+        // Create 8 backups to test rotation (keep 7)
+        for (let i = 1; i <= 8; i++) {
+            const name = `nhdl-backup-test-rot-${String(i).padStart(2, '0')}.json`;
+            const b = await dbMod.createBackup(ctx.db, name);
+            createdFiles.push(b.filename);
+            await new Promise(r => setTimeout(r, 15));
+        }
+
+        const backups = dbMod.listBackups();
+        const testBackups = backups.filter(b => b.filename.startsWith('nhdl-backup-test-rot-'));
+        assert.strictEqual(testBackups.length, 7, 'Rotation must keep at most 7 latest backups');
+        assert.strictEqual(testBackups[0].filename, 'nhdl-backup-test-rot-08.json');
+
+        // Modify DB and restore from backup 08
+        await dbMod.deleteQueueItem(750001, ctx.db);
+        assert.strictEqual(await dbMod.getQueueItem(750001, ctx.db), null);
+
+        const restoreRes = await dbMod.restoreBackup('nhdl-backup-test-rot-08.json', 'replace', ctx.db);
+        assert.strictEqual(restoreRes.success, true);
+        const restoredItem = await dbMod.getQueueItem(750001, ctx.db);
+        assert.ok(restoredItem);
+        assert.strictEqual(restoredItem.title, 'Backup Test Item');
+
+        // Delete a backup
+        const delRes = dbMod.deleteBackup('nhdl-backup-test-rot-08.json');
+        assert.strictEqual(delRes.success, true);
+        const afterDelete = dbMod.listBackups().filter(b => b.filename === 'nhdl-backup-test-rot-08.json');
+        assert.strictEqual(afterDelete.length, 0);
+    } finally {
+        // Clean up any test backups created
+        for (const f of createdFiles) {
+            try { dbMod.deleteBackup(f); } catch (e) {}
+        }
+        await ctx.cleanup();
+    }
+});
+
+test('Fase 7.4: HTTP endpoints /api/db/* (info, export, backup, backups, restore, delete, import)', async () => {
+    const http = require('node:http');
+    const { createRequestHandler } = require('../server/index');
+    const ctx = await createTempDb();
+    const srv = http.createServer(createRequestHandler());
+
+    await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const port = srv.address().port;
+    const testBackupFiles = [];
+
+    const request = (method, urlPath, body = null, headers = {}) => {
+        return new Promise((resolve, reject) => {
+            const req = http.request(`http://127.0.0.1:${port}${urlPath}`, { method, headers }, (res) => {
+                let data = '';
+                res.on('data', chunk => { data += chunk.toString(); });
+                res.on('end', () => {
+                    let json = null;
+                    try { json = JSON.parse(data); } catch (e) {}
+                    resolve({ statusCode: res.statusCode, headers: res.headers, raw: data, json });
+                });
+            });
+            req.on('error', reject);
+            if (body) {
+                req.write(typeof body === 'string' ? body : JSON.stringify(body));
+            }
+            req.end();
+        });
+    };
+
+    try {
+        await dbMod.enqueueGallery({ galleryId: 760001, title: 'Endpoint Test Item' });
+
+        // 1. GET /api/db/info
+        const infoRes = await request('GET', '/api/db/info');
+        assert.strictEqual(infoRes.statusCode, 200);
+        assert.ok(infoRes.json.type === 'sqlite' || infoRes.json.type === 'postgres');
+        assert.strictEqual(typeof infoRes.json.connected, 'boolean');
+
+        // 2. GET /api/db/export
+        const expRes = await request('GET', '/api/db/export');
+        assert.strictEqual(expRes.statusCode, 200);
+        assert.match(expRes.headers['content-disposition'], /nhdl-export-.*\.json/);
+        assert.ok(expRes.json.tables.queue.some(q => Number(q.gallery_id) === 760001));
+
+        // 3. POST /api/db/backup
+        const bName = 'nhdl-backup-test-api.json';
+        testBackupFiles.push(bName);
+        const bkRes = await request('POST', '/api/db/backup', JSON.stringify({ name: bName }), { 'Content-Type': 'application/json' });
+        assert.strictEqual(bkRes.statusCode, 200);
+        assert.strictEqual(bkRes.json.success, true);
+        assert.strictEqual(bkRes.json.filename, bName);
+
+        // 4. GET /api/db/backups
+        const bksRes = await request('GET', '/api/db/backups');
+        assert.strictEqual(bksRes.statusCode, 200);
+        assert.ok(bksRes.json.backups.some(b => b.filename === bName));
+
+        // 5. POST /api/db/restore
+        const restRes = await request('POST', '/api/db/restore', JSON.stringify({ filename: bName, mode: 'replace' }), { 'Content-Type': 'application/json' });
+        assert.strictEqual(restRes.statusCode, 200);
+        assert.strictEqual(restRes.json.success, true);
+
+        // 6. DELETE /api/db/backups/:name
+        const delRes = await request('DELETE', `/api/db/backups/${bName}`);
+        assert.strictEqual(delRes.statusCode, 200);
+        assert.strictEqual(delRes.json.success, true);
+
+        // 7. POST /api/db/import
+        const impRes = await request('POST', '/api/db/import', JSON.stringify({
+            mode: 'merge',
+            data: expRes.json
+        }), { 'Content-Type': 'application/json' });
+        assert.strictEqual(impRes.statusCode, 200);
+        assert.strictEqual(impRes.json.success, true);
+    } finally {
+        for (const f of testBackupFiles) {
+            try { dbMod.deleteBackup(f); } catch (e) {}
+        }
+        await new Promise(r => srv.close(r));
+        await ctx.cleanup();
+    }
+});
+
