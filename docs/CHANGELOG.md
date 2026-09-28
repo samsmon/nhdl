@@ -9,6 +9,17 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **7.6 Tab Database di Modal Settings Web UI (`webui/src/lib/components/FolderPickerModal.svelte`, `webui/src/lib/api.js`)**:
+  - Tambahkan fungsi klien API di `webui/src/lib/api.js` untuk `/api/db/info`, `/api/db/backups`, `/api/db/backup`, `/api/db/restore`, `/api/db/backups/:name`, dan `/api/db/import`.
+  - Tambahkan navigasi tab di modal Settings (`FolderPickerModal.svelte`): tab `General & Downloads` (format simpan, batch behavior, API key, penjelajah folder unduhan) dan tab `Database`.
+  - Implementasikan tab `Database`:
+    - Header info database aktif dengan badge status koneksi (`Connected` / `Disconnected`), tipe engine (SQLite / PostgreSQL), dan detail path file (SQLite) atau host:port/database dengan sensor kredensial (PostgreSQL).
+    - Tombol aksi instan: `Export DB` (download langsung file JSON lintas database) dan `Backup Now` (pembuatan snapshot backup instan ke `data/backups/`).
+    - Area `Import Database` dengan drop zone drag-and-drop / file picker untuk file JSON, selektor mode `Merge (Skip duplicates)` vs `Replace all data`, dialog peringatan bahaya overwrite data, serta checkbox konfirmasi keamanan sebelum eksekusi.
+    - Daftar backup lokal di `data/backups/` dengan informasi nama file, ukuran, tanggal, tombol `Restore` (dengan konfirmasi keamanan), dan tombol `Delete`.
+    - Integrasi penuh dengan notifikasi Toast (`appStore.showToast`), ARIA accessibility, dan Svelte 5 runes (`npm run build:ui` 0 warning, 31/31 test lulus).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **7.5 Migrasi Otomatis SQLite ke PostgreSQL pada Startup (`core/db/auto-migrate.js`, `core/db.js`)**:
   - Implementasikan modul deteksi dan migrasi otomatis `core/db/auto-migrate.js` saat NHDL berjalan dengan PostgreSQL (`DATABASE_URL`).
   - Bila instance PostgreSQL masih kosong (tabel `queue` dan `library` sama-sama memiliki 0 baris) dan file database lokal `data/nhdl.db` memiliki data, sistem otomatis mengekspor seluruh data SQLite (`queue`, `library`, `settings`, `events`) dan mengimpornya ke PostgreSQL menggunakan mode `replace` dalam satu transaksi.

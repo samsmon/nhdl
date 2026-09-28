@@ -209,3 +209,52 @@ export async function logout() {
   });
   return data;
 }
+
+export async function fetchDbInfo() {
+  const { data } = await requestJson('/api/db/info');
+  return data;
+}
+
+export async function fetchDbBackups() {
+  const { data } = await requestJson('/api/db/backups');
+  return data?.backups || [];
+}
+
+export async function createDbBackup() {
+  const { ok, data } = await requestJson('/api/db/backup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({})
+  });
+  if (!ok) throw new Error(data?.error || 'Failed to create backup');
+  return data;
+}
+
+export async function restoreDbBackup(filename, mode = 'replace') {
+  const { ok, data } = await requestJson('/api/db/restore', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ filename, mode })
+  });
+  if (!ok) throw new Error(data?.error || 'Failed to restore backup');
+  return data;
+}
+
+export async function deleteDbBackup(filename) {
+  const { ok, data } = await requestJson(`/api/db/backups/${encodeURIComponent(filename)}`, {
+    method: 'DELETE'
+  });
+  if (!ok) throw new Error(data?.error || 'Failed to delete backup');
+  return data;
+}
+
+export async function importDbData(dataPayload, mode = 'merge') {
+  const { ok, data } = await requestJson('/api/db/import', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mode, data: dataPayload })
+  });
+  if (!ok) throw new Error(data?.error || 'Failed to import database');
+  return data;
+}
+
