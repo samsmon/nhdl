@@ -1363,9 +1363,12 @@ test('Fase 7.5: autoMigrateSqliteToPostgres transfers data when Postgres is empt
             }
         };
 
+        let createdPreMigBackup = null;
         try {
             const res = await dbMod.autoMigrateSqliteToPostgres(mockPoolEmpty, { sqlitePath: mockSqlitePath });
             assert.ok(res.migrated);
+            assert.ok(res.preMigrationBackup, 'preMigrationBackup should be generated');
+            createdPreMigBackup = res.preMigrationBackup;
             assert.strictEqual(res.imported.queue, 1);
             assert.strictEqual(res.imported.library, 1);
             assert.strictEqual(importedOptions.mode, 'replace');
@@ -1388,6 +1391,9 @@ test('Fase 7.5: autoMigrateSqliteToPostgres transfers data when Postgres is empt
             assert.strictEqual(res3, false, 'Must not migrate if Postgres is non-empty');
         } finally {
             postgresAdapter.importData = origImportData;
+            if (createdPreMigBackup) {
+                try { dbMod.deleteBackup(createdPreMigBackup); } catch (e) {}
+            }
         }
     } finally {
         try { fs.unlinkSync(mockSqlitePath); } catch (e) {}
@@ -1997,6 +2003,117 @@ test('Point 4: automated backup scheduling, retention rotation, NHDL_BACKUP_DIR 
         try { fs.rmSync(tmpBackupDir, { recursive: true, force: true }); } catch (e) {}
         await new Promise(r => srv.close(r));
         await ctx.cleanup();
+    }
+});
+
+test('Point 5: autoMigrateSqliteToPostgres writes pre-migration backup before Postgres import, aborts and leaves SQLite un-renamed if backup fails', async () => {
+    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-mig-test-'));
+    const mockSqlitePath = path.join(tmpDir, 'source.db');
+    const customBackupDir = path.join(tmpDir, 'backups');
+    fs.mkdirSync(customBackupDir, { recursive: true });
+
+    const { DatabaseSync } = require('node:sqlite');
+    const sDb = new DatabaseSync(mockSqlitePath);
+    sDb.exec(`
+        CREATE TABLE schema_version (version INTEGER NOT NULL);
+        INSERT INTO schema_version (version) VALUES (2);
+        CREATE TABLE queue (
+            id INTEGER PRIMARY KEY,
+            gallery_id INTEGER NOT NULL UNIQUE,
+            url TEXT NOT NULL,
+            title TEXT,
+            status TEXT NOT NULL DEFAULT 'PENDING',
+            batch INTEGER NOT NULL DEFAULT 1,
+            priority INTEGER NOT NULL DEFAULT 0,
+            pages_done INTEGER NOT NULL DEFAULT 0,
+            pages_total INTEGER NOT NULL DEFAULT 0,
+            error TEXT,
+            retries INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL DEFAULT (datetime('now')),
+            updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+            format TEXT
+        );
+        CREATE TABLE library (
+            gallery_id INTEGER PRIMARY KEY,
+            title TEXT NOT NULL,
+            path TEXT NOT NULL,
+            pages INTEGER,
+            format TEXT,
+            language TEXT,
+            artist TEXT,
+            added_at TEXT NOT NULL DEFAULT (datetime('now')),
+            meta TEXT
+        );
+        CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE events (id INTEGER PRIMARY KEY, ts TEXT NOT NULL, level TEXT NOT NULL, gallery_id INTEGER, message TEXT NOT NULL);
+
+        INSERT INTO queue (gallery_id, url, title, status) VALUES (99901, 'https://certain.site/g/99901/', 'Mig Test Title', 'PENDING');
+        INSERT INTO library (gallery_id, title, path) VALUES (99901, 'Mig Test Lib Title', '/tmp/path99901');
+    `);
+    sDb.close();
+
+    const postgresAdapter = require('../core/db/postgres');
+    const origImportData = postgresAdapter.importData;
+    let importCalled = false;
+    postgresAdapter.importData = async (data, opts) => {
+        importCalled = true;
+        return {
+            success: true,
+            imported: { queue: data.tables.queue.length, library: data.tables.library.length, settings: 0, events: 0 }
+        };
+    };
+
+    const mockPoolEmpty = {
+        async query(sql) {
+            if (sql.includes('FROM queue') || sql.includes('FROM library')) {
+                return { rows: [{ cnt: 0 }] };
+            }
+            return { rows: [] };
+        }
+    };
+
+    try {
+        // Case 1: Failure during backup creation -> should abort migration, not call importData, and not rename SQLite
+        // Create a regular file where the backup directory should be, making mkdirSync/writeFileSync fail
+        const invalidBackupDir = path.join(tmpDir, 'file-as-dir');
+        fs.writeFileSync(invalidBackupDir, 'blocking-file');
+
+        importCalled = false;
+        const failedRes = await dbMod.autoMigrateSqliteToPostgres(mockPoolEmpty, {
+            sqlitePath: mockSqlitePath,
+            backupDir: path.join(invalidBackupDir, 'subfolder') // cannot create subdirectory inside a plain file
+        });
+
+        assert.strictEqual(failedRes, false, 'Auto-migration must return false when backup creation fails');
+        assert.strictEqual(importCalled, false, 'postgresAdapter.importData must not be called if backup fails');
+        assert.strictEqual(fs.existsSync(mockSqlitePath), true, 'SQLite file must NOT be renamed if backup fails');
+        assert.strictEqual(fs.existsSync(`${mockSqlitePath}.migrated`), false, '.migrated file must not exist');
+
+        // Case 2: Success -> pre-migration backup is created before import and rename
+        importCalled = false;
+        const successRes = await dbMod.autoMigrateSqliteToPostgres(mockPoolEmpty, {
+            sqlitePath: mockSqlitePath,
+            backupDir: customBackupDir
+        });
+
+        assert.ok(successRes.migrated, 'Auto-migration should succeed');
+        assert.strictEqual(importCalled, true, 'importData must be called after backup succeeds');
+        assert.strictEqual(fs.existsSync(mockSqlitePath), false, 'Original SQLite file must have been renamed');
+        assert.strictEqual(fs.existsSync(`${mockSqlitePath}.migrated`), true, '.migrated file must exist');
+
+        // Verify pre-migration backup exists in customBackupDir and contains the data
+        assert.ok(successRes.preMigrationBackup, 'Result must contain preMigrationBackup filename');
+        const backupFullPath = path.join(customBackupDir, successRes.preMigrationBackup);
+        assert.strictEqual(fs.existsSync(backupFullPath), true, 'Pre-migration backup file must exist on disk');
+
+        const backupContent = JSON.parse(fs.readFileSync(backupFullPath, 'utf8'));
+        assert.strictEqual(backupContent.format, 'nhdl-export');
+        assert.strictEqual(backupContent.version, 1);
+        assert.ok(backupContent.tables.queue.some(q => Number(q.gallery_id) === 99901));
+        assert.ok(backupContent.tables.library.some(l => Number(l.gallery_id) === 99901));
+    } finally {
+        postgresAdapter.importData = origImportData;
+        try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
     }
 });
 

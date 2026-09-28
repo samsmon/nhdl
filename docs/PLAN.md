@@ -215,3 +215,4 @@ Task:
 | 2026-09-28 | 7 | Proteksi 409 saat import/restore ketika engine berjalan atau ada item ON_PROGRESS, UI tombol Pause Engine, kontrak docs/API.md — 35/35 test lulus |
 | 2026-09-28 | 7 | Auto backup pre-import nhdl-backup-pre-import-<ts>.json sebelum import/restore mode replace, batalkan jika backup gagal, tampilkan di response dan UI — 36/36 test lulus |
 | 2026-09-28 | 7 | Otomatisasi backup: penjadwalan via DB settings (backupIntervalHours, backupKeep, lastBackupAt), rotasi file lama, override direktori NHDL_BACKUP_DIR, retry tiap 10m saat gagal, UI konfigurasi jadwal dan estimasi backup berikutnya — 37/37 test lulus |
+| 2026-09-28 | 7 | Auto-migrate backup: tulis backup JSON dari SQLite ke folder backup sebelum impor Postgres, batalkan migrasi dan jangan rename SQLite jika backup gagal — 38/38 test lulus |

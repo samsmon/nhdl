@@ -3,6 +3,7 @@ const path = require('path');
 const { DatabaseSync } = require('node:sqlite');
 const sqliteAdapter = require('./sqlite');
 const postgresAdapter = require('./postgres');
+const { getBackupDir, rotateBackups } = require('./backup');
 
 async function autoMigrateSqliteToPostgres(postgresPool, options = {}) {
     const sqlitePath = options.sqlitePath || sqliteAdapter.DEFAULT_DB_PATH;
@@ -41,6 +42,31 @@ async function autoMigrateSqliteToPostgres(postgresPool, options = {}) {
 
         if (!hasData || !exported) return false;
 
+        // Write pre-migration backup JSON from SQLite before importing to Postgres
+        let preMigrationBackup = null;
+        try {
+            const backupDir = options.backupDir || getBackupDir();
+            if (!fs.existsSync(backupDir)) {
+                fs.mkdirSync(backupDir, { recursive: true });
+            }
+            const pad = (n) => String(n).padStart(2, '0');
+            const now = new Date();
+            const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+            let filename = `nhdl-backup-pre-migration-${ts}.json`;
+            let backupPath = path.join(backupDir, filename);
+            if (fs.existsSync(backupPath)) {
+                filename = `nhdl-backup-pre-migration-${ts}-${now.getMilliseconds()}.json`;
+                backupPath = path.join(backupDir, filename);
+            }
+            fs.writeFileSync(backupPath, JSON.stringify(exported, null, 2), 'utf8');
+            preMigrationBackup = filename;
+            rotateBackups();
+            console.log(`[+] Pre-migration backup created: ${filename}`);
+        } catch (backupErr) {
+            console.error(`[!] Pre-migration backup failed: ${backupErr.message}. Aborting auto-migration.`);
+            return false;
+        }
+
         // Import into Postgres
         const importRes = await postgresAdapter.importData(exported, { mode: 'replace' }, postgresPool);
 
@@ -67,7 +93,8 @@ async function autoMigrateSqliteToPostgres(postgresPool, options = {}) {
         return {
             migrated: true,
             imported: importRes.imported,
-            migratedPath
+            migratedPath,
+            preMigrationBackup
         };
     } catch (err) {
         console.warn(`[!] Auto-migration check failed: ${err.message}`);

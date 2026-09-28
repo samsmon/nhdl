@@ -9,6 +9,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Backup Pre-Migration Otomatis pada Auto-Migrate SQLite ke Postgres (`core/db/auto-migrate.js`, `test/db.test.js`)**:
+  - Sebelum data SQLite diimpor ke PostgreSQL via mode replace, sistem membuat file backup JSON `nhdl-backup-pre-migration-<ts>.json` di direktori folder backup aktif (`data/backups/` atau `NHDL_BACKUP_DIR`).
+  - Jika pembuatan backup gagal, proses migrasi otomatis langsung dibatalkan (`return false`), data tidak diimpor ke PostgreSQL, dan file basis data SQLite asli tidak diubah namanya ke `.migrated`.
+  - Mengembalikan properti `preMigrationBackup` pada hasil migrasi dan memangkas retensi backup lama via `rotateBackups()`.
+  - Tambahkan unit/integration test di `test/db.test.js` yang memverifikasi pembuatan file backup pre-migration, validitas format JSON, serta pembatalan migrasi tanpa merusak/mengubah nama file SQLite ketika backup gagal (38/38 test lulus).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Otomatisasi Backup & Penjadwalan Database (`core/db/backup.js`, `core/db.js`, `server/index.js`, `docs/API.md`, `webui/src/lib/components/FolderPickerModal.svelte`, `webui/src/lib/api.js`, `test/db.test.js`)**:
   - Konfigurasi jadwal backup otomatis via DB settings: `backupIntervalHours` (default 24 jam, 0 = dinonaktifkan), `backupKeep` (default 7 file retensi).
   - Simpan timestamp pencadangan terakhir di tabel `settings` (`lastBackupAt`) agar jadwal tidak reset setiap kali server/kontainer di-restart.
