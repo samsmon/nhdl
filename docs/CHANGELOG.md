@@ -8,6 +8,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-28 · AI (Claude Code, Opus 5.5) · Rilis
+- Merge `rework` ke `main` (fast-forward): Fase 1 (SQLite), Fase 2 (SSE + pengaman folder download), dan Fase 3 (fondasi frontend Svelte 5) kini ada di `main`.
+- Sebelum merge sudah direview: 20/20 test lulus, uji UI 1000 item di browser (SSE real-time di dua tab, tanpa polling), dan skenario disk terlambat ter-mount pulih otomatis tanpa kehilangan data.
+
+## 2026-09-28 · Manual (Maja) · Rilis
+- Menguji `rework` di laptop, lalu menyetujui merge ke `main`.
+
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 2 (A1 Regression Fix)
 - **Perbaikan bug auto-recovery `downloadDirUnavailable` (`core/engine.js`)**: pisahkan flag boolean `this.downloadDirUnavailable` dari teks `this.statusReason` sehingga watcher pemulihan tetap berjalan saat `markDownloadDirUnavailable(reason)` dipanggil dengan alasan spesifik dari `rescanLibrary()` (mis. `"Download folder is empty while library has entries"` atau `"More than 50% of library entries missing"`). Saat folder terdeteksi sehat, `checkDownloadDirRecovery()` menjalankan ulang `rescanLibrary(this.baseDownloadDir)` terlebih dahulu dan hanya menghapus flag/status serta menjalankan `requeueFailedItems()` + `runBatch()` apabila rescan tidak `aborted` (total 20/20 test lulus).
 - **Perbaikan regresi A1 (`DOWNLOAD_DIR` baru & auto-recovery 60 detik)**: bila tabel `library` belum memiliki entri aktif (selain `skipped`), buat folder download otomatis (`fs.mkdirSync(..., { recursive: true })`) di constructor `DownloaderEngine`, `_runBatchBody` (`core/engine.js`), maupun `rescanLibrary` (`core/tracker.js`) sehingga instalasi baru dengan `DOWNLOAD_DIR` kustom langsung berjalan. Bila `library` sudah memiliki entri aktif dan folder belum ter-mount/tidak sehat, folder tetap tidak dibuat (`Download folder unavailable`) dan timer pengecekan otomatis setiap 60 detik (`healthCheckIntervalMs`) akan memulihkan status, mencatat event di tabel `events`, serta menjalankan antrian kembali (`runBatch`) begitu disk ter-mount.
