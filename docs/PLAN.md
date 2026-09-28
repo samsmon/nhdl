@@ -153,7 +153,7 @@ Keputusan:
 
 Task:
 - [x] Ubah API `core/db.js` menjadi async (semua fungsi mengembalikan Promise) dan sesuaikan pemanggil di `core/` dan `server/`. SQLite tetap di belakangnya. **Ini langkah terbesar karena `node:sqlite` sinkron sedangkan `pg` async**
-- [ ] Pisahkan adapter: `core/db/sqlite.js` dan `core/db/postgres.js` dengan antarmuka yang sama; `core/db.js` memilih berdasarkan `DATABASE_URL`
+- [x] Pisahkan adapter: `core/db/sqlite.js` dan `core/db/postgres.js` dengan antarmuka yang sama; `core/db.js` memilih berdasarkan `DATABASE_URL`
 - [ ] Skema dan migrasi versi PostgreSQL: `datetime('now')` → `now()`/`timestamptz`, `INTEGER PRIMARY KEY` → `bigserial`/`identity`, `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`, `PRAGMA table_info` → `information_schema`
 - [ ] Koneksi: pool, retry saat Postgres belum siap waktu container start, pesan error yang jelas kalau `DATABASE_URL` salah
 - [ ] Endpoint (catat dulu di `docs/API.md`): `GET /api/db/export` (download JSON), `POST /api/db/import` (upload JSON; mode *replace* atau *merge*, dalam satu transaksi), `POST /api/db/backup` + `GET /api/db/backups` (backup terjadwal/manual ke folder `data/backups/`, simpan N terakhir)
@@ -204,3 +204,4 @@ Task:
 | 2026-09-28 | 4 | Perbaikan bug event SSE `reordered` hilang data (`server/index.js` `onDbItem`): teruskan semua field event ke payload SSE kecuali `rawRow`, pastikan tabel langsung terurut ulang saat kolom `#` aktif dan seleksi tetap menempel ke item yang sama, serta uji level SSE di `test/sse.test.js` (27/27 test lulus) |
 | 2026-09-28 | 5 & 6 | TASK 0: Fase 5 selesai ditandai [x] (5000 item ±700 elemen DOM, kembali ke filter "All" 15ms, filter 4–16ms, payload SSE ±250B vs ±245KB/s). Fase 6 (Go) dibatalkan [-] karena bottleneck di frontend sudah tuntas dan backend Node tidak menjadi masalah |
 | 2026-09-28 | 7 | 7.1: Konversi seluruh API `core/db.js` ke Promise/async, sesuaikan seluruh pemanggil di `core/` (`engine.js`, `tracker.js`, `logger.js`), `server/index.js`, scripts, dan test — 27/27 test lulus, `npm run build:ui` 0 warning |
+| 2026-09-28 | 7 | 7.2: Pisahkan adapter database `core/db/sqlite.js` dan `core/db/postgres.js`, dispatch di `core/db.js` berdasarkan `DATABASE_URL`, install `pg` — 27/27 test lulus, `npm run build:ui` 0 warning |

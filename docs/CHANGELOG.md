@@ -9,6 +9,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **7.2 Pemisahan Adapter Database (`core/db/sqlite.js` & `core/db/postgres.js`)**:
+  - Pasang dependency runtime `pg` untuk koneksi PostgreSQL (satu-satunya pengecualian runtime backend).
+  - Ekstrak implementasi SQLite ke `core/db/sqlite.js`, buat struktur adapter PostgreSQL di `core/db/postgres.js`, dan buat modul bersama `core/db/events.js` (EventEmitter) serta `core/db/common.js` (`normalizeGalleryId`, `formatQueueRow`, `maskDatabaseUrl`).
+  - Ubah `core/db.js` menjadi dispatcher yang mendeteksi `DATABASE_URL` atau opsi eksplisit `initDb()`, mengekspor antarmuka konsisten untuk seluruh operasi antrian, pustaka, pengaturan, dan log aktivitas.
+  - Seluruh test (27/27) lulus dan build UI selesai dengan 0 warning.
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **7.1 Konversi API `core/db.js` menjadi Async**:
   - Konversi seluruh fungsi yang diekspor dari `core/db.js` agar mengembalikan Promise (`async`/`await`), termasuk fungsi pembacaan, penulisan, migrasi skema, import/export list text, helper settings, dan query events.
   - Sesuaikan seluruh modul pemanggil di `core/logger.js`, `core/tracker.js`, `core/engine.js`, `server/index.js`, dan `scripts/find-bad-archives.js` agar me-`await` pemanggilan DB secara konsisten tanpa ada unhandled rejection atau Promise menggantung.
