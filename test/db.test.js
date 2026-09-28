@@ -712,3 +712,119 @@ test('A1 regression fix: empty library creates missing DOWNLOAD_DIR and processe
         ctx.cleanup();
     }
 });
+
+test('Auto-recovery with downloadDirUnavailable flag: recovers from empty folder and >50% missing reasons without losing library entries or resetting DONE items', async () => {
+    const ctx = createTempDb();
+    const DownloaderEngine = require('../core/engine');
+    const { rescanLibrary } = require('../core/tracker');
+    const mntDir = path.join(path.dirname(ctx.dbPath), 'mnt');
+    fs.mkdirSync(mntDir, { recursive: true });
+
+    try {
+        // Seed 12 library entries (.cbz) and 12 DONE queue items pointing inside mntDir (while mntDir is currently empty)
+        const cbzPaths = [];
+        for (let i = 1; i <= 12; i++) {
+            const gid = 920000 + i;
+            const p = path.join(mntDir, `Gallery_${gid}.cbz`);
+            cbzPaths.push({ gid, path: p });
+            dbMod.upsertLibraryEntry({
+                galleryId: gid,
+                title: `Gallery ${gid}`,
+                format: 'cbz',
+                path: p,
+                pages: 20,
+                skipped: false
+            }, ctx.db);
+            dbMod.enqueueGallery({
+                galleryId: gid,
+                status: 'DONE',
+                pagesDone: 20,
+                pagesTotal: 20,
+                batch: 1
+            }, ctx.db);
+        }
+
+        const eng = new DownloaderEngine({
+            baseDownloadDir: mntDir,
+            skipStartupJitter: true,
+            healthCheckIntervalMs: 25
+        });
+
+        // 1. Folder exists but is empty while library has 12 entries -> rescanLibrary aborts with specific reason
+        const rescanEmpty = rescanLibrary(mntDir);
+        assert.strictEqual(rescanEmpty.aborted, true);
+        assert.strictEqual(rescanEmpty.reason, 'Download folder is empty while library has entries');
+        eng.markDownloadDirUnavailable(rescanEmpty.reason);
+
+        // Wait several watcher ticks while folder is still empty
+        await new Promise(r => setTimeout(r, 90));
+
+        // Must remain unavailable and watcher must NOT have stopped on tick 1!
+        assert.strictEqual(eng.downloadDirUnavailable, true);
+        assert.strictEqual(eng.getStatus(), 'Download folder is empty while library has entries');
+        assert.notStrictEqual(eng._downloadDirWatchTimer, null, 'Watcher timer must keep running while folder is empty');
+        assert.strictEqual(dbMod.getAllLibraryEntries(ctx.db).length, 12, 'No library entry should be deleted while disk is unmounted');
+        assert.strictEqual(dbMod.getQueueItems({ status: 'DONE' }, ctx.db).length, 12, 'No DONE queue item should be reset to PENDING');
+
+        // 2. Write only 5 of 12 files (7/12 = 58.3% still missing, >50% threshold)
+        for (let i = 0; i < 5; i++) {
+            fs.writeFileSync(cbzPaths[i].path, 'PK\x03\x04cbz');
+            fs.writeFileSync(`${cbzPaths[i].path}.nhdl-id`, String(cbzPaths[i].gid));
+        }
+
+        const rescanPartial = rescanLibrary(mntDir);
+        assert.strictEqual(rescanPartial.aborted, true);
+        assert.ok(rescanPartial.reason.includes('More than 50% of library entries missing'));
+        eng.markDownloadDirUnavailable(rescanPartial.reason);
+
+        await new Promise(r => setTimeout(r, 90));
+        assert.strictEqual(eng.downloadDirUnavailable, true);
+        assert.ok(eng.getStatus().includes('More than 50% of library entries missing'));
+        assert.notStrictEqual(eng._downloadDirWatchTimer, null, 'Watcher timer must keep running when >50% files are missing');
+        assert.strictEqual(dbMod.getAllLibraryEntries(ctx.db).length, 12);
+        assert.strictEqual(dbMod.getQueueItems({ status: 'DONE' }, ctx.db).length, 12);
+
+        // 3. Restore the remaining 7 files and enqueue 1 PENDING item to verify auto-run on recovery
+        dbMod.enqueueGallery({ galleryId: 920099, status: 'PENDING', batch: 1 }, ctx.db);
+        const processedAfterRecovery = [];
+        eng.processGallery = async (galleryId) => {
+            const numId = Number(galleryId);
+            processedAfterRecovery.push(numId);
+            const p = path.join(mntDir, `Gallery_${numId}.cbz`);
+            fs.writeFileSync(p, 'PK\x03\x04cbz');
+            fs.writeFileSync(`${p}.nhdl-id`, String(numId));
+            dbMod.upsertLibraryEntry({ galleryId: numId, title: `Gallery ${numId}`, format: 'cbz', path: p, pages: 10 }, ctx.db);
+            dbMod.updateQueueStatus(numId, 'DONE', { pagesDone: 10, pagesTotal: 10 }, ctx.db);
+            return { status: 'SUCCESS', numPages: 10, skipped: false };
+        };
+
+        for (let i = 5; i < 12; i++) {
+            fs.writeFileSync(cbzPaths[i].path, 'PK\x03\x04cbz');
+            fs.writeFileSync(`${cbzPaths[i].path}.nhdl-id`, String(cbzPaths[i].gid));
+        }
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for recovery from >50% missing')), 2000);
+            const check = setInterval(() => {
+                const q99 = dbMod.getQueueItem(920099, ctx.db);
+                if (!eng.downloadDirUnavailable && eng._downloadDirWatchTimer === null && q99 && q99.status === 'DONE' && !eng.isRunning) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 15);
+        });
+
+        assert.strictEqual(eng.downloadDirUnavailable, false);
+        assert.strictEqual(eng.statusReason, null);
+        assert.strictEqual(eng._downloadDirWatchTimer, null);
+        assert.strictEqual(eng.getStatus(), 'IDLE');
+        assert.deepStrictEqual(processedAfterRecovery, [920099]);
+        assert.strictEqual(dbMod.getAllLibraryEntries(ctx.db).length, 13);
+        assert.strictEqual(dbMod.getQueueItems({ status: 'DONE' }, ctx.db).length, 13);
+    } finally {
+        try { fs.rmSync(mntDir, { recursive: true, force: true }); } catch (e) {}
+        ctx.cleanup();
+    }
+});
+

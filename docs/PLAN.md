@@ -112,7 +112,7 @@ Task:
 - [x] Endpoint SSE `/api/events`: snapshot awal + event delta (`item`, `progress`, `engine`)
 - [x] `/api/status` tetap ada untuk kompatibilitas sampai frontend pindah
 - [x] Test untuk endpoint SSE: snapshot awal + event delta setelah `UPDATE` di `queue`
-- [x] **A1 (Review)**: Pengaman folder download tidak ter-mount (`isDownloadDirHealthy(dir)`, batalkan `rescanLibrary()` bila folder tidak ada/kosong atau >50% dari ≥10 entri hilang, lewati pre-pass `DONE→PENDING` di `_runBatchBody`, set status `Download folder unavailable` + SSE event; buat folder otomatis saat `library` kosong + auto-recovery tiap 60 detik saat disk ter-mount kembali)
+- [x] **A1 (Review)**: Pengaman folder download tidak ter-mount (`isDownloadDirHealthy(dir)`, batalkan `rescanLibrary()` bila folder tidak ada/kosong atau >50% dari ≥10 entri hilang, lewati pre-pass `DONE→PENDING` di `_runBatchBody`, set flag `downloadDirUnavailable` + teks `statusReason` + SSE event; buat folder otomatis saat `library` kosong + auto-recovery tiap 60 detik via `rescanLibrary()` saat disk ter-mount kembali)
 - [x] **A2 (Review)**: Isolasi `initDb()` dari `config.json` asli saat test (`legacyConfigPath` / `NHDL_LEGACY_CONFIG`)
 - [x] **A3 (Review)**: Unit test pre-pass `_runBatchBody` (`DONE` tanpa file → `PENDING`, `DONE` valid tetap `DONE`, `ERROR` `retries < 5` diproses ulang)
 
@@ -189,3 +189,4 @@ Task:
 | 2026-09-27 | 2 | Perbaikan review Bagian A selesai: A1 (`isDownloadDirHealthy` + proteksi unmounted drive), A2 (isolasi `legacyConfigPath`), A3 (unit test pre-pass `_runBatchBody`) — 17/17 test lulus |
 | 2026-09-27 | 3 | Fase 3 selesai: refactor `webui/` ke Svelte 5 runes + store `SvelteMap` + klien SSE (`/api/events`), pecah `App.svelte` ke 10 komponen, optimasi list 1.000 item (SSE delta `250B` vs `/api/status` `245KB`, sync 2 tab `19.9ms`) — 18/18 test lulus |
 | 2026-09-28 | 2 | Perbaikan regresi A1: buat `DOWNLOAD_DIR` otomatis bila `library` kosong, pertahankan proteksi bila `library` punya entri, dan tambah pengecekan ulang otomatis tiap 60 detik saat `Download folder unavailable` — 19/19 test lulus |
+| 2026-09-28 | 2 | Perbaikan bug auto-recovery: pisahkan flag boolean `downloadDirUnavailable` dari teks `statusReason` dan jalankan `rescanLibrary()` saat recovery agar alasan spesifik (`empty folder` / `>50% missing`) tetap memicu auto-recovery — 20/20 test lulus |
