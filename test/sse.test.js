@@ -588,5 +588,147 @@ test('Fase 4 verification: 5000-item mixed status DB, virtual window & filter/so
     }
 });
 
+test('SSE level: POST /api/queue/priority (up and top) emits item event type reordered with items [{galleryId, priority}], and payload never contains rawRow', async () => {
+    const env = createTempEnv();
+    const srv = http.createServer(createRequestHandler());
+
+    await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const port = srv.address().port;
+
+    const requestJson = (method, urlPath, payload) => new Promise((resolve, reject) => {
+        const req = http.request(
+            `http://127.0.0.1:${port}${urlPath}`,
+            {
+                method,
+                headers: payload ? { 'Content-Type': 'application/json' } : {}
+            },
+            (res) => {
+                let body = '';
+                res.setEncoding('utf8');
+                res.on('data', c => { body += c; });
+                res.on('end', () => resolve({ statusCode: res.statusCode, data: JSON.parse(body) }));
+            }
+        );
+        req.on('error', reject);
+        if (payload) req.write(JSON.stringify(payload));
+        req.end();
+    });
+
+    let clientReq;
+    try {
+        engine.isRunning = true; // prevent autoProcessQueue
+        enqueueGallery({ galleryId: 750001, title: 'Item 1', status: 'PENDING', batch: 1 });
+        enqueueGallery({ galleryId: 750002, title: 'Item 2', status: 'PENDING', batch: 1 });
+        enqueueGallery({ galleryId: 750003, title: 'Item 3', status: 'PENDING', batch: 1 });
+
+        const receivedEvents = [];
+        await new Promise((resolve, reject) => {
+            clientReq = http.get(`http://127.0.0.1:${port}/api/events`, (res) => {
+                res.setEncoding('utf8');
+                let buf = '';
+                res.on('data', (chunk) => {
+                    buf += chunk;
+                    const blocks = buf.split('\n\n');
+                    buf = blocks.pop();
+                    for (const block of blocks) {
+                        const lines = block.split('\n').filter(Boolean);
+                        let evName = 'message';
+                        let dataStr = '';
+                        for (const line of lines) {
+                            if (line.startsWith('event: ')) evName = line.slice(7).trim();
+                            else if (line.startsWith('data: ')) dataStr += line.slice(6);
+                        }
+                        if (dataStr) {
+                            const parsed = JSON.parse(dataStr);
+                            receivedEvents.push({ event: evName, data: parsed, rawDataStr: dataStr });
+                            if (evName === 'snapshot') resolve();
+                        }
+                    }
+                });
+            });
+            clientReq.on('error', reject);
+        });
+
+        // 1. Action "up" on 750002
+        receivedEvents.length = 0;
+        const upRes = await requestJson('POST', '/api/queue/priority', { ids: [750002], action: 'up' });
+        assert.equal(upRes.statusCode, 200);
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for reordered event for up')), 2000);
+            const check = setInterval(() => {
+                const reorderedEvt = receivedEvents.find(e => e.event === 'item' && e.data.type === 'reordered');
+                if (reorderedEvt) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 5);
+        });
+
+        const upEvt = receivedEvents.find(e => e.event === 'item' && e.data.type === 'reordered');
+        assert.ok(upEvt, 'Expected SSE event: item with type: reordered');
+        assert.ok(Array.isArray(upEvt.data.items), 'Expected items array in reordered SSE payload');
+        assert.ok(upEvt.data.items.length >= 2, 'Expected items array to contain swapped items');
+        assert.ok(upEvt.data.items.some(it => it.galleryId === 750002), 'Expected 750002 in items array');
+        assert.ok(upEvt.data.items.some(it => it.galleryId === 750001), 'Expected 750001 in items array');
+        assert.strictEqual(upEvt.data.rawRow, undefined, 'SSE payload must never contain rawRow');
+        assert.strictEqual('rawRow' in upEvt.data, false);
+        assert.strictEqual(upEvt.rawDataStr.includes('rawRow'), false);
+
+        // 2. Action "top" on 750003
+        receivedEvents.length = 0;
+        const topRes = await requestJson('POST', '/api/queue/priority', { ids: [750003], action: 'top' });
+        assert.equal(topRes.statusCode, 200);
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for reordered event for top')), 2000);
+            const check = setInterval(() => {
+                const reorderedEvt = receivedEvents.find(e => e.event === 'item' && e.data.type === 'reordered');
+                if (reorderedEvt) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 5);
+        });
+
+        const topEvt = receivedEvents.find(e => e.event === 'item' && e.data.type === 'reordered');
+        assert.ok(topEvt, 'Expected SSE event: item with type: reordered for top');
+        assert.ok(Array.isArray(topEvt.data.items), 'Expected items array in reordered SSE payload');
+        assert.ok(topEvt.data.items.some(it => it.galleryId === 750003), 'Expected 750003 in items array');
+        assert.strictEqual(topEvt.data.rawRow, undefined, 'SSE payload must never contain rawRow');
+        assert.strictEqual('rawRow' in topEvt.data, false);
+        assert.strictEqual(topEvt.rawDataStr.includes('rawRow'), false);
+
+        // 3. Verify standard item update event also never contains rawRow
+        receivedEvents.length = 0;
+        updateQueueStatus(750001, 'ON_PROGRESS', { pagesDone: 5, pagesTotal: 20 });
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for updated event')), 2000);
+            const check = setInterval(() => {
+                const updateEvt = receivedEvents.find(e => e.event === 'item' && e.data.type === 'updated');
+                if (updateEvt) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 5);
+        });
+
+        const updateEvt = receivedEvents.find(e => e.event === 'item' && e.data.type === 'updated');
+        assert.ok(updateEvt, 'Expected updated item event');
+        assert.strictEqual(updateEvt.data.rawRow, undefined, 'SSE updated event must never contain rawRow');
+        assert.strictEqual('rawRow' in updateEvt.data, false);
+        assert.strictEqual(updateEvt.rawDataStr.includes('rawRow'), false);
+    } finally {
+        if (clientReq) clientReq.destroy();
+        engine.isRunning = false;
+        await new Promise(resolve => srv.close(resolve));
+        env.cleanup();
+    }
+});
+
+
 
 

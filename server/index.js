@@ -245,14 +245,10 @@ function createRequestHandler() {
                 });
 
                 const onDbItem = (evt) => {
-                    const payload = {
-                        type: evt.type,
-                        batchCount: evt.batchCount ?? Math.max(1, getMaxBatch())
-                    };
-                    if (evt.item) payload.item = evt.item;
-                    if (evt.galleryId !== undefined) payload.galleryId = evt.galleryId;
-                    if (evt.batch !== undefined) payload.batch = evt.batch;
-                    if (evt.removedIds !== undefined) payload.removedIds = evt.removedIds;
+                    const { rawRow, ...payload } = evt;
+                    if (payload.batchCount === undefined) {
+                        payload.batchCount = Math.max(1, getMaxBatch());
+                    }
                     sendSse('item', payload);
                 };
                 dbEvents.on('item', onDbItem);
