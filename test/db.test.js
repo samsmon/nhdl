@@ -1396,4 +1396,181 @@ test('Fase 7.5: autoMigrateSqliteToPostgres transfers data when Postgres is empt
     }
 });
 
+test('Fase 7.7: PostgreSQL schema migrations version 1 to latest execute in order', async () => {
+    const postgresAdapter = require('../core/db/postgres');
+    assert.ok(Array.isArray(postgresAdapter.MIGRATIONS), 'MIGRATIONS array must exist');
+    assert.strictEqual(postgresAdapter.MIGRATIONS.length, 2, 'Must have 2 migrations defined');
+
+    // Test migration v1 query execution
+    const executedV1 = [];
+    const mockClientV1 = {
+        async query(sql, params) {
+            executedV1.push({ sql, params });
+            return { rows: [] };
+        }
+    };
+    await postgresAdapter.MIGRATIONS[0].up(mockClientV1);
+    assert.ok(executedV1.some(e => e.sql.includes('CREATE TABLE IF NOT EXISTS queue')));
+    assert.ok(executedV1.some(e => e.sql.includes('CREATE TABLE IF NOT EXISTS library')));
+    assert.ok(executedV1.some(e => e.sql.includes('CREATE TABLE IF NOT EXISTS settings')));
+    assert.ok(executedV1.some(e => e.sql.includes('CREATE TABLE IF NOT EXISTS events')));
+
+    // Test migration v2 query execution
+    const executedV2 = [];
+    const mockClientV2 = {
+        async query(sql, params) {
+            executedV2.push({ sql, params });
+            return { rows: [] };
+        }
+    };
+    await postgresAdapter.MIGRATIONS[1].up(mockClientV2);
+    assert.ok(executedV2.some(e => e.sql.includes('ALTER TABLE queue ADD COLUMN IF NOT EXISTS format TEXT')));
+    assert.ok(executedV2.some(e => e.sql.includes('ALTER TABLE library ADD COLUMN IF NOT EXISTS meta TEXT')));
+    assert.ok(executedV2.some(e => e.sql.includes('CREATE INDEX IF NOT EXISTS idx_queue_priority')));
+
+    // Test runMigrations from version 0
+    let currentVersionInDb = 0;
+    const history = [];
+    const mockDb = {
+        async query(sql, params) {
+            history.push({ sql, params });
+            if (sql.includes('information_schema.tables')) {
+                return { rows: [{ exists: true }] };
+            }
+            if (sql.includes('SELECT MAX(version)')) {
+                return { rows: [{ v: currentVersionInDb }] };
+            }
+            if (sql.includes('INSERT INTO schema_version')) {
+                currentVersionInDb = params[0];
+                return { rows: [] };
+            }
+            return { rows: [] };
+        }
+    };
+
+    const finalVer = await postgresAdapter.runMigrations(mockDb);
+    assert.strictEqual(finalVer, 2, 'Final schema version must be 2');
+    assert.strictEqual(currentVersionInDb, 2, 'schema_version table must record version 2');
+});
+
+test('Fase 7.7: Cross-database export SQLite -> import PostgreSQL verifies data integrity', async () => {
+    const sqliteAdapter = require('../core/db/sqlite');
+    const postgresAdapter = require('../core/db/postgres');
+
+    const ctx = await createTempDb();
+    try {
+        // 1. Populate SQLite database with rich dataset
+        await dbMod.enqueueGallery({ galleryId: 101, url: 'https://certain.site/g/101/', title: 'Manga One', batch: 1, priority: 10 }, ctx.db);
+        await dbMod.enqueueGallery({ galleryId: 102, url: 'https://certain.site/g/102/', title: 'Manga Two', batch: 2, priority: 5, format: 'cbz' }, ctx.db);
+        await dbMod.updateQueueStatus(101, 'DONE', null, ctx.db);
+
+        await dbMod.upsertLibraryEntry({
+            galleryId: 101,
+            title: 'Manga One',
+            folder: '/downloads/101',
+            pages: 24,
+            format: 'cbz',
+            language: 'english',
+            artist: 'Artist One'
+        }, ctx.db);
+
+        await dbMod.setSetting('downloadDir', '/custom/downloads', ctx.db);
+        await dbMod.logEvent({ level: 'INFO', message: 'Test event from SQLite', galleryId: 101 }, ctx.db);
+
+        // 2. Export SQLite database
+        const exported = await sqliteAdapter.exportData(ctx.db);
+        assert.strictEqual(exported.schema_version, 2);
+        assert.strictEqual(exported.tables.queue.length, 2);
+        assert.strictEqual(exported.tables.library.length, 1);
+        assert.ok(exported.tables.settings.some(s => s.key === 'downloadDir'));
+        assert.ok(exported.tables.events.some(e => e.message === 'Test event from SQLite'));
+
+        // 3. Import into simulated PostgreSQL adapter
+        const pgExecuted = [];
+        const mockPgClient = {
+            async query(sql, params) {
+                pgExecuted.push({ sql, params });
+                if (sql.includes('MAX(batch)')) {
+                    return { rows: [{ max_batch: 2 }], rowCount: 1 };
+                }
+                return { rows: [], rowCount: 1 };
+            }
+        };
+
+        const result = await postgresAdapter.importData(exported, { mode: 'replace' }, mockPgClient);
+        assert.ok(result.success);
+        assert.strictEqual(result.mode, 'replace');
+        assert.strictEqual(result.imported.queue, 2);
+        assert.strictEqual(result.imported.library, 1);
+
+        // Verify PostgreSQL queries: TRUNCATE in replace mode, parameterized INSERT
+        assert.ok(pgExecuted.some(e => e.sql.includes('BEGIN')));
+        assert.ok(pgExecuted.some(e => e.sql.includes('TRUNCATE TABLE')));
+        assert.ok(pgExecuted.some(e => e.sql.includes('INSERT INTO queue')));
+        assert.ok(pgExecuted.some(e => e.sql.includes('INSERT INTO library')));
+        assert.ok(pgExecuted.some(e => e.sql.includes('INSERT INTO settings')));
+        assert.ok(pgExecuted.some(e => e.sql.includes('INSERT INTO events')));
+        assert.ok(pgExecuted.some(e => e.sql.includes('COMMIT')));
+
+        // Verify values passed into PostgreSQL parameterized inserts
+        const queueInserts = pgExecuted.filter(e => e.sql.includes('INSERT INTO queue'));
+        assert.strictEqual(queueInserts.length, 2);
+        const item1 = queueInserts.find(q => q.params.includes(101));
+        assert.ok(item1);
+        assert.strictEqual(item1.params[1], 'https://certain.site/g/101/');
+        assert.strictEqual(item1.params[2], 'Manga One');
+
+        const libInserts = pgExecuted.filter(e => e.sql.includes('INSERT INTO library'));
+        assert.strictEqual(libInserts.length, 1);
+        assert.strictEqual(libInserts[0].params[0], 101);
+        assert.strictEqual(libInserts[0].params[6], 'Artist One');
+    } finally {
+        await ctx.cleanup();
+    }
+});
+
+test('Fase 7.7: PostgreSQL live test suite against real server (skipped if TEST_DATABASE_URL not set)', {
+    skip: !process.env.TEST_DATABASE_URL
+}, async () => {
+    const postgresAdapter = require('../core/db/postgres');
+    const testUrl = process.env.TEST_DATABASE_URL;
+    const pool = await postgresAdapter.initDb(testUrl, { timeoutMs: 5000 });
+
+    try {
+        const ver = await postgresAdapter.getSchemaVersion(pool);
+        assert.ok(ver >= 2, 'Live Postgres schema version must be >= 2');
+
+        const gid = 999901;
+        await postgresAdapter.enqueueGallery({ galleryId: gid, url: `https://certain.site/g/${gid}/`, title: 'Live Postgres Test' }, pool);
+        const item = await postgresAdapter.getQueueItem(gid, pool);
+        assert.ok(item);
+        assert.strictEqual(Number(item.galleryId), gid);
+        assert.strictEqual(item.status, 'PENDING');
+
+        await postgresAdapter.updateQueueStatus(gid, 'DONE', null, pool);
+        const doneItem = await postgresAdapter.getQueueItem(gid, pool);
+        assert.strictEqual(doneItem.status, 'DONE');
+
+        await postgresAdapter.upsertLibraryEntry({
+            galleryId: gid,
+            title: 'Live Postgres Test',
+            folder: `/downloads/${gid}`,
+            pages: 10,
+            format: 'cbz'
+        }, pool);
+        const libItem = await postgresAdapter.getLibraryEntry(gid, pool);
+        assert.ok(libItem);
+        assert.strictEqual(Number(libItem.galleryId), gid);
+
+        const pgExport = await postgresAdapter.exportData(pool);
+        assert.ok(pgExport.tables.queue.some(q => Number(q.gallery_id) === gid));
+        assert.ok(pgExport.tables.library.some(l => Number(l.gallery_id) === gid));
+
+        await postgresAdapter.deleteQueueItem(gid, pool);
+        await postgresAdapter.deleteLibraryEntry(gid, pool);
+    } finally {
+        await postgresAdapter.closeDb();
+    }
+});
+
 

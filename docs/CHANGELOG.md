@@ -9,6 +9,17 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **7.7 Docker Compose, Env Configuration & Cross-DB Tests (`docker-compose.yml`, `.env.example`, `core/db/postgres.js`, `test/db.test.js`)**:
+  - Perbarui `docker-compose.yml` dengan contoh konfigurasi `DATABASE_URL` ke PostgreSQL terpusat (shared PostgreSQL), dokumentasi bahwa volume `data/` opsional saat memakai PostgreSQL (hanya diperlukan bila ingin menyimpan file backup JSON lokal di host), contoh koneksi network docker, serta memastikan kontainer tetap berjalan secara standalone dengan SQLite sebagai default.
+  - Perbarui `.env.example` dengan dokumentasi variabel lingkungan `DATABASE_URL` dan `TEST_DATABASE_URL`.
+  - Ekspor array `MIGRATIONS` pada `core/db/postgres.js` dan dukung `options.db` pada `importData`.
+  - Tambahkan pengujian lintas database pada `test/db.test.js`:
+    - Uji eksekusi migrasi skema PostgreSQL bertahap dari versi 1 ke versi 2 (memverifikasi pembuatan tabel, penambahan kolom, dan indeks).
+    - Uji integritas ekspor SQLite ke impor PostgreSQL (memverifikasi struktur tabel `queue`, `library`, `settings`, `events`, parameterisasi query, dan transaksi).
+    - Uji integrasi live PostgreSQL yang otomatis berjalan saat `TEST_DATABASE_URL` tersedia dan di-skip secara graceful saat tidak ada.
+  - Seluruh test lulus (33 lulus, 1 skip graceful, 0 gagal) dan `npm run build:ui` selesai dengan 0 warning.
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **7.6 Tab Database di Modal Settings Web UI (`webui/src/lib/components/FolderPickerModal.svelte`, `webui/src/lib/api.js`)**:
   - Tambahkan fungsi klien API di `webui/src/lib/api.js` untuk `/api/db/info`, `/api/db/backups`, `/api/db/backup`, `/api/db/restore`, `/api/db/backups/:name`, dan `/api/db/import`.
   - Tambahkan navigasi tab di modal Settings (`FolderPickerModal.svelte`): tab `General & Downloads` (format simpan, batch behavior, API key, penjelajah folder unduhan) dan tab `Database`.

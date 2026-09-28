@@ -7,10 +7,23 @@ services:
       - DOWNLOAD_DIR=/mnt/hdd-music/download/nhdl
       - TZ=Asia/Jakarta
       - WEB_GUI=true
+      # Centralized PostgreSQL database connection (optional).
+      # If left unset/commented, NHDL uses local SQLite (standalone, zero-config).
+      # DATABASE_URL: postgres://nhdl_user:secret_password@postgres:5432/nhdl
     ports:
       - "8098:8080"
     volumes:
       - /mnt/hdd-media/nhdl/downloads:/downloads
+      # Local SQLite database (nhdl.db) and backup files (data/backups/).
+      # When DATABASE_URL is set (PostgreSQL mode), this volume is NOT strictly required
+      # for queue/library persistence, but can be kept to persist JSON backups locally.
       - /mnt/hdd-media/nhdl/data:/app/data
       - /mnt/hdd-media:/mnt/hdd-media
       - /mnt/hdd-music:/mnt/hdd-music
+    # When connecting to a shared PostgreSQL container on a Docker network:
+    # networks:
+    #   - shared_postgres_net
+
+# networks:
+#   shared_postgres_net:
+#     external: true

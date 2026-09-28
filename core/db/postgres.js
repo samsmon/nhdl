@@ -1116,7 +1116,7 @@ async function exportData(db = null) {
 }
 
 async function importData(payload, options = {}, db = null) {
-    const active = db || await getDb();
+    const active = db || options.db || await getDb();
     const mode = options.mode === 'merge' ? 'merge' : 'replace';
     const tables = payload?.tables || {};
     const queueRows = Array.isArray(tables.queue) ? tables.queue : [];
@@ -1246,6 +1246,7 @@ async function importData(payload, options = {}, db = null) {
 module.exports = {
     connectWithRetry,
     dbEvents,
+    MIGRATIONS,
     initDb,
     getDb,
     closeDb,
