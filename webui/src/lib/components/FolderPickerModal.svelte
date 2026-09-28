@@ -100,15 +100,28 @@
       apiKeyVerifying = false;
     }
   }
+  import gsap from 'gsap';
+
+  let dialogEl = $state(null);
+
+  $effect(() => {
+    if (open && dialogEl) {
+      gsap.fromTo(
+        dialogEl,
+        { opacity: 0, scale: 0.96, y: -8 },
+        { opacity: 1, scale: 1, y: 0, duration: 0.18, ease: 'power2.out' }
+      );
+    }
+  });
 </script>
 
 {#if open}
   <div class="fixed inset-0 bg-black/80 backdrop-blur-xs z-50 flex items-center justify-center p-4">
-    <div class="bg-[#161616] border border-[#2a2a2a] rounded-md w-full max-w-xl flex flex-col max-h-[80vh] overflow-hidden shadow-2xl">
+    <div bind:this={dialogEl} class="bg-[#161616] border border-[#2a2a2a] rounded-md w-full max-w-xl flex flex-col max-h-[80vh] overflow-hidden shadow-2xl">
       <div class="bg-[#1c1c1c] px-4 py-3 border-b border-[#2a2a2a] flex justify-between items-center">
         <div class="flex items-center gap-2">
           <FolderOpen class="w-4 h-4 text-[#a3e635]" />
-          <span class="text-xs font-mono uppercase tracking-wider text-white font-semibold">Select Download Directory</span>
+          <span class="text-xs font-mono uppercase tracking-wider text-white font-semibold">Settings & Download Directory</span>
         </div>
         <button onclick={onClose} class="text-[#888] hover:text-white cursor-pointer">
           <X class="w-4 h-4" />
@@ -132,7 +145,15 @@
               ? 'bg-[#a3e635] text-black font-bold'
               : 'text-[#888] hover:text-white'}"
           >
-            .CBZ (Komikku / Mihon)
+            .CBZ
+          </button>
+          <button
+            onclick={() => setDownloadFormat('zip')}
+            class="px-2.5 py-1 rounded cursor-pointer transition-colors {appStore.downloadFormat === 'zip'
+              ? 'bg-[#a3e635] text-black font-bold'
+              : 'text-[#888] hover:text-white'}"
+          >
+            .ZIP
           </button>
         </div>
       </div>

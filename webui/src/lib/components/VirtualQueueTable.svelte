@@ -278,6 +278,8 @@
   }
 </script>
 
+<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 <section
   class="flex-1 flex flex-col min-h-0 min-w-0 bg-[var(--bg-base)] select-none focus:outline-none overflow-hidden"
   tabindex="0"
@@ -345,6 +347,7 @@
         </button>
 
         {#if !isMobile && !col.flex}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <div
             onmousedown={(e) => startColumnResize(e, col.id, col.minWidth)}
             class="absolute right-0 top-0 bottom-0 w-1.5 cursor-col-resize hover:bg-[var(--accent)]/60 z-10"
@@ -384,6 +387,7 @@
             <div
               style="height: {ROW_HEIGHT}px; grid-template-columns: {gridTemplate};"
               onclick={(e) => handleRowClick(item, e)}
+              onkeydown={(e) => e.key === 'Enter' && handleRowClick(item, e)}
               oncontextmenu={(e) => handleRowContextMenu(item, e)}
               class="grid items-center text-xs font-mono border-b border-[var(--border-subtle)]/70 cursor-pointer transition-colors {isSelected
                 ? isFocused
@@ -391,6 +395,7 @@
                   : 'bg-[var(--bg-selected)] text-white'
                 : 'hover:bg-[var(--bg-hover)] text-[var(--text-primary)]'}"
               role="row"
+              tabindex="-1"
               aria-selected={isSelected}
               data-gallery-id={gid}
             >

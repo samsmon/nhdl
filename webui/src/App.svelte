@@ -1,32 +1,26 @@
 <script>
-  import gsap from 'gsap';
   import { appStore } from './lib/stores/app.svelte.js';
-  import Header from './lib/components/Header.svelte';
-  import HudPanel from './lib/components/HudPanel.svelte';
-  import QueuePanel from './lib/components/QueuePanel.svelte';
-  import RightSidebar from './lib/components/RightSidebar.svelte';
+  import Toolbar from './lib/components/Toolbar.svelte';
+  import SidebarFilter from './lib/components/SidebarFilter.svelte';
+  import VirtualQueueTable from './lib/components/VirtualQueueTable.svelte';
+  import DetailPanel from './lib/components/DetailPanel.svelte';
+  import StatusBar from './lib/components/StatusBar.svelte';
+  import AddDialog from './lib/components/AddDialog.svelte';
+  import DeleteConfirmDialog from './lib/components/DeleteConfirmDialog.svelte';
   import FolderPickerModal from './lib/components/FolderPickerModal.svelte';
-  import DeleteBatchModal from './lib/components/DeleteBatchModal.svelte';
   import LibraryModal from './lib/components/LibraryModal.svelte';
   import LogsModal from './lib/components/LogsModal.svelte';
+  import Toast from './lib/components/Toast.svelte';
 
+  let showAddDialog = $state(false);
+  let showDeleteConfirm = $state(false);
   let showFolderPicker = $state(false);
   let showLibraryModal = $state(false);
   let showLogsModal = $state(false);
-  let deleteBatchModal = $state(null);
 
   $effect(() => {
     appStore.loadConfig();
     appStore.connectSSE();
-
-    gsap.from('.gsap-panel', {
-      y: 12,
-      opacity: 0,
-      duration: 0.4,
-      stagger: 0.08,
-      ease: 'power2.out',
-      clearProps: 'all'
-    });
 
     return () => {
       appStore.disconnectSSE();
@@ -34,61 +28,63 @@
   });
 </script>
 
-<main class="min-h-screen lg:h-screen lg:overflow-hidden bg-[#111111] text-[#e0e0e0] p-3 md:p-4 font-sans selection:bg-[#a3e635] selection:text-black flex flex-col">
-  <div class="w-full max-w-[1600px] mx-auto flex flex-col gap-3 flex-1 min-h-0">
-    <Header
-      onOpenLibrary={() => (showLibraryModal = true)}
-      onOpenLogs={() => (showLogsModal = true)}
-      onOpenFolderPicker={() => (showFolderPicker = true)}
-    />
+<main
+  class="h-screen w-screen overflow-hidden bg-[var(--bg-base)] text-[var(--text-primary)] font-sans selection:bg-[var(--accent)] selection:text-black flex flex-col"
+>
+  <!-- Top Toolbar -->
+  <Toolbar
+    onOpenAdd={() => (showAddDialog = true)}
+    onRequestDelete={() => (showDeleteConfirm = true)}
+    onOpenLibrary={() => (showLibraryModal = true)}
+    onOpenSettings={() => (showFolderPicker = true)}
+    onOpenLogs={() => (showLogsModal = true)}
+  />
 
-    <HudPanel />
+  <!-- Middle Workspace: Left Sidebar Filter + Right (Virtual Queue Table + Tabbed Detail Panel) -->
+  <div class="flex-1 flex min-h-0 min-w-0 overflow-hidden relative">
+    <SidebarFilter />
 
-    <div class="grid grid-cols-1 lg:grid-cols-12 gap-3 flex-1 min-h-0">
-      <QueuePanel
-        onOpenDeleteBatchModal={(batch) => (deleteBatchModal = batch)}
+    <div class="flex-1 flex flex-col min-h-0 min-w-0 overflow-hidden">
+      <VirtualQueueTable
+        onRequestDelete={() => (showDeleteConfirm = true)}
       />
 
-      <RightSidebar
-        onOpenFolderPicker={() => (showFolderPicker = true)}
-      />
+      <DetailPanel />
     </div>
   </div>
+
+  <!-- Bottom Status Bar -->
+  <StatusBar />
+
+  <!-- Dialogs & Modals -->
+  <AddDialog
+    open={showAddDialog}
+    onClose={() => (showAddDialog = false)}
+  />
+
+  <DeleteConfirmDialog
+    open={showDeleteConfirm}
+    ids={Array.from(appStore.selectedIds)}
+    onClose={() => (showDeleteConfirm = false)}
+  />
 
   <FolderPickerModal
     open={showFolderPicker}
     onClose={() => (showFolderPicker = false)}
   />
 
-  <DeleteBatchModal
-    batch={deleteBatchModal}
-    onClose={() => (deleteBatchModal = null)}
-  />
-
   <LibraryModal
     open={showLibraryModal}
-    onClose={() => (showLibraryModal = false)}
+    onClose={() => {
+      showLibraryModal = false;
+      appStore.refreshLibraryIndex();
+    }}
   />
 
   <LogsModal
     open={showLogsModal}
     onClose={() => (showLogsModal = false)}
   />
-</main>
 
-<style>
-  :global(.custom-scrollbar::-webkit-scrollbar) {
-    width: 6px;
-    height: 6px;
-  }
-  :global(.custom-scrollbar::-webkit-scrollbar-track) {
-    background: #111111;
-  }
-  :global(.custom-scrollbar::-webkit-scrollbar-thumb) {
-    background: #2a2a2a;
-    border-radius: 3px;
-  }
-  :global(.custom-scrollbar::-webkit-scrollbar-thumb:hover) {
-    background: #444444;
-  }
-</style>
+  <Toast />
+</main>
