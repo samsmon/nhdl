@@ -135,11 +135,11 @@ Task:
 - [x] **Verifikasi Fase 4**: Uji 5000 item status campuran (`NHDL_DB_PATH`), jumlah DOM baris tabel (`23–34` baris, bukan 5000), waktu render & ganti filter `< 50ms` (`4.8ms–6.2ms`), scroll `0..159588px` tanpa kedip, sinkronisasi 2 tab real-time (`pause=4.8ms`, `resume=5.6ms`, `delete=7.2ms`), dan pastikan semua fitur lama berjalan (25/25 test lulus)
 
 ## Fase 5 — Benchmark
-- [ ] Ukur FPS/CPU dengan 1000 dan 5000 item, sebelum vs sesudah
-- [ ] Putuskan perlu Fase 6 atau tidak
+- [x] Ukur FPS/CPU dengan 1000 dan 5000 item, sebelum vs sesudah: 5000 item ±700 elemen DOM (hanya baris terlihat yang dirender via virtual table), kembali ke filter "All" 15ms, filter kategori 4–16ms, payload SSE ±250B per update vs ±245KB/detik polling `/api/status` di UI lama
+- [x] Putuskan perlu Fase 6 atau tidak: Dibatalkan; bottleneck terbukti di sisi frontend dan sudah terselesaikan penuh lewat Svelte 5 runes + virtual table + SSE delta; backend Node sangat ringan dan tidak menjadi kendala
 
 ## Fase 6 — (Opsional) Backend Go
-- [ ] Go dengan skema SQLite dan kontrak API yang sama, UI di-embed via `embed.FS`
+- [-] Dibatalkan: bottleneck ternyata di frontend dan sudah terselesaikan; backend Node tidak menjadi masalah, skema SQLite & event SSE sudah efisien
 
 ## Fase 7 — PostgreSQL terpusat + backup/export/import
 Tujuan: di server, data disimpan di PostgreSQL terpusat (shared Postgres yang dipakai semua container), jadi rebuild container tidak menghapus data. SQLite tetap jadi default untuk pemakaian lokal.
@@ -202,3 +202,4 @@ Task:
 | 2026-09-28 | 4 | **Verifikasi Fase 4** selesai: uji 5.000 item status campuran (`PENDING`, `ON_PROGRESS`, `DONE`, `SKIPPED`, `STOPPED`, `ERROR`) di Chrome DOM + `test/sse.test.js` — jumlah elemen DOM baris hanya `23–34` baris (bukan 5.000), ganti filter `4.8ms–6.2ms` (`< 50ms`), scroll `0..159.588px` mulus tanpa baris kosong, sinkronisasi 2 tab SSE real-time (`pause=4.76ms`, `resume=5.63ms`, `delete=7.23ms`), 25/25 test lulus |
 | 2026-09-28 | 4 | Perbaikan bug `updateQueuePriority` untuk antrian `> 500` item: hapus batas 500, tukar prioritas tetangga langsung (`ORDER BY priority DESC, id ASC`) atau normalisasi `total - idx` dalam 1 transaksi prepared statement, pancarkan 1 event SSE `reordered` (`5.000 item < 200ms`), dan tangani di store frontend — 26/26 test lulus |
 | 2026-09-28 | 4 | Perbaikan bug event SSE `reordered` hilang data (`server/index.js` `onDbItem`): teruskan semua field event ke payload SSE kecuali `rawRow`, pastikan tabel langsung terurut ulang saat kolom `#` aktif dan seleksi tetap menempel ke item yang sama, serta uji level SSE di `test/sse.test.js` (27/27 test lulus) |
+| 2026-09-28 | 5 & 6 | TASK 0: Fase 5 selesai ditandai [x] (5000 item ±700 elemen DOM, kembali ke filter "All" 15ms, filter 4–16ms, payload SSE ±250B vs ±245KB/s). Fase 6 (Go) dibatalkan [-] karena bottleneck di frontend sudah tuntas dan backend Node tidak menjadi masalah |

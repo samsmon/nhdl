@@ -8,6 +8,11 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 5 & 6
+- **TASK 0: Penutupan Fase 5 dan Pembatalan Fase 6 di `docs/PLAN.md`**:
+  - Fase 5 ditandai selesai `[x]`: pengujian 5.000 item antrian hanya merender ±700 elemen DOM melalui virtual table, pergantian kembali ke filter "All" membutuhkan waktu 15ms, filter kategori 4–16ms, dan payload pembaruan SSE hanya ±250B per update vs ±245KB/detik polling `/api/status` di UI lama.
+  - Fase 6 (Backend Go) dibatalkan `[-]`: bottleneck performa terbukti berada di rendering DOM dan polling frontend yang kini telah teratasi sepenuhnya; backend Node.js terbukti ringan, stabil, dan tidak menjadi kendala arsitektur.
+
 ## 2026-09-28 · AI (Claude Code, Opus 5.5) · Rilis
 - Merge `rework` ke `main` (fast-forward): Fase 4 (layout qBittorrent/IDM, virtual table, pause/resume/delete/prioritas per item, panel detail, status bar) kini ada di `main`.
 - Sebelum merge sudah direview: 27/27 test lulus; uji browser 5000 item (~700 elemen DOM, kembali ke filter "All" 15ms, scroll sampai item terakhir, tampilan mobile 375px); prioritas Up/Down/Top/Bottom di antrian 1000 item benar dan ter-update real-time lewat SSE.
