@@ -1166,7 +1166,7 @@ async function importData(payload, options = {}, db = null) {
     }
 
     const batchCount = Math.max(1, await getMaxBatch(active));
-    dbEvents.emit('item', { type: 'reordered', items: [], batchCount });
+    dbEvents.emit('reloaded', { batchCount });
 
     return {
         success: true,

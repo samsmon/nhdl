@@ -267,6 +267,24 @@ function createRequestHandler() {
                 };
                 dbEvents.on('item', onDbItem);
 
+                const onDbReloaded = async () => {
+                    try {
+                        const rawItems = await getQueueItems();
+                        const items = rawItems.map(formatQueueRow);
+                        const batchCount = Math.max(1, await getMaxBatch());
+                        const snapshotPayload = {
+                            items,
+                            batchCount,
+                            engineStatus: engine.getStatus(),
+                            liveProgress: engine.currentProgress,
+                            autoContinueBatches: engine.autoContinueBatches
+                        };
+                        sendSse('snapshot', snapshotPayload);
+                        sendSse('reloaded', snapshotPayload);
+                    } catch (e) {}
+                };
+                dbEvents.on('reloaded', onDbReloaded);
+
                 const onEngineProgress = () => {
                     sendSse('progress', {
                         liveProgress: engine.currentProgress,
@@ -315,6 +333,7 @@ function createRequestHandler() {
                     cleaned = true;
                     clearInterval(heartbeat);
                     dbEvents.off('item', onDbItem);
+                    dbEvents.off('reloaded', onDbReloaded);
                     engine.off('progress', onEngineProgress);
                     engine.off('cooldown', onEngineProgress);
                     for (const [evtName, handler] of engineHandlers.entries()) {

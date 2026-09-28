@@ -729,6 +729,112 @@ test('SSE level: POST /api/queue/priority (up and top) emits item event type reo
     }
 });
 
+test('Point 6: importData emits reloaded and triggers fresh SSE snapshot/reloaded events, never emits empty reordered', async () => {
+    const env = await createTempEnv();
+    const srv = http.createServer(createRequestHandler());
+    await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
+    const port = srv.address().port;
+
+    const receivedEvents = [];
+    let sseBuffer = '';
+    let clientReq = null;
+
+    try {
+        // Seed initial gallery
+        await enqueueGallery({ galleryId: 600001, url: 'https://certain.site/g/600001/', title: 'Item 1' });
+
+        // Connect SSE client
+        await new Promise((resolve, reject) => {
+            clientReq = http.request({
+                hostname: '127.0.0.1',
+                port,
+                path: '/api/events',
+                headers: { 'Accept': 'text/event-stream' }
+            }, res => {
+                res.on('data', chunk => {
+                    sseBuffer += chunk.toString();
+                    const { events, remainder } = parseSseFrames(sseBuffer);
+                    sseBuffer = remainder;
+                    for (const evt of events) {
+                        try {
+                            const parsed = JSON.parse(evt.data);
+                            receivedEvents.push({ event: evt.event, data: parsed, rawDataStr: evt.data });
+                        } catch (e) {
+                            receivedEvents.push({ event: evt.event, data: evt.data, rawDataStr: evt.data });
+                        }
+                    }
+                });
+                resolve();
+            });
+            clientReq.on('error', reject);
+            clientReq.end();
+        });
+
+        // Wait for initial snapshot
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for initial snapshot')), 2000);
+            const check = setInterval(() => {
+                if (receivedEvents.some(e => e.event === 'snapshot')) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 5);
+        });
+
+        // Clear received events
+        receivedEvents.length = 0;
+
+        // Perform importData with a new dataset
+        const importPayload = {
+            format: 'nhdl-export',
+            version: 1,
+            tables: {
+                queue: [
+                    { gallery_id: 600002, url: 'https://certain.site/g/600002/', title: 'Imported Item 2', batch: 1 }
+                ],
+                library: []
+            }
+        };
+
+        const { importData } = require('../core/db');
+        await importData(importPayload, { mode: 'replace' });
+
+        // Wait for reloaded or fresh snapshot event
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for reloaded/snapshot event')), 2000);
+            const check = setInterval(() => {
+                const hasReloaded = receivedEvents.some(e => e.event === 'reloaded' || (e.event === 'snapshot' && e.data.items && e.data.items.some(it => Number(it.galleryId) === 600002)));
+                if (hasReloaded) {
+                    clearInterval(check);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 5);
+        });
+
+        // 1. Verify NO empty reordered item event was sent
+        const emptyReorderedEvt = receivedEvents.find(e => e.event === 'item' && e.data.type === 'reordered' && Array.isArray(e.data.items) && e.data.items.length === 0);
+        assert.strictEqual(emptyReorderedEvt, undefined, 'Must NEVER emit item event type reordered with items: []');
+
+        // 2. Verify fresh snapshot event contains imported item 600002 and does NOT contain old item 600001
+        const reloadSnapshots = receivedEvents.filter(e => e.event === 'snapshot');
+        assert.ok(reloadSnapshots.length > 0, 'Must have received fresh snapshot event');
+        const latestSnapshot = reloadSnapshots[reloadSnapshots.length - 1];
+        assert.ok(latestSnapshot.data.items.some(it => Number(it.galleryId) === 600002), 'Snapshot must contain imported item 600002');
+        assert.ok(!latestSnapshot.data.items.some(it => Number(it.galleryId) === 600001), 'Snapshot must not contain replaced item 600001');
+
+        // 3. Verify reloaded event was also received
+        const reloadedEvt = receivedEvents.find(e => e.event === 'reloaded');
+        assert.ok(reloadedEvt, 'Must have received reloaded event');
+        assert.ok(reloadedEvt.data.items.some(it => Number(it.galleryId) === 600002));
+    } finally {
+        if (clientReq) clientReq.destroy();
+        await new Promise(resolve => srv.close(resolve));
+        await env.cleanup();
+    }
+});
+
 
 
 

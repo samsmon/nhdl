@@ -216,3 +216,4 @@ Task:
 | 2026-09-28 | 7 | Auto backup pre-import nhdl-backup-pre-import-<ts>.json sebelum import/restore mode replace, batalkan jika backup gagal, tampilkan di response dan UI — 36/36 test lulus |
 | 2026-09-28 | 7 | Otomatisasi backup: penjadwalan via DB settings (backupIntervalHours, backupKeep, lastBackupAt), rotasi file lama, override direktori NHDL_BACKUP_DIR, retry tiap 10m saat gagal, UI konfigurasi jadwal dan estimasi backup berikutnya — 37/37 test lulus |
 | 2026-09-28 | 7 | Auto-migrate backup: tulis backup JSON dari SQLite ke folder backup sebelum impor Postgres, batalkan migrasi dan jangan rename SQLite jika backup gagal — 38/38 test lulus |
+| 2026-09-28 | 7 | Event reordered kosong dihapus, emit event reloaded/snapshot baru via SSE setelah import/restore berhasil, store UI update otomatis — 39/39 test lulus |

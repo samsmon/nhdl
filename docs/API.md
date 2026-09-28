@@ -66,15 +66,15 @@ String status mesin pengunduh: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'STOPPING'
 
 Membuka stream HTTP satu arah (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`) untuk menerima pembaruan state secara real-time tanpa polling.
 
-### 2.1. `event: snapshot`
-Dikirim **satu kali segera setelah koneksi SSE terbuka**. Berisi state penuh saat itu:
+### 2.1. `event: snapshot` & `event: reloaded`
+Dikirim **segera setelah koneksi SSE terbuka** (`snapshot`), serta dipancarkan kembali ke seluruh klien SSE aktif setelah operasi impor atau pemulihan database selesai (`snapshot` dan `reloaded`). Berisi state penuh antrian saat itu sehingga antrian dan status library di UI langsung ter-update secara instan tanpa perlu memuat ulang halaman:
 ```
 event: snapshot
 data: {"items":[...],"batchCount":1,"engineStatus":"IDLE","liveProgress":null,"autoContinueBatches":true}
 ```
 
 ### 2.2. `event: item`
-Dikirim setiap kali ada perubahan pada tabel `queue` di SQLite (`core/db.js` `dbEvents`):
+Dikirim setiap kali ada perubahan pada tabel `queue` di basis data (`core/db.js` `dbEvents`):
 - **Penambahan atau pembaruan baris (`inserted` / `updated`)**:
   ```
   event: item
@@ -96,6 +96,7 @@ Dikirim setiap kali ada perubahan pada tabel `queue` di SQLite (`core/db.js` `db
   data: {"type":"cleared","removedIds":[123456,234567],"batchCount":1}
   ```
 - **Perubahan urutan prioritas (`reordered`)**:
+  Hanya dikirim jika terdapat perubahan prioritas nyata (`items` tidak pernah berupa array kosong):
   ```
   event: item
   data: {"type":"reordered","items":[{"galleryId":123456,"priority":501},{"galleryId":234567,"priority":500}],"batchCount":1}

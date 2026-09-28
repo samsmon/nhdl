@@ -749,6 +749,14 @@ class AppStore {
         } catch {}
       });
 
+      es.addEventListener('reloaded', e => {
+        try {
+          const payload = JSON.parse(e.data);
+          this.applySnapshot(payload);
+          this.refreshLibraryIndex();
+        } catch {}
+      });
+
       es.addEventListener('item', e => {
         try {
           const payload = JSON.parse(e.data);

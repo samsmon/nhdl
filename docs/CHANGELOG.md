@@ -9,6 +9,15 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Hapus Event Reordered Kosong & Pancarkan Event Reloaded/Snapshot Baru Setelah Import/Restore (`core/db/sqlite.js`, `core/db/postgres.js`, `server/index.js`, `docs/API.md`, `webui/src/lib/stores/app.svelte.js`, `test/sse.test.js`)**:
+  - Hapus pemancaran event `item` bertipe `reordered` dengan `items: []` pada akhir `importData()` di adapter SQLite dan PostgreSQL.
+  - Ganti dengan pemancaran event `reloaded` dari `dbEvents` setiap kali operasi `importData` (maupun `restoreBackup`) sukses diselesaikan.
+  - Di `server/index.js`, tangkap event `reloaded` dari `dbEvents` dan pancarkan event SSE `snapshot` serta `reloaded` berisi state antrian terbaru ke seluruh klien SSE aktif.
+  - Di frontend store `webui/src/lib/stores/app.svelte.js`, tambahkan listener untuk event SSE `reloaded` yang memanggil `applySnapshot()` dan `refreshLibraryIndex()`, sehingga UI langsung sinkron tanpa perlu refresh halaman browser.
+  - Perbarui dokumentasi event SSE pada `docs/API.md`.
+  - Tambahkan unit/integration test di `test/sse.test.js` yang memverifikasi ketiadaan event `reordered` kosong serta diterimanya payload snapshot segar pada event SSE saat `importData` dijalankan (39/39 test lulus, build UI 0 warning).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Backup Pre-Migration Otomatis pada Auto-Migrate SQLite ke Postgres (`core/db/auto-migrate.js`, `test/db.test.js`)**:
   - Sebelum data SQLite diimpor ke PostgreSQL via mode replace, sistem membuat file backup JSON `nhdl-backup-pre-migration-<ts>.json` di direktori folder backup aktif (`data/backups/` atau `NHDL_BACKUP_DIR`).
   - Jika pembuatan backup gagal, proses migrasi otomatis langsung dibatalkan (`return false`), data tidak diimpor ke PostgreSQL, dan file basis data SQLite asli tidak diubah namanya ke `.migrated`.
