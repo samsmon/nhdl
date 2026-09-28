@@ -12,6 +12,7 @@ RUN apk add --no-cache curl
 WORKDIR /app
 
 COPY package*.json ./
+RUN npm ci --omit=dev
 COPY . .
 COPY --from=builder /app/webui/dist ./webui/dist
 

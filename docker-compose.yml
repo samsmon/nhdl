@@ -9,7 +9,8 @@ services:
       - WEB_GUI=true
       # Centralized PostgreSQL database connection (optional).
       # If left unset/commented, NHDL uses local SQLite (standalone, zero-config).
-      # DATABASE_URL: postgres://nhdl_user:secret_password@postgres:5432/nhdl
+      # Put the real value in .env (never commit the password), then uncomment:
+      # - DATABASE_URL=${DATABASE_URL}
     ports:
       - "8098:8080"
     volumes:

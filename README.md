@@ -1,96 +1,113 @@
 # NHDL (Batch Downloader for a certain site ( ͡° ͜ʖ ͡°))
 
-A high-performance, modular Node.js tool designed to download and archive galleries efficiently and reliably. Features human-like smart delays, Cloudflare SNI bypass, ISP DNS unblocking, concurrent image downloads, byte-level file integrity verification, and a persistent library tracker.
-
-It runs as a web daemon (`server/`) serving a REST API and a Svelte dashboard (`webui/`) with live progress and cooldown tracking. Ideal for local use, Docker, NAS, and remote homelab setups.
+A self-hosted download manager for galleries from a certain site ( ͡° ͜ʖ ͡°). It runs as a web daemon with a real-time dashboard styled like qBittorrent/IDM, keeps its state in SQLite or a central PostgreSQL server, and is built to run unattended on a homelab or NAS.
 
 ---
 
 ## Features
 
-- **Modular Architecture**: Core engine (`core/`) decoupled from the web daemon (`server/`).
-- **Bypass ISP DNS Hijacking**: Maps all target domains directly to Cloudflare edge IPs, avoiding local DNS redirection (e.g. Internet Positif).
-- **Cloudflare WAF Mitigation & Smart Delays**: Intelligent randomized delay algorithm based on page count and history to avoid HTTP 429 rate limits.
-- **Library Tracker (`library.json`)**: Persistent indexing of all downloaded titles, folder locations, and page counts. Skips network requests instantly if files already exist on disk.
-- **Auto-Resume & Integrity Verification**: Verifies downloaded files down to the byte level (>2KB) and re-queues corrupted or incomplete images automatically.
-- **Live Progress & Cooldown Tracking**: Live updates of current download progress, total pages, elapsed percentage, and smart delay cooldown timers.
-- **Zero Runtime Dependencies for Backend**: Both `core/` and `server/` use native Node.js APIs without requiring third-party runtime packages.
+- **qBittorrent/IDM-style dashboard**: status sidebar with live counts, a virtualized queue table that stays smooth at 5,000+ items, multi-select (Ctrl/Shift), keyboard shortcuts, context menu, and a detail panel (General / Pages / Log).
+- **Real-time updates over SSE**: every change is pushed to all open tabs as a small delta, with no polling.
+- **Per-item control**: pause/resume, delete from queue (files on disk are never touched), and priority (top / up / down / bottom).
+- **Database**: SQLite by default (zero config), or a central PostgreSQL server via `DATABASE_URL`. An existing SQLite database is migrated to PostgreSQL automatically on first start, with a backup taken first.
+- **Backup, export & import** from *Settings → Database*: scheduled JSON backups with retention, validated imports (merge or replace), and an automatic backup before every replace.
+- **Resilient downloading**: official API archive download when an API key is set, with a fallback to page-by-page CDN download. Includes smart delays, 429 backoff with a circuit breaker, Cloudflare/ISP DNS workarounds, and byte-level page verification with auto-resume.
+- **Safe on network storage**: if the download folder is missing or not mounted yet, NHDL refuses to touch the library and recovers automatically once the disk is back.
+- **Library**: rescan from disk markers, rename, and compress folders to `.cbz`/`.zip`.
 
 ---
 
-## Architecture
+## Quick start (local)
 
-```text
-nhdl/
-├── core/
-│   ├── engine.js       # DownloaderEngine (EventEmitter, network sockets, concurrency)
-│   ├── tracker.js      # Library indexer (library.json) and list tracker (list_status.txt)
-│   └── utils.js        # File verification, name sanitization, delay calculations
-│
-├── server/
-│   └── index.js        # Web App daemon, REST API, and static asset server (0 dependencies)
-│
-├── webui/              # Svelte + Vite + Tailwind CSS frontend dashboard
-│   ├── src/
-│   └── dist/           # Production compiled frontend bundle
-│
-├── Dockerfile          # Multi-stage container build
-└── docker-compose.yml  # Homelab deployment template
-```
+Requirements: **Node.js 22.13+** (the built-in `node:sqlite` module is used).
 
----
-
-## Usage
-
-The Web App edition runs an HTTP server on port 8080 serving a real-time Svelte dashboard.
-
-### 1. Running Locally
-Ensure the frontend is compiled:
 ```bash
+npm install
+npm --prefix webui install
 npm run build:ui
-```
-Start the web daemon:
-```bash
-node server/index.js
-# Or using npm
 npm start
 ```
-Open your browser at:
-`http://localhost:8080`
 
-### 2. Docker & Homelab Deployment
-A multi-stage `Dockerfile` is included that builds the Svelte UI and packages the zero-dependency Node.js backend.
+Open `http://localhost:8080`. On Windows, `start.bat` does the same, installing dependencies and building the UI automatically on first run.
 
-1. Configure `docker-compose.yml` to map your desired download directory or CIFS/SMB NAS mount.
-2. Build and start the container:
+---
+
+## Docker / homelab
+
 ```bash
-docker-compose up -d --build
+docker compose up -d --build
 ```
-3. Access the dashboard from your browser or via Tailscale IP on port 8080.
+
+Adjust `docker-compose.yml` first:
+
+- `DOWNLOAD_DIR` and the volume mounts: where galleries are saved (NAS/CIFS mounts work).
+- `/app/data` volume: SQLite database and JSON backups. Keep it, so data survives rebuilds.
+- Published port (the example maps `8098:8080`).
+
+### Using a central PostgreSQL server
+
+1. Create the database and a least-privilege user, following [docs/POSTGRES.md](docs/POSTGRES.md).
+2. Put `DATABASE_URL=postgres://nhdl:<password>@<host>:5432/nhdl` in `.env` next to `docker-compose.yml`. Never commit it.
+3. Uncomment the `DATABASE_URL` line (and the network section if Postgres runs in another compose project) in `docker-compose.yml`, then rebuild.
+
+On the first start with an empty PostgreSQL database, NHDL writes a backup of the local SQLite data to `data/backups/`, copies everything to PostgreSQL, and renames the SQLite file to `nhdl.db.migrated`.
 
 ---
 
-## Input Formats
+## Configuration
 
-The `list.txt` file accepts multiple formats interchangeably:
-- Raw gallery ID: `468614`
-- Full URL: `https://certain.site/g/468614/`
-- Markdown or OneTab exports: `[Title](https://certain.site/g/468614/)`
-- Comments: Lines starting with `#` are ignored.
+| Variable | Default | Purpose |
+|---|---|---|
+| `PORT` | `8080` | HTTP port of the web daemon |
+| `DOWNLOAD_DIR` | saved setting, else `./Download` | Where galleries are downloaded |
+| `DATABASE_URL` | *(empty → SQLite)* | PostgreSQL connection string |
+| `NHDL_DB_PATH` | `data/nhdl.db` | SQLite database file |
+| `NHDL_BACKUP_DIR` | `data/backups` | Where JSON backups are written |
+| `NHDL_PASSWORD` | *(empty → no login)* | Enables the login screen |
+| `NHENTAI_API_KEY` | *(empty)* | API key for fast archive downloads (can also be set in *Settings*) |
+| `TEST_DATABASE_URL` | *(empty → skipped)* | PostgreSQL database used only by `npm test` |
+
+Secrets (`NHDL_PASSWORD`, `NHENTAI_API_KEY`, `DATABASE_URL`) live in `.env` (see `.env.example`) and are never stored in the database or sent to the UI.
 
 ---
 
-## Folder Structure
+## Adding galleries
 
-Downloaded galleries are categorized into structured directories based on metadata:
+Use **Add** in the toolbar (paste links, or upload a `list.txt`). Accepted formats, one per line:
+
+- Gallery ID: `468614`
+- URL: `https://certain.site/g/468614/`
+- Markdown/OneTab exports: `[Title](https://certain.site/g/468614/)`
+- `# BATCH N FORMAT=cbz` starts a new batch; other lines starting with `#` are ignored.
+
+The whole queue can be exported back to `list.txt` at any time.
+
+Downloads are organized as `<DOWNLOAD_DIR>/<Language>/<Artist>/<Title>` (a folder of pages, or a `.cbz`/`.zip`).
+
+---
+
+## Maintenance
+
+```bash
+npm test                  # test suite (Postgres tests run when TEST_DATABASE_URL is set)
+npm run check:archives    # find .cbz/.zip files that are not real archives (add -- --delete to remove them)
+```
+
+---
+
+## Project layout
+
 ```text
-Download/
-├── Japanese/
-│   ├── Author Name/
-│   │   └── Gallery Title/
-│   │       ├── 1.jpg
-│   │       ├── 2.jpg
+core/            download engine, library tracker, logger
+core/db/         SQLite + PostgreSQL adapters, backup, auto-migration
+server/          HTTP daemon: REST API, SSE stream, static UI
+webui/           Svelte 5 dashboard (built into webui/dist)
+scripts/         maintenance scripts
+test/            node:test suites
+docs/            architecture, API contract, Postgres guide, plan, changelog
 ```
+
+Further reading: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/API.md](docs/API.md), [docs/POSTGRES.md](docs/POSTGRES.md). Contributors and AI agents should start with [AGENTS.md](AGENTS.md).
 
 ---
 

@@ -8,6 +8,17 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-28 · AI (Claude Code, Opus 5.5) · Rilis
+- **Fix container crash:** `Dockerfile` tidak menginstal dependency backend, padahal `core/db.js` selalu memuat `pg`, sehingga container gagal start ("Cannot find module 'pg'") bahkan di mode SQLite. Sekarang `npm ci --omit=dev` dijalankan di image, dan `.dockerignore` ditambahkan supaya `node_modules` lokal, `data/`, dan `.env` tidak ikut masuk image.
+- `start.bat`: instal dependency backend otomatis kalau `pg` belum ada.
+- `docker-compose.yml`: contoh `DATABASE_URL` diubah ke format daftar env (`- DATABASE_URL=${DATABASE_URL}`) yang benar, dengan nilai diambil dari `.env`.
+- `README.md` ditulis ulang sesuai kondisi saat ini: dashboard qBittorrent/IDM, SSE, SQLite/PostgreSQL, backup/export/import, tabel env var, dan langkah Docker + Postgres.
+- Merge `rework` ke `main` (fast-forward): Fase 5 (ditutup), Fase 6 (dibatalkan), dan Fase 7 (PostgreSQL + backup/export/import).
+- Review Fase 7 sebelum merge: 40/41 test lulus (1 test Postgres live di-skip di mesin review); import tidak valid ditolak tanpa mengubah data; backup otomatis sebelum import replace; server bersih bisa start setelah `npm ci --omit=dev`.
+
+## 2026-09-28 · Manual (Maja) · Rilis
+- Meminta README diperbarui, lalu menyetujui merge Fase 7 ke `main`.
+
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Eksekusi Test Suite Live PostgreSQL Sungguhan (`test/db.test.js`, `docs/PLAN.md`)**:
   - Menjalankan instance PostgreSQL 18.6 lokal dan database uji `nhdl_test`.

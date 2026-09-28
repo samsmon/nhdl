@@ -1,0 +1,9 @@
+node_modules
+webui/node_modules
+webui/dist
+data
+Download
+.env
+*.log
+.git
+.claude
