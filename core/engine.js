@@ -55,8 +55,10 @@ class DownloaderEngine extends EventEmitter {
         const defaultDownloadDir = path.join(__dirname, '..', 'Download');
         this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || savedDownloadDir || defaultDownloadDir;
         const hasLibraryEntries = getAllLibraryEntries().some(e => !e.skipped);
-        if (!fs.existsSync(this.baseDownloadDir) && !hasLibraryEntries && path.resolve(this.baseDownloadDir) === path.resolve(defaultDownloadDir)) {
-            fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+        if (!fs.existsSync(this.baseDownloadDir) && !hasLibraryEntries) {
+            try {
+                fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+            } catch (e) {}
         }
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
@@ -66,6 +68,8 @@ class DownloaderEngine extends EventEmitter {
         this.batchRestMinutes = options.batchRestMinutes || 5;
         this.concurrency = options.concurrency || 3;
         this.skipStartupJitter = !!options.skipStartupJitter;
+        this.healthCheckIntervalMs = options.healthCheckIntervalMs || 60000;
+        this._downloadDirWatchTimer = null;
         this.isRunning = false;
         this.isStopped = false;
         this.isPaused = false;
@@ -75,6 +79,77 @@ class DownloaderEngine extends EventEmitter {
 
         this.consecutiveRateLimits = 0;
         this.circuitBreakerTripped = false;
+
+        if (!isDownloadDirHealthy(this.baseDownloadDir)) {
+            this.markDownloadDirUnavailable('Download folder unavailable');
+        }
+    }
+
+    markDownloadDirUnavailable(reason = 'Download folder unavailable') {
+        this.statusReason = reason;
+        logEvent({
+            level: 'error',
+            message: `Run aborted: ${reason} (${this.baseDownloadDir})`
+        });
+        this.emit('download_dir_unavailable', {
+            reason,
+            downloadDir: this.baseDownloadDir
+        });
+        this.startDownloadDirWatch();
+    }
+
+    clearDownloadDirUnavailable() {
+        this.stopDownloadDirWatch();
+        this.statusReason = null;
+    }
+
+    startDownloadDirWatch() {
+        if (this._downloadDirWatchTimer) return;
+        this._downloadDirWatchTimer = setInterval(() => {
+            this.checkDownloadDirRecovery();
+        }, this.healthCheckIntervalMs);
+        if (this._downloadDirWatchTimer.unref) {
+            this._downloadDirWatchTimer.unref();
+        }
+    }
+
+    stopDownloadDirWatch() {
+        if (this._downloadDirWatchTimer) {
+            clearInterval(this._downloadDirWatchTimer);
+            this._downloadDirWatchTimer = null;
+        }
+    }
+
+    checkDownloadDirRecovery() {
+        if (this.statusReason !== 'Download folder unavailable') {
+            this.stopDownloadDirWatch();
+            return false;
+        }
+        const hasActiveLibrary = getAllLibraryEntries().some(e => !e.skipped);
+        if (!hasActiveLibrary && this.baseDownloadDir && !fs.existsSync(this.baseDownloadDir)) {
+            try {
+                fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+            } catch (e) {}
+        }
+        if (isDownloadDirHealthy(this.baseDownloadDir)) {
+            this.stopDownloadDirWatch();
+            this.statusReason = null;
+            logEvent({
+                level: 'info',
+                message: `Download folder recovered and healthy (${this.baseDownloadDir})`
+            });
+            logActivity(`Download folder recovered: ${this.baseDownloadDir}`);
+            this.emit('resumed', { recovered: true, downloadDir: this.baseDownloadDir });
+            requeueFailedItems();
+            const pending = getQueueItems({ status: 'PENDING' });
+            if (pending.length > 0 && !this.isRunning && !this.isPaused) {
+                this.runBatch().catch(e => {
+                    logActivity(`FATAL runBatch (recovery): ${e.stack || e.message}`);
+                });
+            }
+            return true;
+        }
+        return false;
     }
 
     pause() {
@@ -84,7 +159,7 @@ class DownloaderEngine extends EventEmitter {
 
     resume() {
         this.isPaused = false;
-        this.statusReason = null;
+        this.clearDownloadDirUnavailable();
         this.consecutiveRateLimits = 0;
         this.circuitBreakerTripped = false;
         this.emit('resumed');
@@ -104,8 +179,10 @@ class DownloaderEngine extends EventEmitter {
     setDownloadDir(newDir) {
         if (!newDir || typeof newDir !== 'string') return;
         this.baseDownloadDir = path.resolve(newDir);
-        this.statusReason = null;
-        if (!fs.existsSync(this.baseDownloadDir)) fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+        this.clearDownloadDirUnavailable();
+        if (!fs.existsSync(this.baseDownloadDir) && !getAllLibraryEntries().some(e => !e.skipped)) {
+            fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+        }
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
         try {
@@ -788,19 +865,18 @@ class DownloaderEngine extends EventEmitter {
     }
 
     async _runBatchBody(galleryIds = null) {
+        const hasActiveLibrary = getAllLibraryEntries().some(e => !e.skipped);
+        if (!hasActiveLibrary && this.baseDownloadDir && !fs.existsSync(this.baseDownloadDir)) {
+            try {
+                fs.mkdirSync(this.baseDownloadDir, { recursive: true });
+            } catch (e) {}
+        }
+
         if (!isDownloadDirHealthy(this.baseDownloadDir)) {
-            this.statusReason = 'Download folder unavailable';
-            logEvent({
-                level: 'error',
-                message: `Run aborted: Download folder unavailable (${this.baseDownloadDir})`
-            });
-            this.emit('download_dir_unavailable', {
-                reason: 'Download folder unavailable',
-                downloadDir: this.baseDownloadDir
-            });
+            this.markDownloadDirUnavailable('Download folder unavailable');
             return;
         }
-        this.statusReason = null;
+        this.clearDownloadDirUnavailable();
 
         const library = loadLibrary();
         if (Array.isArray(galleryIds) && galleryIds.length > 0) {

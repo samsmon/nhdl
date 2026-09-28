@@ -160,6 +160,12 @@ function rescanLibrary(baseDownloadDir) {
     const result = { scanned: 0, relocated: 0, unchanged: 0, pruned: 0, aborted: false };
     const activeBefore = getAllLibraryEntries().filter(e => !e.skipped);
 
+    if (baseDownloadDir && typeof baseDownloadDir === 'string' && activeBefore.length === 0 && !fs.existsSync(baseDownloadDir)) {
+        try {
+            fs.mkdirSync(baseDownloadDir, { recursive: true });
+        } catch (e) {}
+    }
+
     if (!baseDownloadDir || typeof baseDownloadDir !== 'string' || !fs.existsSync(baseDownloadDir)) {
         result.aborted = true;
         result.reason = 'Download folder unavailable';

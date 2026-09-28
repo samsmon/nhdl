@@ -350,14 +350,10 @@ function createRequestHandler() {
                 try {
                     const result = rescanLibrary(engine.baseDownloadDir);
                     if (result.aborted) {
-                        engine.statusReason = 'Download folder unavailable';
-                        engine.emit('download_dir_unavailable', {
-                            reason: result.reason || 'Download folder unavailable',
-                            downloadDir: engine.baseDownloadDir
-                        });
+                        engine.markDownloadDirUnavailable(result.reason || 'Download folder unavailable');
                         logActivity(`Library rescan aborted: ${result.reason || 'Download folder unavailable'}`);
                     } else {
-                        engine.statusReason = null;
+                        engine.clearDownloadDirUnavailable();
                         logActivity(`Library rescan: ${result.relocated} relocated/added, ${result.pruned} pruned (no folder found), ${result.unchanged} unchanged`);
                     }
                     return res.end(JSON.stringify({ success: !result.aborted, ...result }));
@@ -742,11 +738,11 @@ if (require.main === module) {
             const result = rescanLibrary(engine.baseDownloadDir);
             if (result.aborted) {
                 folderHealthy = false;
-                engine.statusReason = 'Download folder unavailable';
+                engine.markDownloadDirUnavailable(result.reason || 'Download folder unavailable');
                 console.warn(`[!] Startup rescan aborted: ${result.reason || 'Download folder unavailable'}`);
                 logActivity(`Startup rescan aborted: ${result.reason || 'Download folder unavailable'}`);
             } else {
-                engine.statusReason = null;
+                engine.clearDownloadDirUnavailable();
                 if (result.relocated > 0 || result.pruned > 0) {
                     console.log(`[+] Library rescan: relocated/added ${result.relocated}, pruned ${result.pruned} (no folder on disk).`);
                 }

@@ -600,9 +600,115 @@ test('A3: _runBatchBody pre-pass resets DONE with missing file to PENDING, keeps
     }
 });
 
+test('A1 regression fix: empty library creates missing DOWNLOAD_DIR and processes queue; non-empty library does NOT create missing folder and auto-recovers when mounted', async () => {
+    const ctx = createTempDb();
+    const DownloaderEngine = require('../core/engine');
+    const freshMissingDir = path.join(path.dirname(ctx.dbPath), 'fresh-custom-dl');
+    const mountedLaterDir = path.join(path.dirname(ctx.dbPath), 'mounted-later-dl');
 
+    try {
+        // Scenario 1: Empty library + missing DOWNLOAD_DIR -> folder is created and item is processed
+        assert.strictEqual(fs.existsSync(freshMissingDir), false);
+        dbMod.enqueueGallery({ galleryId: 910001, status: 'PENDING', batch: 1 }, ctx.db);
 
+        const engFresh = new DownloaderEngine({
+            baseDownloadDir: freshMissingDir,
+            skipStartupJitter: true
+        });
+        assert.strictEqual(fs.existsSync(freshMissingDir), true, 'Constructor must create missing DOWNLOAD_DIR when library is empty');
 
+        // Even if deleted right before _runBatchBody, _runBatchBody creates it when library has no active entries
+        fs.rmSync(freshMissingDir, { recursive: true, force: true });
+        assert.strictEqual(fs.existsSync(freshMissingDir), false);
 
+        const processedFresh = [];
+        engFresh.processGallery = async (galleryId) => {
+            const numId = Number(galleryId);
+            processedFresh.push(numId);
+            const savedFile = path.join(freshMissingDir, `${numId}.cbz`);
+            fs.writeFileSync(savedFile, 'cbz');
+            dbMod.upsertLibraryEntry({
+                galleryId: numId,
+                title: 'Fresh Downloaded Item',
+                path: savedFile,
+                pages: 8,
+                skipped: false
+            }, ctx.db);
+            dbMod.updateQueueStatus(numId, 'DONE', { pagesDone: 8, pagesTotal: 8 }, ctx.db);
+            return { status: 'SUCCESS', numPages: 8, skipped: false };
+        };
 
+        await engFresh._runBatchBody();
+        assert.strictEqual(fs.existsSync(freshMissingDir), true, '_runBatchBody must create missing DOWNLOAD_DIR when library is empty');
+        assert.deepStrictEqual(processedFresh, [910001]);
+        assert.strictEqual(dbMod.getQueueItem(910001, ctx.db).status, 'DONE');
+        assert.strictEqual(engFresh.getStatus(), 'IDLE');
 
+        // Scenario 2: Library has active entry + folder does NOT exist -> folder is NOT created, status is "Download folder unavailable"
+        const existingItemPath = path.join(mountedLaterDir, 'Artist', '(C99) [Artist] Book');
+        dbMod.upsertLibraryEntry({
+            galleryId: 910002,
+            title: 'Existing Library Item',
+            artist: 'Artist',
+            path: existingItemPath,
+            pages: 15,
+            skipped: false
+        }, ctx.db);
+        dbMod.enqueueGallery({ galleryId: 910003, status: 'PENDING', batch: 1 }, ctx.db);
+
+        assert.strictEqual(fs.existsSync(mountedLaterDir), false);
+        const engUnmounted = new DownloaderEngine({
+            baseDownloadDir: mountedLaterDir,
+            skipStartupJitter: true,
+            healthCheckIntervalMs: 30
+        });
+        // Must NOT create mountedLaterDir when library has active entries, and status is immediately unavailable!
+        assert.strictEqual(fs.existsSync(mountedLaterDir), false);
+        assert.strictEqual(engUnmounted.getStatus(), 'Download folder unavailable');
+
+        const processedMounted = [];
+        engUnmounted.processGallery = async (galleryId) => {
+            const numId = Number(galleryId);
+            processedMounted.push(numId);
+            dbMod.updateQueueStatus(numId, 'DONE', { pagesDone: 12, pagesTotal: 12 }, ctx.db);
+            return { status: 'SUCCESS', numPages: 12, skipped: false };
+        };
+
+        await engUnmounted.runBatch();
+        assert.strictEqual(fs.existsSync(mountedLaterDir), false, 'Must NOT mkdir over unmounted path when library has entries');
+        assert.strictEqual(engUnmounted.getStatus(), 'Download folder unavailable');
+        assert.strictEqual(dbMod.getQueueItem(910003, ctx.db).status, 'PENDING');
+
+        // Scenario 3: Disk mounts a moment later -> automatic health check clears statusReason, logs event, and processes queue
+        fs.mkdirSync(existingItemPath, { recursive: true });
+        fs.writeFileSync(path.join(existingItemPath, '1.jpg'), 'img');
+
+        await new Promise((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error('Timed out waiting for automatic download folder recovery')), 2000);
+            const poll = setInterval(() => {
+                const item910003 = dbMod.getQueueItem(910003, ctx.db);
+                if (item910003 && item910003.status === 'DONE' && engUnmounted.getStatus() === 'IDLE') {
+                    clearInterval(poll);
+                    clearTimeout(timeout);
+                    resolve();
+                }
+            }, 15);
+        });
+
+        assert.strictEqual(engUnmounted.statusReason, null);
+        assert.strictEqual(engUnmounted.getStatus(), 'IDLE');
+        assert.deepStrictEqual(processedMounted, [910003]);
+        assert.strictEqual(dbMod.getQueueItem(910003, ctx.db).status, 'DONE');
+
+        const events = dbMod.getEvents({ limit: 20 }, ctx.db);
+        assert.ok(
+            events.some(e => e.message && e.message.includes('Download folder recovered')),
+            'Expected recovery event in events table'
+        );
+        engUnmounted.stopDownloadDirWatch();
+    } finally {
+        try { fs.rmSync(freshMissingDir, { recursive: true, force: true }); } catch (e) {}
+        try { fs.rmSync(mountedLaterDir, { recursive: true, force: true }); } catch (e) {}
+        ctx.cleanup();
+    }
+});
