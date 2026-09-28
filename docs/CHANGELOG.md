@@ -9,6 +9,15 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **7.3 Implementasi PostgreSQL Adapter, Retry Pool & Panduan `docs/POSTGRES.md`**:
+  - Implementasikan seluruh dialek PostgreSQL di `core/db/postgres.js`: migrasi skema dengan tipe data `BIGINT`/`BIGSERIAL` untuk `id` dan `gallery_id`, `TIMESTAMPTZ` dengan default `now()`, parameter terkueri `$1, $2, ...`, `ON CONFLICT (gallery_id) DO NOTHING` / `DO UPDATE`, dan query `information_schema`.
+  - Tambahkan mekanisme `connectWithRetry` pada connection pool `pg.Pool` (maks 10 koneksi) yang mencoba ulang setiap 2 detik hingga 60 detik jika PostgreSQL belum siap saat container menyala.
+  - Tambahkan penyensoran kata sandi (`maskDatabaseUrl`) pada log startup daemon dan API info database agar kredensial tidak pernah terekspos.
+  - Buat `docs/POSTGRES.md` berisi panduan SQL setup user dan database `nhdl` dengan hak akses minimal (*least privilege*) termasuk konfigurasi PostgreSQL 15+.
+  - Perbarui peta arsitektur di `docs/ARCHITECTURE.md` untuk mencatat dependensi `pg` dan struktur adapter `core/db/`.
+  - Seluruh test (27/27) lulus dan build UI selesai dengan 0 warning.
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **7.2 Pemisahan Adapter Database (`core/db/sqlite.js` & `core/db/postgres.js`)**:
   - Pasang dependency runtime `pg` untuk koneksi PostgreSQL (satu-satunya pengecualian runtime backend).
   - Ekstrak implementasi SQLite ke `core/db/sqlite.js`, buat struktur adapter PostgreSQL di `core/db/postgres.js`, dan buat modul bersama `core/db/events.js` (EventEmitter) serta `core/db/common.js` (`normalizeGalleryId`, `formatQueueRow`, `maskDatabaseUrl`).

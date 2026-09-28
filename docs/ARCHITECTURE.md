@@ -9,30 +9,39 @@ Dokumen ini adalah peta teknis lengkap codebase NHDL agar AI agent di sesi baru 
 ```text
 nhdl/
 ├── server/
-│   └── index.js                 (495 baris) — HTTP server, Auth gate, REST API (SQLite), Batch compress job, Static file server
+│   └── index.js                 (495 baris) — HTTP server, Auth gate, REST API, Batch compress job, Static file server
 ├── core/
-│   ├── db.js                    (425 baris) — SQLite (`node:sqlite`, `data/nhdl.db` WAL mode), migrasi `schema_version`, query `queue`/`library`/`settings`/`events`
+│   ├── db.js                    (190 baris) — Database facade & dispatcher (SQLite / PostgreSQL via DATABASE_URL)
+│   ├── db/
+│   │   ├── common.js             (45 baris) — normalizeGalleryId, formatQueueRow, maskDatabaseUrl
+│   │   ├── events.js             (10 baris) — Shared EventEmitter (dbEvents)
+│   │   ├── sqlite.js            (450 baris) — SQLite adapter (`node:sqlite`, `data/nhdl.db` WAL mode)
+│   │   └── postgres.js          (500 baris) — PostgreSQL adapter (`pg.Pool`, retry pool, BIGSERIAL, now())
 │   ├── engine.js               (1010 baris) — DownloaderEngine (EventEmitter), ambil item `getNextPendingItem()`, metadata fetch, CDN/API download, 429 backoff
-│   ├── tracker.js               (380 baris) — Wrapper `queue` & `library` SQLite, `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), rename, CBZ compress
+│   ├── tracker.js               (380 baris) — Wrapper `queue` & `library` SQLite/Postgres, `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), rename, CBZ compress
 │   ├── utils.js                 (233 baris) — sanitizeName (escaped control chars), getDynamicDelay, verifyImage, blank PNG, atomicWriteFileSync
 │   ├── nhentaiApi.js            (188 baris) — certain site ( ͡° ͜ʖ ͡°) API v2 wrapper via curl + Cloudflare IP bypass + Zip magic-byte check (PK\x03\x04)
 │   ├── zip.js                   (101 baris) — Zero-dependency Store-only ZIP/CBZ binary builder (PKWARE spec)
 │   ├── auth.js                   (67 baris) — In-memory session token (30d TTL) + timingSafeEqual password check (NHDL_PASSWORD)
 │   ├── env.js                    (63 baris) — Zero-dependency .env parser & updater (saveEnvValue)
-│   └── logger.js                 (75 baris) — Audit & error logger ke tabel SQLite `events` (retensi 10.000 baris)
+│   └── logger.js                 (75 baris) — Audit & error logger ke tabel `events` (retensi 10.000 baris)
 ├── scripts/
 │   └── find-bad-archives.js     (118 baris) — `npm run check:archives` (deteksi & `--delete` file .cbz/.zip korup/HTML challenge + cetak daftar ID)
 ├── test/
-│   ├── db.test.js               (250 baris) — Unit & E2E test `node:test` (`core/db.js`, `rescanLibrary`, 1000-link restart consistency)
+│   ├── db.test.js               (750 baris) — Unit & E2E test `node:test` (`core/db.js`, `rescanLibrary`, 1000-link restart consistency)
+│   ├── sse.test.js              (730 baris) — Unit & E2E test SSE real-time delta, 5000-item virtual table & API endpoints
 │   └── nhentaiApi.test.js        (52 baris) — Unit test `node:test` (`downloadArchiveFile` User-Agent & validasi signature zip)
 ├── webui/
 │   ├── package.json                         — Svelte 5.57, Vite 8.3, Tailwind 4.3, GSAP 3.15, lucide-svelte
 │   └── src/
-│       └── App.svelte          (1766 baris) — Monolitik UI dashboard (masih menggunakan sintaks Svelte 4 `$:` & `let`)
+│       ├── App.svelte                       — Layout utama qBittorrent/IDM
+│       └── lib/                             — Komponen modular & reactive stores
 └── docs/
-    ├── PLAN.md                              — Roadmap rework (Fase 0–6)
+    ├── PLAN.md                              — Roadmap rework (Fase 0–8)
     ├── CHANGELOG.md                         — Riwayat perubahan (Manual & AI)
-    └── ARCHITECTURE.md                      — Dokumen referensi teknis ini
+    ├── ARCHITECTURE.md                      — Dokumen referensi teknis ini
+    ├── API.md                               — Kontrak endpoint REST & event SSE
+    └── POSTGRES.md                          — Panduan konfigurasi PostgreSQL terpusat
 ```
 
 ---
@@ -191,4 +200,10 @@ Saat ini masih berupa 1 komponen monolitik dengan sintaks Svelte 4 (`let`, `$:`)
    - Endpoint `/api/events` mengirim snapshot awal + delta (`item`, `progress`, `engine`).
 3. **Fase 3 & 4 — Frontend Svelte 5 Runes + Layout qBittorrent/IDM**:
    - `webui/package.json` **sudah menggunakan Svelte `^5.57.0`**, siap dimigrasikan ke Runes (`$state`, `$derived`, `$effect`), dipecah menjadi komponen + store, dengan virtual table (sortable, paginated dari server) dan panel detail bertab (`General` / `Pages` / `Log` dari tabel `events`).
+4. **Fase 7 — PostgreSQL Terpusat & Adapter Database**:
+   - Driver runtime backend `pg` dipasang sebagai satu-satunya dependensi eksternal (pengecualian aturan zero-dependency).
+   - `core/db.js` bertindak sebagai dispatcher yang memilih `core/db/postgres.js` jika `DATABASE_URL` terisi, atau `core/db/sqlite.js` jika kosong (default).
+   - Skema dan migrasi PostgreSQL kompatibel penuh dengan SQLite, menggunakan `BIGINT`/`BIGSERIAL`, `TIMESTAMPTZ`, `now()`, dan pool koneksi dengan toleransi startup retry 60 detik.
+   - Panduan hak akses minimal dicatat di `docs/POSTGRES.md`.
+
 

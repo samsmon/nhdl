@@ -22,7 +22,8 @@ const {
     deleteQueueItems,
     updateQueuePriority,
     getAllLibraryEntries,
-    getEvents
+    getEvents,
+    getDbInfo
 } = require('../core/db');
 initDb();
 
@@ -871,6 +872,14 @@ if (require.main === module) {
     server.listen(PORT, '0.0.0.0', async () => {
         console.log(`\x1b[32m[+] NHDL Web Daemon aktif pada http://0.0.0.0:${PORT}\x1b[0m`);
         console.log(`[+] Web UI Dashboard: http://localhost:${PORT}`);
+        try {
+            const dbInfo = getDbInfo();
+            if (dbInfo.type === 'postgres') {
+                console.log(`[+] Database: PostgreSQL (${dbInfo.maskedUrl || dbInfo.detail})`);
+            } else {
+                console.log(`[+] Database: SQLite (${dbInfo.path})`);
+            }
+        } catch (e) {}
 
         try {
             const resetCount = await resetStuckQueueItems();

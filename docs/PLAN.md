@@ -154,8 +154,8 @@ Keputusan:
 Task:
 - [x] Ubah API `core/db.js` menjadi async (semua fungsi mengembalikan Promise) dan sesuaikan pemanggil di `core/` dan `server/`. SQLite tetap di belakangnya. **Ini langkah terbesar karena `node:sqlite` sinkron sedangkan `pg` async**
 - [x] Pisahkan adapter: `core/db/sqlite.js` dan `core/db/postgres.js` dengan antarmuka yang sama; `core/db.js` memilih berdasarkan `DATABASE_URL`
-- [ ] Skema dan migrasi versi PostgreSQL: `datetime('now')` → `now()`/`timestamptz`, `INTEGER PRIMARY KEY` → `bigserial`/`identity`, `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`, `PRAGMA table_info` → `information_schema`
-- [ ] Koneksi: pool, retry saat Postgres belum siap waktu container start, pesan error yang jelas kalau `DATABASE_URL` salah
+- [x] Skema dan migrasi versi PostgreSQL: `datetime('now')` → `now()`/`timestamptz`, `INTEGER PRIMARY KEY` → `bigserial`/`identity`, `INSERT OR IGNORE` → `ON CONFLICT DO NOTHING`, `PRAGMA table_info` → `information_schema`
+- [x] Koneksi: pool, retry saat Postgres belum siap waktu container start, pesan error yang jelas kalau `DATABASE_URL` salah
 - [ ] Endpoint (catat dulu di `docs/API.md`): `GET /api/db/export` (download JSON), `POST /api/db/import` (upload JSON; mode *replace* atau *merge*, dalam satu transaksi), `POST /api/db/backup` + `GET /api/db/backups` (backup terjadwal/manual ke folder `data/backups/`, simpan N terakhir)
 - [ ] UI menu Settings → Database: info jenis DB + status koneksi (tanpa password), tombol Export, Import (dengan konfirmasi dan pilihan replace/merge), Backup sekarang, daftar backup + restore
 - [ ] `docker-compose.yml`: contoh `DATABASE_URL` ke shared Postgres (network eksternal), hapus kebutuhan volume `data/` untuk mode Postgres (kecuali folder backup)
@@ -205,3 +205,4 @@ Task:
 | 2026-09-28 | 5 & 6 | TASK 0: Fase 5 selesai ditandai [x] (5000 item ±700 elemen DOM, kembali ke filter "All" 15ms, filter 4–16ms, payload SSE ±250B vs ±245KB/s). Fase 6 (Go) dibatalkan [-] karena bottleneck di frontend sudah tuntas dan backend Node tidak menjadi masalah |
 | 2026-09-28 | 7 | 7.1: Konversi seluruh API `core/db.js` ke Promise/async, sesuaikan seluruh pemanggil di `core/` (`engine.js`, `tracker.js`, `logger.js`), `server/index.js`, scripts, dan test — 27/27 test lulus, `npm run build:ui` 0 warning |
 | 2026-09-28 | 7 | 7.2: Pisahkan adapter database `core/db/sqlite.js` dan `core/db/postgres.js`, dispatch di `core/db.js` berdasarkan `DATABASE_URL`, install `pg` — 27/27 test lulus, `npm run build:ui` 0 warning |
+| 2026-09-28 | 7 | 7.3: Implementasi PostgreSQL adapter (`core/db/postgres.js`), retry pool 60 detik, dialek SQL (`BIGSERIAL`, `TIMESTAMPTZ`, `now()`), masking kredensial di log startup, dan panduan hak minimal di `docs/POSTGRES.md` — 27/27 test lulus, `npm run build:ui` 0 warning |
