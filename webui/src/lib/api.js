@@ -231,12 +231,17 @@ export async function createDbBackup() {
 }
 
 export async function restoreDbBackup(filename, mode = 'replace') {
-  const { ok, data } = await requestJson('/api/db/restore', {
+  const { ok, status, data } = await requestJson('/api/db/restore', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ filename, mode })
   });
-  if (!ok) throw new Error(data?.error || 'Failed to restore backup');
+  if (!ok) {
+    const err = new Error(data?.error || 'Failed to restore backup');
+    err.status = status;
+    err.needsPause = data?.needsPause;
+    throw err;
+  }
   return data;
 }
 
@@ -249,12 +254,17 @@ export async function deleteDbBackup(filename) {
 }
 
 export async function importDbData(dataPayload, mode = 'merge') {
-  const { ok, data } = await requestJson('/api/db/import', {
+  const { ok, status, data } = await requestJson('/api/db/import', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ mode, data: dataPayload })
   });
-  if (!ok) throw new Error(data?.error || 'Failed to import database');
+  if (!ok) {
+    const err = new Error(data?.error || 'Failed to import database');
+    err.status = status;
+    err.needsPause = data?.needsPause;
+    throw err;
+  }
   return data;
 }
 

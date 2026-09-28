@@ -1710,4 +1710,85 @@ test('Point 1: importData rejects invalid payloads, unknown versions, corrupted 
     }
 });
 
+test('Point 2: /api/db/import and /api/db/restore reject with 409 Pause engine first when engine is running or ON_PROGRESS item exists', async () => {
+    const ctx = await createTempDb();
+    const { createRequestHandler, engine } = require('../server/index');
+    const http = require('http');
+
+    const srv = http.createServer(createRequestHandler());
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+
+    const request = (method, urlPath, body = null) => {
+        return new Promise((resolve, reject) => {
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port,
+                path: urlPath,
+                method,
+                headers: { 'Content-Type': 'application/json' }
+            }, res => {
+                let data = '';
+                res.on('data', chunk => { data += chunk.toString(); });
+                res.on('end', () => {
+                    let json = null;
+                    try { json = JSON.parse(data); } catch (e) {}
+                    resolve({ statusCode: res.statusCode, data, json });
+                });
+            });
+            req.on('error', reject);
+            if (body) req.write(body);
+            req.end();
+        });
+    };
+
+    const dummyPayload = JSON.stringify({
+        mode: 'merge',
+        data: {
+            format: 'nhdl-export',
+            version: 1,
+            tables: { queue: [{ gallery_id: 12345, url: 'https://certain.site/g/12345/' }] }
+        }
+    });
+
+    try {
+        // Case 1: Item is ON_PROGRESS
+        await dbMod.enqueueGallery({ galleryId: 77701, status: 'ON_PROGRESS', batch: 1 });
+
+        const impRes1 = await request('POST', '/api/db/import', dummyPayload);
+        assert.strictEqual(impRes1.statusCode, 409);
+        assert.strictEqual(impRes1.json.error, 'Pause engine first');
+        assert.strictEqual(impRes1.json.needsPause, true);
+
+        const restRes1 = await request('POST', '/api/db/restore', JSON.stringify({ filename: 'test.json' }));
+        assert.strictEqual(restRes1.statusCode, 409);
+        assert.strictEqual(restRes1.json.error, 'Pause engine first');
+        assert.strictEqual(restRes1.json.needsPause, true);
+
+        // Case 2: No ON_PROGRESS item, but engine.isRunning is true
+        await dbMod.updateQueueStatus(77701, 'STOPPED');
+        const origRunning = engine.isRunning;
+        engine.isRunning = true;
+
+        const impRes2 = await request('POST', '/api/db/import', dummyPayload);
+        assert.strictEqual(impRes2.statusCode, 409);
+        assert.strictEqual(impRes2.json.error, 'Pause engine first');
+
+        const restRes2 = await request('POST', '/api/db/restore', JSON.stringify({ filename: 'test.json' }));
+        assert.strictEqual(restRes2.statusCode, 409);
+        assert.strictEqual(restRes2.json.error, 'Pause engine first');
+
+        // Case 3: Engine idle and no ON_PROGRESS item -> proceeds
+        engine.isRunning = false;
+        const impRes3 = await request('POST', '/api/db/import', dummyPayload);
+        assert.strictEqual(impRes3.statusCode, 200);
+        assert.strictEqual(impRes3.json.success, true);
+
+        engine.isRunning = origRunning;
+    } finally {
+        await new Promise(r => srv.close(r));
+        await ctx.cleanup();
+    }
+});
+
 

@@ -9,6 +9,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Proteksi 409 Conflict Import/Restore Saat Engine Berjalan (`server/index.js`, `docs/API.md`, `webui/src/lib/api.js`, `webui/src/lib/components/FolderPickerModal.svelte`, `test/db.test.js`)**:
+  - Dokumentasikan respon 409 pada `/api/db/import` dan `/api/db/restore` di `docs/API.md`.
+  - Server menolak request import dan restore database dengan `409 Conflict` dan pesan `"Pause engine first"` (`needsPause: true`) bila `engine.isRunning` atau terdapat item antrian berstatus `ON_PROGRESS`.
+  - UI Settings Database menampilkan banner peringatan interaktif dan menawarkan tombol "Pause Engine" langsung untuk menghentikan mesin pengunduh sebelum memulai proses impor/pemulihan database.
+  - Tambahkan unit/integration test di `test/db.test.js` untuk memverifikasi penolakan 409 saat engine berjalan maupun ada item ON_PROGRESS (35/35 test lulus, build UI 0 warning).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Validasi Ketat importData Sebelum Transaksi Database (`core/db.js`, `core/db/common.js`, `core/db/sqlite.js`, `core/db/postgres.js`, `test/db.test.js`)**:
   - Implementasikan `validateImportPayload()` di `core/db/common.js` yang dieksekusi sebelum membuka transaksi database di `core/db.js`, `core/db/sqlite.js`, dan `core/db/postgres.js`.
   - Tolak impor jika `payload.format !== "nhdl-export"`, `version` tidak dikenal (hanya versi 1), `tables` bukan objek, atau ada tabel yang bukan array.

@@ -51,6 +51,23 @@
   // Delete Backup State
   let deletingBackup = $state(null);
 
+  // Engine Pause prompt state (Point 2)
+  let engineNeedsPause = $state(false);
+  let pausingEngine = $state(false);
+
+  async function handlePauseEngine() {
+    pausingEngine = true;
+    try {
+      await api.sendControl('pause');
+      engineNeedsPause = false;
+      appStore.showToast('Engine paused', 'info');
+    } catch (e) {
+      appStore.showToast(e.message || 'Failed to pause engine', 'error');
+    } finally {
+      pausingEngine = false;
+    }
+  }
+
   let dialogEl = $state(null);
 
   $effect(() => {
@@ -173,6 +190,7 @@
 
   async function handleRestoreBackup(filename) {
     restoreLoading = true;
+    engineNeedsPause = false;
     try {
       await api.restoreDbBackup(filename, 'replace');
       appStore.showToast(`Database restored from ${filename}`, 'success');
@@ -181,6 +199,9 @@
       appStore.refreshLibraryIndex();
       await loadDbData();
     } catch (e) {
+      if (e.needsPause || e.message?.includes('Pause engine first') || e.status === 409) {
+        engineNeedsPause = true;
+      }
       appStore.showToast(e.message || 'Failed to restore backup', 'error');
     } finally {
       restoreLoading = false;
@@ -222,6 +243,7 @@
     if (importMode === 'replace' && !importConfirmChecked) return;
 
     importLoading = true;
+    engineNeedsPause = false;
     try {
       const text = await importFile.text();
       let parsed;
@@ -245,6 +267,9 @@
       appStore.refreshLibraryIndex();
       await loadDbData();
     } catch (e) {
+      if (e.needsPause || e.message?.includes('Pause engine first') || e.status === 409) {
+        engineNeedsPause = true;
+      }
       appStore.showToast(e.message || 'Failed to import database', 'error');
     } finally {
       importLoading = false;
@@ -469,6 +494,22 @@
       {:else}
         <!-- Database Tab Body -->
         <div class="p-4 overflow-y-auto flex-1 space-y-4 max-h-[58vh] custom-scrollbar text-xs font-mono">
+          {#if engineNeedsPause}
+            <div class="bg-[#2a1315] border border-[#f87171]/40 rounded p-2.5 flex items-center justify-between gap-3 text-[#fca5a5]">
+              <div class="flex items-center gap-2">
+                <AlertTriangle class="w-4 h-4 shrink-0 text-[#f87171]" />
+                <span class="text-xs">Engine is running or downloading. Pause engine first.</span>
+              </div>
+              <button
+                onclick={handlePauseEngine}
+                disabled={pausingEngine}
+                class="px-2.5 py-1 rounded bg-[#f87171] hover:bg-[#ef4444] text-black font-semibold text-xs cursor-pointer shrink-0 disabled:opacity-50"
+              >
+                {pausingEngine ? 'Pausing...' : 'Pause Engine'}
+              </button>
+            </div>
+          {/if}
+
           <!-- 1. Database Info Header Card -->
           <div class="bg-[#121212] border border-[#262626] rounded p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
             <div class="flex items-start gap-3">

@@ -854,6 +854,12 @@ function createRequestHandler() {
             }
 
             if (req.method === 'POST' && req.url === '/api/db/import') {
+                const onProgressItems = await getQueueItems({ status: 'ON_PROGRESS' });
+                if (engine.isRunning || onProgressItems.length > 0) {
+                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: false, error: 'Pause engine first', needsPause: true }));
+                }
+
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
                 req.on('end', async () => {
@@ -904,6 +910,12 @@ function createRequestHandler() {
             }
 
             if (req.method === 'POST' && req.url === '/api/db/restore') {
+                const onProgressItems = await getQueueItems({ status: 'ON_PROGRESS' });
+                if (engine.isRunning || onProgressItems.length > 0) {
+                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    return res.end(JSON.stringify({ success: false, error: 'Pause engine first', needsPause: true }));
+                }
+
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
                 req.on('end', async () => {
