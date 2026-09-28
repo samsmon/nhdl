@@ -9,6 +9,14 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Eksekusi Test Suite Live PostgreSQL Sungguhan (`test/db.test.js`, `docs/PLAN.md`)**:
+  - Menjalankan instance PostgreSQL 18.6 lokal dan database uji `nhdl_test`.
+  - Mengeksekusi suite pengujian penuh dengan konfigurasi `TEST_DATABASE_URL=postgres://postgres@127.0.0.1:5432/nhdl_test`.
+  - Menguji migrasi skema langsung (v1 -> v2), enqueue antrian, update status `DONE`, penambahan entri library, ekspor data, pembersihan data, serta proteksi impor payload invalid.
+  - Memvalidasi bahwa parser tipe OID 20 mengembalikan tipe `number` untuk `gallery_id`, `id`, dan `COUNT(*)` pada query live ke engine PostgreSQL sungguhan.
+  - Hasil: Seluruh 41 test lulus tanpa ada yang di-skip maupun gagal (`41 pass, 0 fail, 0 skipped`).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Registrasi Driver Parser Tipe OID 20 PostgreSQL (`core/db/postgres.js`, `test/db.test.js`)**:
   - Daftarkan parser kustom `pg.types.setTypeParser(20, v => parseInt(v, 10))` di `core/db/postgres.js`.
   - Mengonversi nilai PostgreSQL `int8` / `BIGSERIAL` / `BIGINT` / `COUNT(*)` menjadi tipe data JavaScript `Number` alih-alih `String`.

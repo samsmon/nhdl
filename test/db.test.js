@@ -1550,8 +1550,8 @@ test('Fase 7.7: PostgreSQL live test suite against real server (skipped if TEST_
         await postgresAdapter.enqueueGallery({ galleryId: gid, url: `https://certain.site/g/${gid}/`, title: 'Live Postgres Test' }, pool);
         const item = await postgresAdapter.getQueueItem(gid, pool);
         assert.ok(item);
-        assert.strictEqual(item.galleryId, gid);
-        assert.strictEqual(typeof item.galleryId, 'number', 'gallery_id must be parsed as number');
+        assert.strictEqual(item.gallery_id, gid);
+        assert.strictEqual(typeof item.gallery_id, 'number', 'gallery_id must be parsed as number');
         assert.strictEqual(typeof item.id, 'number', 'id must be parsed as number');
         assert.strictEqual(item.status, 'PENDING');
 
@@ -1571,7 +1571,8 @@ test('Fase 7.7: PostgreSQL live test suite against real server (skipped if TEST_
         }, pool);
         const libItem = await postgresAdapter.getLibraryEntry(gid, pool);
         assert.ok(libItem);
-        assert.strictEqual(Number(libItem.galleryId), gid);
+        assert.strictEqual(libItem.gallery_id, gid);
+        assert.strictEqual(typeof libItem.gallery_id, 'number', 'library gallery_id must be parsed as number');
 
         const pgExport = await postgresAdapter.exportData(pool);
         assert.ok(pgExport.tables.queue.some(q => Number(q.gallery_id) === gid));
@@ -1589,7 +1590,8 @@ test('Fase 7.7: PostgreSQL live test suite against real server (skipped if TEST_
         // Verify data intact
         const item902 = await postgresAdapter.getQueueItem(999902, pool);
         assert.ok(item902);
-        assert.strictEqual(Number(item902.galleryId), 999902);
+        assert.strictEqual(item902.gallery_id, 999902);
+        assert.strictEqual(typeof item902.gallery_id, 'number');
         await postgresAdapter.deleteQueueItem(999902, pool);
     } finally {
         await postgresAdapter.closeDb();

@@ -218,3 +218,4 @@ Task:
 | 2026-09-28 | 7 | Auto-migrate backup: tulis backup JSON dari SQLite ke folder backup sebelum impor Postgres, batalkan migrasi dan jangan rename SQLite jika backup gagal — 38/38 test lulus |
 | 2026-09-28 | 7 | Event reordered kosong dihapus, emit event reloaded/snapshot baru via SSE setelah import/restore berhasil, store UI update otomatis — 39/39 test lulus |
 | 2026-09-28 | 7 | pg driver type parser: daftarkan parser OID 20 (BIGINT/BIGSERIAL/COUNT(*)) agar menghasilkan number bukan string — 40/40 test lulus |
+| 2026-09-28 | 7 | Eksekusi live test suite PostgreSQL sungguhan (TEST_DATABASE_URL): uji migrasi skema, enqueue, done, library, export/import, proteksi format invalid, dan verifikasi tipe number — 41/41 test lulus (0 fail, 0 skip) |
