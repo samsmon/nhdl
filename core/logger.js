@@ -26,10 +26,10 @@ function inferLevelAndGallery(message, explicitLevel, explicitGalleryId) {
     return { level, galleryId };
 }
 
-function logActivity(message, options = {}) {
+async function logActivity(message, options = {}) {
     const { level, galleryId } = inferLevelAndGallery(message, options.level, options.galleryId);
     try {
-        logEvent({
+        await logEvent({
             level,
             galleryId,
             message: String(message || ''),
@@ -40,10 +40,10 @@ function logActivity(message, options = {}) {
     }
 }
 
-function logErrorEvent(galleryId, message) {
+async function logErrorEvent(galleryId, message) {
     const cleanMsg = String(message || '');
     try {
-        logEvent({
+        await logEvent({
             level: 'error',
             galleryId,
             message: `ID: ${galleryId} - ${cleanMsg}`,
@@ -54,9 +54,9 @@ function logErrorEvent(galleryId, message) {
     }
 }
 
-function readActivityLog(limit = MAX_ACTIVITY_READ) {
+async function readActivityLog(limit = MAX_ACTIVITY_READ) {
     try {
-        const rows = getEvents({ limit });
+        const rows = await getEvents({ limit });
         if (!rows || rows.length === 0) return '';
         return rows.map(r => `[${r.ts}] ${r.message}`).join('\n') + '\n';
     } catch (e) {
@@ -64,9 +64,9 @@ function readActivityLog(limit = MAX_ACTIVITY_READ) {
     }
 }
 
-function readErrorLog(limit = MAX_ERROR_READ) {
+async function readErrorLog(limit = MAX_ERROR_READ) {
     try {
-        const rows = getEvents({ level: 'error', limit });
+        const rows = await getEvents({ level: 'error', limit });
         if (!rows || rows.length === 0) return '';
         return rows.map(r => `[${r.ts}] ${r.message}`).join('\n') + '\n';
     } catch (e) {

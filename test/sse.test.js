@@ -16,15 +16,15 @@ const {
 } = require('../core/db');
 const { createRequestHandler, engine } = require('../server/index');
 
-function createTempEnv() {
+async function createTempEnv() {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-sse-test-'));
     const dbPath = path.join(dir, 'test.db');
-    initDb(dbPath, { legacyConfigPath: path.join(dir, 'nonexistent-config.json') });
+    await initDb(dbPath, { legacyConfigPath: path.join(dir, 'nonexistent-config.json') });
     return {
         dir,
         dbPath,
-        cleanup() {
-            closeDb();
+        async cleanup() {
+            await closeDb();
             try {
                 fs.rmSync(dir, { recursive: true, force: true });
             } catch (e) {}
@@ -64,7 +64,7 @@ function parseSseFrames(buffer) {
 }
 
 test('GET /api/events streams initial snapshot and emits item delta after UPDATE in queue', async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     const srv = http.createServer(createRequestHandler());
 
     await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
@@ -72,8 +72,8 @@ test('GET /api/events streams initial snapshot and emits item delta after UPDATE
 
     try {
         // Seed 2 initial items in queue before opening SSE connection
-        enqueueGallery({ galleryId: 177013, title: '[ShindoL] Metamorphosis', batch: 1 });
-        enqueueGallery({ galleryId: 228922, title: 'Sample Two', batch: 2 });
+        await enqueueGallery({ galleryId: 177013, title: '[ShindoL] Metamorphosis', batch: 1 });
+        await enqueueGallery({ galleryId: 228922, title: 'Sample Two', batch: 2 });
 
         const receivedEvents = [];
         let buffer = '';
@@ -87,7 +87,7 @@ test('GET /api/events streams initial snapshot and emits item delta after UPDATE
                 assert.match(String(res.headers['content-type']), /^text\/event-stream/i);
                 res.setEncoding('utf8');
 
-                res.on('data', (chunk) => {
+                res.on('data', async (chunk) => {
                     buffer += chunk;
                     const parsed = parseSseFrames(buffer);
                     buffer = parsed.remainder;
@@ -98,7 +98,7 @@ test('GET /api/events streams initial snapshot and emits item delta after UPDATE
                         if (step === 'waiting_snapshot' && evt.event === 'snapshot') {
                             step = 'waiting_update_delta';
                             // Trigger an UPDATE in queue after snapshot arrives
-                            updateQueueStatus(177013, 'ON_PROGRESS', {
+                            await updateQueueStatus(177013, 'ON_PROGRESS', {
                                 pagesDone: 12,
                                 pagesTotal: 225
                             });
@@ -111,11 +111,11 @@ test('GET /api/events streams initial snapshot and emits item delta after UPDATE
                         ) {
                             step = 'waiting_done_delta';
                             // Trigger another UPDATE to DONE and a DELETE on 228922
-                            updateQueueStatus(177013, 'DONE', {
+                            await updateQueueStatus(177013, 'DONE', {
                                 pagesDone: 225,
                                 pagesTotal: 225
                             });
-                            deleteQueueItem(228922);
+                            await deleteQueueItem(228922);
                         } else if (
                             step === 'waiting_done_delta' &&
                             evt.event === 'item' &&
@@ -181,12 +181,12 @@ test('GET /api/events streams initial snapshot and emits item delta after UPDATE
         assert.equal(statusJson.items[0].rawStatus, 'DONE');
     } finally {
         await new Promise(resolve => srv.close(resolve));
-        env.cleanup();
+        await env.cleanup();
     }
 });
 
 test('GET /api/events streams progress and engine events', async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     const srv = http.createServer(createRequestHandler());
 
     await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
@@ -233,12 +233,12 @@ test('GET /api/events streams progress and engine events', async () => {
         assert.ok(receivedEvents.some(e => e.event === 'engine' && e.data.type === 'resumed'), 'Expected resumed engine SSE event');
     } finally {
         await new Promise(resolve => srv.close(resolve));
-        env.cleanup();
+        await env.cleanup();
     }
 });
 
 test('Fase 3 verification: 1000-item queue import via API, 2-tab real-time SSE sync, and payload/filter benchmark', async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     const srv = http.createServer(createRequestHandler());
 
     await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
@@ -306,7 +306,7 @@ test('Fase 3 verification: 1000-item queue import via API, 2-tab real-time SSE s
 
         // 3. Mutate item 100500 status via updateQueueStatus and verify BOTH tabs receive the SSE item delta in real time
         const tSyncStart = performance.now();
-        updateQueueStatus(100500, 'DONE', { pagesDone: 32, pagesTotal: 32 });
+        await updateQueueStatus(100500, 'DONE', { pagesDone: 32, pagesTotal: 32 });
 
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('Timed out waiting for 2-tab SSE sync')), 2000);
@@ -341,12 +341,12 @@ test('Fase 3 verification: 1000-item queue import via API, 2-tab real-time SSE s
     } finally {
         engine.isRunning = false;
         await new Promise(resolve => srv.close(resolve));
-        env.cleanup();
+        await env.cleanup();
     }
 });
 
 test('Fase 4 A1-A4 HTTP endpoints: /api/queue/pause, /api/queue/resume, /api/queue/priority, /api/queue/delete, and /api/logs?galleryId=', async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     const srv = http.createServer(createRequestHandler());
     const { logEvent, getQueueItem, getNextPendingItem } = require('../core/db');
 
@@ -374,32 +374,32 @@ test('Fase 4 A1-A4 HTTP endpoints: /api/queue/pause, /api/queue/resume, /api/que
 
     try {
         engine.isRunning = true; // prevent autoProcessQueue network calls
-        enqueueGallery({ galleryId: 700001, title: 'One', status: 'PENDING', batch: 1 });
-        enqueueGallery({ galleryId: 700002, title: 'Two', status: 'PENDING', batch: 1 });
-        enqueueGallery({ galleryId: 700003, title: 'Three', status: 'ERROR', error: 'Err', batch: 1 });
+        await enqueueGallery({ galleryId: 700001, title: 'One', status: 'PENDING', batch: 1 });
+        await enqueueGallery({ galleryId: 700002, title: 'Two', status: 'PENDING', batch: 1 });
+        await enqueueGallery({ galleryId: 700003, title: 'Three', status: 'ERROR', error: 'Err', batch: 1 });
 
         // 1. Pause 700001 and 700003
         const pauseRes = await requestJson('POST', '/api/queue/pause', { ids: [700001, 700003] });
         assert.equal(pauseRes.statusCode, 200);
         assert.equal(pauseRes.data.paused, 2);
-        assert.equal(getQueueItem(700001).status, 'STOPPED');
-        assert.equal(getQueueItem(700003).status, 'STOPPED');
+        assert.equal((await getQueueItem(700001)).status, 'STOPPED');
+        assert.equal((await getQueueItem(700003)).status, 'STOPPED');
 
         // 2. Resume 700001
         const resumeRes = await requestJson('POST', '/api/queue/resume', { ids: [700001] });
         assert.equal(resumeRes.statusCode, 200);
         assert.equal(resumeRes.data.resumed, 1);
-        assert.equal(getQueueItem(700001).status, 'PENDING');
+        assert.equal((await getQueueItem(700001)).status, 'PENDING');
 
         // 3. Priority: move 700002 to top
         const prioRes = await requestJson('POST', '/api/queue/priority', { ids: [700002], action: 'top' });
         assert.equal(prioRes.statusCode, 200);
-        assert.equal(getNextPendingItem().gallery_id, 700002);
+        assert.equal((await getNextPendingItem()).gallery_id, 700002);
 
         // 4. Per-gallery logs vs global logs
-        logEvent({ level: 'info', galleryId: 700002, message: 'Started downloading 700002' });
-        logEvent({ level: 'warn', galleryId: 700002, message: 'Retrying page 3 for 700002' });
-        logEvent({ level: 'info', galleryId: 700001, message: 'Other gallery log' });
+        await logEvent({ level: 'info', galleryId: 700002, message: 'Started downloading 700002' });
+        await logEvent({ level: 'warn', galleryId: 700002, message: 'Retrying page 3 for 700002' });
+        await logEvent({ level: 'info', galleryId: 700001, message: 'Other gallery log' });
 
         const galleryLogsRes = await requestJson('GET', '/api/logs?galleryId=700002&limit=10');
         assert.equal(galleryLogsRes.statusCode, 200);
@@ -417,16 +417,16 @@ test('Fase 4 A1-A4 HTTP endpoints: /api/queue/pause, /api/queue/resume, /api/que
         const delRes = await requestJson('POST', '/api/queue/delete', { ids: [700003] });
         assert.equal(delRes.statusCode, 200);
         assert.equal(delRes.data.deleted, 1);
-        assert.equal(getQueueItem(700003), null);
+        assert.equal(await getQueueItem(700003), null);
     } finally {
         engine.isRunning = false;
         await new Promise(resolve => srv.close(resolve));
-        env.cleanup();
+        await env.cleanup();
     }
 });
 
 test('Fase 4 verification: 5000-item mixed status DB, virtual window & filter/sort < 50ms, 2-tab real-time SSE sync (pause/resume/priority/delete), and legacy endpoints', async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     const srv = http.createServer(createRequestHandler());
     const { getDb } = require('../core/db');
 
@@ -458,7 +458,7 @@ test('Fase 4 verification: 5000-item mixed status DB, virtual window & filter/so
         engine.isRunning = true; // keep engine paused so it does not hit external network
 
         // 1. Seed 5000 mixed-status items in temp DB
-        const db = getDb();
+        const db = await getDb();
         const statuses = ['PENDING', 'ON_PROGRESS', 'DONE', 'SKIPPED', 'STOPPED', 'ERROR'];
         const formats = ['cbz', 'zip', 'folder'];
         db.exec('BEGIN IMMEDIATE');
@@ -584,12 +584,12 @@ test('Fase 4 verification: 5000-item mixed status DB, virtual window & filter/so
         if (tab2Req) tab2Req.destroy();
         engine.isRunning = false;
         await new Promise(resolve => srv.close(resolve));
-        env.cleanup();
+        await env.cleanup();
     }
 });
 
 test('SSE level: POST /api/queue/priority (up and top) emits item event type reordered with items [{galleryId, priority}], and payload never contains rawRow', async () => {
-    const env = createTempEnv();
+    const env = await createTempEnv();
     const srv = http.createServer(createRequestHandler());
 
     await new Promise(resolve => srv.listen(0, '127.0.0.1', resolve));
@@ -617,9 +617,9 @@ test('SSE level: POST /api/queue/priority (up and top) emits item event type reo
     let clientReq;
     try {
         engine.isRunning = true; // prevent autoProcessQueue
-        enqueueGallery({ galleryId: 750001, title: 'Item 1', status: 'PENDING', batch: 1 });
-        enqueueGallery({ galleryId: 750002, title: 'Item 2', status: 'PENDING', batch: 1 });
-        enqueueGallery({ galleryId: 750003, title: 'Item 3', status: 'PENDING', batch: 1 });
+        await enqueueGallery({ galleryId: 750001, title: 'Item 1', status: 'PENDING', batch: 1 });
+        await enqueueGallery({ galleryId: 750002, title: 'Item 2', status: 'PENDING', batch: 1 });
+        await enqueueGallery({ galleryId: 750003, title: 'Item 3', status: 'PENDING', batch: 1 });
 
         const receivedEvents = [];
         await new Promise((resolve, reject) => {
@@ -703,7 +703,7 @@ test('SSE level: POST /api/queue/priority (up and top) emits item event type reo
 
         // 3. Verify standard item update event also never contains rawRow
         receivedEvents.length = 0;
-        updateQueueStatus(750001, 'ON_PROGRESS', { pagesDone: 5, pagesTotal: 20 });
+        await updateQueueStatus(750001, 'ON_PROGRESS', { pagesDone: 5, pagesTotal: 20 });
         await new Promise((resolve, reject) => {
             const timeout = setTimeout(() => reject(new Error('Timed out waiting for updated event')), 2000);
             const check = setInterval(() => {
@@ -725,7 +725,7 @@ test('SSE level: POST /api/queue/priority (up and top) emits item event type reo
         if (clientReq) clientReq.destroy();
         engine.isRunning = false;
         await new Promise(resolve => srv.close(resolve));
-        env.cleanup();
+        await env.cleanup();
     }
 });
 

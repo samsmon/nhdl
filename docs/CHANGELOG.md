@@ -8,6 +8,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **7.1 Konversi API `core/db.js` menjadi Async**:
+  - Konversi seluruh fungsi yang diekspor dari `core/db.js` agar mengembalikan Promise (`async`/`await`), termasuk fungsi pembacaan, penulisan, migrasi skema, import/export list text, helper settings, dan query events.
+  - Sesuaikan seluruh modul pemanggil di `core/logger.js`, `core/tracker.js`, `core/engine.js`, `server/index.js`, dan `scripts/find-bad-archives.js` agar me-`await` pemanggilan DB secara konsisten tanpa ada unhandled rejection atau Promise menggantung.
+  - Perbaiki query `hasActiveLibraryEntries` agar memeriksa kolom `format` pada tabel `library` (`format IS NULL OR format != 'skipped'`), perbaiki penutupan watcher drive pada `test/db.test.js`, dan hapus panggilan ganda `initDb()` di request handler `server/index.js`.
+  - Seluruh test (27/27) lulus tanpa menggantung dan `npm run build:ui` selesai dengan 0 warning.
+
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 5 & 6
 - **TASK 0: Penutupan Fase 5 dan Pembatalan Fase 6 di `docs/PLAN.md`**:
   - Fase 5 ditandai selesai `[x]`: pengujian 5.000 item antrian hanya merender ±700 elemen DOM melalui virtual table, pergantian kembali ke filter "All" membutuhkan waktu 15ms, filter kategori 4–16ms, dan payload pembaruan SSE hanya ±250B per update vs ±245KB/detik polling `/api/status` di UI lama.

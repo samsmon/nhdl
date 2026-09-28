@@ -13,7 +13,8 @@ const {
     updateQueueItem,
     updateQueueStatus,
     importListText,
-    logEvent
+    logEvent,
+    hasActiveLibraryEntries
 } = require('./db');
 const { logErrorEvent } = require('./logger');
 
@@ -27,18 +28,18 @@ function archiveMarkerPath(archivePath) {
     return archivePath + MARKER_FILENAME;
 }
 
-function loadLibrary() {
-    return getLibraryMap();
+async function loadLibrary() {
+    return await getLibraryMap();
 }
 
-function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra = {}) {
+async function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra = {}) {
     try {
         const meta = {
             ext: ext || 'jpg',
             pageExts: pageExts || {},
             ...(extra.extraMeta ? extra.extraMeta : {})
         };
-        upsertLibraryEntry({
+        await upsertLibraryEntry({
             galleryId: id,
             title,
             path: folder,
@@ -48,6 +49,7 @@ function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra = {})
             artist: extra.author || null,
             meta
         });
+        _hasActiveLibrary = true;
 
         try {
             fs.writeFileSync(path.join(folder, MARKER_FILENAME), id.toString(), 'utf-8');
@@ -57,10 +59,10 @@ function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra = {})
     }
 }
 
-function saveArchivedToLibrary(id, title, archivePath, archiveExt, extra = {}) {
+async function saveArchivedToLibrary(id, title, archivePath, archiveExt, extra = {}) {
     try {
         const fmt = archiveExt === 'zip' ? 'zip' : 'cbz';
-        upsertLibraryEntry({
+        await upsertLibraryEntry({
             galleryId: id,
             title,
             path: archivePath,
@@ -70,6 +72,7 @@ function saveArchivedToLibrary(id, title, archivePath, archiveExt, extra = {}) {
             artist: extra.author || null,
             meta: extra.extraMeta || null
         });
+        _hasActiveLibrary = true;
         try {
             fs.writeFileSync(archiveMarkerPath(archivePath), id.toString(), 'utf-8');
         } catch (e) {}
@@ -78,8 +81,8 @@ function saveArchivedToLibrary(id, title, archivePath, archiveExt, extra = {}) {
     }
 }
 
-function saveArchivedGallery(id, title, archivePath, ext, extra = {}) {
-    return saveArchivedToLibrary(id, title, archivePath, ext, extra);
+async function saveArchivedGallery(id, title, archivePath, ext, extra = {}) {
+    return await saveArchivedToLibrary(id, title, archivePath, ext, extra);
 }
 
 function deriveLineageFromPath(targetPath, baseDownloadDir) {
@@ -119,7 +122,7 @@ function inspectFolderPages(folderPath) {
     return { pages: maxPage || files.length, ext, pageExts };
 }
 
-function isDownloadDirHealthy(dir) {
+async function isDownloadDirHealthy(dir) {
     if (!dir || typeof dir !== 'string' || !fs.existsSync(dir)) {
         return false;
     }
@@ -132,7 +135,9 @@ function isDownloadDirHealthy(dir) {
         return false;
     }
 
-    const activeEntries = getAllLibraryEntries().filter(e => !e.skipped);
+    const all = await getAllLibraryEntries();
+    const activeEntries = all.filter(e => !e.skipped);
+    _hasActiveLibrary = activeEntries.length > 0;
     if (activeEntries.length > 0) {
         const visibleFiles = dirents.filter(name => !name.startsWith('.'));
         if (visibleFiles.length === 0 && dirents.length === 0) {
@@ -156,9 +161,11 @@ function isDownloadDirHealthy(dir) {
 
 // Reconciles and populates the SQLite `library` table from `.nhdl-id` and `<archive>.nhdl-id`
 // marker files on disk inside `baseDownloadDir`.
-function rescanLibrary(baseDownloadDir) {
+async function rescanLibrary(baseDownloadDir) {
     const result = { scanned: 0, relocated: 0, unchanged: 0, pruned: 0, aborted: false };
-    const activeBefore = getAllLibraryEntries().filter(e => !e.skipped);
+    const all = await getAllLibraryEntries();
+    const activeBefore = all.filter(e => !e.skipped);
+    _hasActiveLibrary = activeBefore.length > 0;
 
     if (baseDownloadDir && typeof baseDownloadDir === 'string' && activeBefore.length === 0 && !fs.existsSync(baseDownloadDir)) {
         try {
@@ -169,7 +176,7 @@ function rescanLibrary(baseDownloadDir) {
     if (!baseDownloadDir || typeof baseDownloadDir !== 'string' || !fs.existsSync(baseDownloadDir)) {
         result.aborted = true;
         result.reason = 'Download folder unavailable';
-        logEvent({ level: 'error', message: `Rescan aborted: Download folder does not exist (${baseDownloadDir || 'empty'})` });
+        await logEvent({ level: 'error', message: `Rescan aborted: Download folder does not exist (${baseDownloadDir || 'empty'})` });
         return result;
     }
 
@@ -179,21 +186,21 @@ function rescanLibrary(baseDownloadDir) {
         if (!stat.isDirectory()) {
             result.aborted = true;
             result.reason = 'Download folder unavailable';
-            logEvent({ level: 'error', message: `Rescan aborted: Download path is not a directory (${baseDownloadDir})` });
+            await logEvent({ level: 'error', message: `Rescan aborted: Download path is not a directory (${baseDownloadDir})` });
             return result;
         }
         rootDirents = fs.readdirSync(baseDownloadDir);
     } catch (e) {
         result.aborted = true;
         result.reason = 'Download folder unavailable';
-        logEvent({ level: 'error', message: `Rescan aborted: Download folder cannot be read (${baseDownloadDir})` });
+        await logEvent({ level: 'error', message: `Rescan aborted: Download folder cannot be read (${baseDownloadDir})` });
         return result;
     }
 
     if (activeBefore.length > 0 && rootDirents.length === 0) {
         result.aborted = true;
         result.reason = 'Download folder is empty while library has entries';
-        logEvent({ level: 'error', message: `Rescan aborted: Download folder is empty while library has ${activeBefore.length} entries (${baseDownloadDir})` });
+        await logEvent({ level: 'error', message: `Rescan aborted: Download folder is empty while library has ${activeBefore.length} entries (${baseDownloadDir})` });
         return result;
     }
 
@@ -216,12 +223,12 @@ function rescanLibrary(baseDownloadDir) {
                 const rawId = fs.readFileSync(path.join(dir, MARKER_FILENAME), 'utf-8').trim();
                 const id = parseInt(rawId, 10);
                 if (Number.isFinite(id) && id > 0) {
-                    const existing = getLibraryEntry(id);
+                    const existing = await getLibraryEntry(id);
                     const { artist, language } = deriveLineageFromPath(dir, baseDownloadDir);
                     const { pages, ext, pageExts } = inspectFolderPages(dir);
 
                     if (!existing) {
-                        upsertLibraryEntry({
+                        await upsertLibraryEntry({
                             galleryId: id,
                             title: path.basename(dir),
                             path: dir,
@@ -233,7 +240,7 @@ function rescanLibrary(baseDownloadDir) {
                         });
                         result.relocated++;
                     } else if (existing.path !== dir || existing.format !== 'folder') {
-                        upsertLibraryEntry({
+                        await upsertLibraryEntry({
                             galleryId: id,
                             title: existing.title || path.basename(dir),
                             path: dir,
@@ -249,9 +256,9 @@ function rescanLibrary(baseDownloadDir) {
                         result.unchanged++;
                     }
 
-                    const qItem = getQueueItem(id);
+                    const qItem = await getQueueItem(id);
                     if (qItem && qItem.status !== 'DONE') {
-                        updateQueueStatus(id, 'DONE', { pagesDone: pages, pagesTotal: pages });
+                        await updateQueueStatus(id, 'DONE', { pagesDone: pages, pagesTotal: pages });
                     }
                 }
             } catch (e) {}
@@ -267,14 +274,14 @@ function rescanLibrary(baseDownloadDir) {
                 const rawId = fs.readFileSync(path.join(dir, d.name), 'utf-8').trim();
                 const id = parseInt(rawId, 10);
                 if (Number.isFinite(id) && id > 0) {
-                    const existing = getLibraryEntry(id);
+                    const existing = await getLibraryEntry(id);
                     const extMatch = archivePath.match(/\.(cbz|zip)$/i);
                     const archiveExt = extMatch ? extMatch[1].toLowerCase() : 'cbz';
                     const baseTitle = path.basename(archivePath, path.extname(archivePath));
                     const { artist, language } = deriveLineageFromPath(archivePath, baseDownloadDir);
 
                     if (!existing) {
-                        upsertLibraryEntry({
+                        await upsertLibraryEntry({
                             galleryId: id,
                             title: baseTitle,
                             path: archivePath,
@@ -285,7 +292,7 @@ function rescanLibrary(baseDownloadDir) {
                         });
                         result.relocated++;
                     } else if (existing.path !== archivePath || existing.format !== archiveExt) {
-                        upsertLibraryEntry({
+                        await upsertLibraryEntry({
                             galleryId: id,
                             title: existing.title || baseTitle,
                             path: archivePath,
@@ -301,9 +308,9 @@ function rescanLibrary(baseDownloadDir) {
                         result.unchanged++;
                     }
 
-                    const qItem = getQueueItem(id);
+                    const qItem = await getQueueItem(id);
                     if (qItem && qItem.status !== 'DONE') {
-                        updateQueueStatus(id, 'DONE');
+                        await updateQueueStatus(id, 'DONE');
                     }
                 }
             } catch (e) {}
@@ -318,13 +325,14 @@ function rescanLibrary(baseDownloadDir) {
         }
     }
 
-    const allEntries = getAllLibraryEntries().filter(e => !e.skipped);
+    const allFinal = await getAllLibraryEntries();
+    const allEntries = allFinal.filter(e => !e.skipped);
     const missingEntries = allEntries.filter(e => !e.path || !fs.existsSync(e.path));
 
     if (allEntries.length >= 10 && missingEntries.length / allEntries.length > 0.5) {
         result.aborted = true;
         result.reason = `More than 50% of library entries missing (${missingEntries.length}/${allEntries.length})`;
-        logEvent({
+        await logEvent({
             level: 'error',
             message: `Rescan aborted: ${missingEntries.length} of ${allEntries.length} library entries missing on disk in ${baseDownloadDir}`
         });
@@ -342,7 +350,7 @@ function rescanLibrary(baseDownloadDir) {
                 } catch (e) {}
             }
         } else {
-            deleteLibraryEntry(entry.gallery_id);
+            await deleteLibraryEntry(entry.gallery_id);
             result.pruned++;
         }
     }
@@ -350,9 +358,9 @@ function rescanLibrary(baseDownloadDir) {
     return result;
 }
 
-function getBatchFormatForGallery(_listPath, galleryId) {
+async function getBatchFormatForGallery(_listPath, galleryId) {
     try {
-        const item = getQueueItem(galleryId);
+        const item = await getQueueItem(galleryId);
         if (item && item.format) return item.format.toLowerCase();
     } catch (e) {}
     return null;
@@ -365,9 +373,9 @@ function buildDisplayName(title, author) {
     return title;
 }
 
-function getCachedDisplayName(_listPath, galleryId) {
+async function getCachedDisplayName(_listPath, galleryId) {
     try {
-        const item = getQueueItem(galleryId);
+        const item = await getQueueItem(galleryId);
         if (item && item.title) {
             const full = item.title.trim();
             const sepIdx = full.indexOf(' - ');
@@ -380,11 +388,11 @@ function getCachedDisplayName(_listPath, galleryId) {
     return null;
 }
 
-function updateListDisplayName(_listPath, galleryId, displayName) {
+async function updateListDisplayName(_listPath, galleryId, displayName) {
     try {
-        const item = getQueueItem(galleryId);
+        const item = await getQueueItem(galleryId);
         if (item) {
-            updateQueueItem(galleryId, { title: displayName });
+            await updateQueueItem(galleryId, { title: displayName });
         }
     } catch (e) {}
 }
@@ -402,9 +410,9 @@ function isPermanentlySkipped(entry) {
     return !!(entry && entry.skipped === true);
 }
 
-function saveSkippedToLibrary(id, reason) {
+async function saveSkippedToLibrary(id, reason) {
     try {
-        upsertLibraryEntry({
+        await upsertLibraryEntry({
             galleryId: id,
             title: 'Skipped',
             path: '',
@@ -417,9 +425,9 @@ function saveSkippedToLibrary(id, reason) {
     }
 }
 
-function logPlaceholderPage(galleryId, page, title) {
+async function logPlaceholderPage(galleryId, page, title) {
     const msg = `ID: ${galleryId} ("${title}") - page ${page} substituted with a blank image (CDN served placeholder)`;
-    logEvent({ level: 'warn', galleryId, message: msg });
+    await logEvent({ level: 'warn', galleryId, message: msg });
 }
 
 function logError(galleryId, message) {
@@ -438,31 +446,31 @@ function parseCompoundStatus(rawStatus) {
     return { status: str, error: null };
 }
 
-function updateListStatus(_trackerFile, galleryId, newStatus) {
+async function updateListStatus(_trackerFile, galleryId, newStatus) {
     try {
-        const item = getQueueItem(galleryId);
+        const item = await getQueueItem(galleryId);
         if (!item) return;
         const { status, error } = parseCompoundStatus(newStatus);
-        updateQueueStatus(galleryId, status, { error });
+        await updateQueueStatus(galleryId, status, { error });
     } catch (e) {}
 }
 
-function syncListTracker(listPathOrText) {
+async function syncListTracker(listPathOrText) {
     if (typeof listPathOrText === 'string' && listPathOrText.trim() !== '') {
         if (fs.existsSync(listPathOrText)) {
             const content = fs.readFileSync(listPathOrText, 'utf-8');
-            importListText(content, { replace: true });
+            await importListText(content, { replace: true });
         } else if (listPathOrText.includes('\n') || /\b\d{5,7}\b/.test(listPathOrText)) {
-            importListText(listPathOrText, { replace: true });
+            await importListText(listPathOrText, { replace: true });
         }
     }
-    const rows = getQueueItems();
+    const rows = await getQueueItems();
     const galleryIds = rows.map(r => String(r.gallery_id));
     return { galleryIds, trackerFile: null };
 }
 
-function renameLibraryEntry(id, newTitle) {
-    const entry = getLibraryEntry(id);
+async function renameLibraryEntry(id, newTitle) {
+    const entry = await getLibraryEntry(id);
     if (!entry || !entry.folder || !fs.existsSync(entry.folder)) {
         return { success: false, error: 'Gallery not found or its folder is missing' };
     }
@@ -492,7 +500,7 @@ function renameLibraryEntry(id, newTitle) {
         }
     }
 
-    upsertLibraryEntry({
+    await upsertLibraryEntry({
         galleryId: id,
         title: trimmedTitle,
         path: newPath,
@@ -504,17 +512,17 @@ function renameLibraryEntry(id, newTitle) {
         meta: entry.meta
     });
 
-    const qItem = getQueueItem(id);
+    const qItem = await getQueueItem(id);
     if (qItem) {
-        updateQueueItem(id, { title: buildDisplayName(trimmedTitle, entry.author) });
+        await updateQueueItem(id, { title: buildDisplayName(trimmedTitle, entry.author) });
     }
 
     return { success: true, folder: newPath };
 }
 
-function compressLibraryEntry(id, options = {}) {
+async function compressLibraryEntry(id, options = {}) {
     const ext = options.ext === 'zip' ? 'zip' : 'cbz';
-    const entry = getLibraryEntry(id);
+    const entry = await getLibraryEntry(id);
     if (!entry || !entry.folder || !fs.existsSync(entry.folder)) {
         return { success: false, error: 'Gallery not found or its folder is missing' };
     }
@@ -561,7 +569,7 @@ function compressLibraryEntry(id, options = {}) {
         fs.rmSync(entry.folder, { recursive: true, force: true });
     } catch (e) {}
 
-    upsertLibraryEntry({
+    await upsertLibraryEntry({
         galleryId: id,
         title: entry.title,
         path: cbzPath,
@@ -608,5 +616,6 @@ module.exports = {
     compressLibraryEntry,
     getBatchFormatForGallery,
     uniqueArchivePath,
-    saveArchivedGallery
+    saveArchivedGallery,
+    hasActiveLibraryEntries
 };

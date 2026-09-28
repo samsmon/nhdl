@@ -18,12 +18,12 @@ const ZIP_SIGNATURES = [
     Buffer.from([0x50, 0x4b, 0x05, 0x06])  // empty archive
 ];
 
-function resolveDownloadDir(arg) {
+async function resolveDownloadDir(arg) {
     if (arg) return path.resolve(arg);
     if (process.env.DOWNLOAD_DIR) return process.env.DOWNLOAD_DIR;
     try {
         const { getSetting } = require('../core/db');
-        const savedDir = getSetting('downloadDir');
+        const savedDir = await getSetting('downloadDir');
         if (savedDir) return savedDir;
     } catch (e) {}
     return path.join(__dirname, '..', 'Download');
@@ -63,55 +63,60 @@ function* walk(dir) {
     }
 }
 
-const args = process.argv.slice(2);
-const doDelete = args.includes('--delete');
-const downloadDir = resolveDownloadDir(args.find(a => !a.startsWith('--')));
+(async () => {
+    const args = process.argv.slice(2);
+    const doDelete = args.includes('--delete');
+    const downloadDir = await resolveDownloadDir(args.find(a => !a.startsWith('--')));
 
-if (!fs.existsSync(downloadDir)) {
-    console.error(`Folder download tidak ditemukan: ${downloadDir}`);
-    process.exit(1);
-}
-
-console.log(`Memindai ${downloadDir} ...`);
-let scanned = 0;
-const bad = [];
-for (const file of walk(downloadDir)) {
-    scanned++;
-    try {
-        if (isZip(file)) continue;
-        const markerPath = file + MARKER_SUFFIX;
-        let id = null;
-        try { id = fs.readFileSync(markerPath, 'utf-8').trim() || null; } catch (e) {}
-        bad.push({ file, markerPath, id, size: fs.statSync(file).size, kind: describe(file) });
-    } catch (e) {
-        console.warn(`  gagal membaca ${file}: ${e.message}`);
+    if (!fs.existsSync(downloadDir)) {
+        console.error(`Folder download tidak ditemukan: ${downloadDir}`);
+        process.exit(1);
     }
-}
 
-console.log(`${scanned} archive diperiksa, ${bad.length} bukan zip.\n`);
-for (const b of bad) {
-    console.log(`- [${b.id || 'ID?'}] ${(b.size / 1024).toFixed(1)} KB, ${b.kind}\n  ${b.file}`);
-}
-if (bad.length === 0) process.exit(0);
-
-if (!doDelete) {
-    console.log('\nTidak ada yang dihapus. Jalankan ulang dengan --delete untuk menghapus file di atas.');
-} else {
-    let deleted = 0;
-    for (const b of bad) {
+    console.log(`Memindai ${downloadDir} ...`);
+    let scanned = 0;
+    const bad = [];
+    for (const file of walk(downloadDir)) {
+        scanned++;
         try {
-            fs.unlinkSync(b.file);
-            if (fs.existsSync(b.markerPath)) fs.unlinkSync(b.markerPath);
-            deleted++;
+            if (isZip(file)) continue;
+            const markerPath = file + MARKER_SUFFIX;
+            let id = null;
+            try { id = fs.readFileSync(markerPath, 'utf-8').trim() || null; } catch (e) {}
+            bad.push({ file, markerPath, id, size: fs.statSync(file).size, kind: describe(file) });
         } catch (e) {
-            console.warn(`  gagal menghapus ${b.file}: ${e.message}`);
+            console.warn(`  gagal membaca ${file}: ${e.message}`);
         }
     }
-    console.log(`\n${deleted} file dihapus.`);
-}
 
-const ids = bad.map(b => b.id).filter(Boolean);
-if (ids.length) {
-    console.log('\nID untuk didownload ulang (tempel ke list/UI):');
-    console.log(ids.join('\n'));
-}
+    console.log(`${scanned} archive diperiksa, ${bad.length} bukan zip.\n`);
+    for (const b of bad) {
+        console.log(`- [${b.id || 'ID?'}] ${(b.size / 1024).toFixed(1)} KB, ${b.kind}\n  ${b.file}`);
+    }
+    if (bad.length === 0) process.exit(0);
+
+    if (!doDelete) {
+        console.log('\nTidak ada yang dihapus. Jalankan ulang dengan --delete untuk menghapus file di atas.');
+    } else {
+        let deleted = 0;
+        for (const b of bad) {
+            try {
+                fs.unlinkSync(b.file);
+                if (fs.existsSync(b.markerPath)) fs.unlinkSync(b.markerPath);
+                deleted++;
+            } catch (e) {
+                console.warn(`  gagal menghapus ${b.file}: ${e.message}`);
+            }
+        }
+        console.log(`\n${deleted} file dihapus.`);
+    }
+
+    const ids = bad.map(b => b.id).filter(Boolean);
+    if (ids.length) {
+        console.log('\nID untuk didownload ulang (tempel ke list/UI):');
+        console.log(ids.join('\n'));
+    }
+})().catch(err => {
+    console.error(err);
+    process.exit(1);
+});

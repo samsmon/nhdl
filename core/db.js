@@ -78,30 +78,32 @@ const MIGRATIONS = [
     }
 ];
 
-function getSchemaVersion(db = getDb()) {
-    const tableExists = db.prepare(
+async function getSchemaVersion(db = null) {
+    const active = db || await getDb();
+    const tableExists = active.prepare(
         `SELECT name FROM sqlite_master WHERE type='table' AND name='schema_version'`
     ).get();
     if (!tableExists) return 0;
-    const row = db.prepare(`SELECT MAX(version) AS v FROM schema_version`).get();
+    const row = active.prepare(`SELECT MAX(version) AS v FROM schema_version`).get();
     return row && typeof row.v === 'number' ? row.v : 0;
 }
 
-function runMigrations(db) {
-    db.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);`);
-    let currentVersion = getSchemaVersion(db);
+async function runMigrations(db = null) {
+    const active = db || await getDb();
+    active.exec(`CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL);`);
+    let currentVersion = await getSchemaVersion(active);
 
     for (const migration of MIGRATIONS) {
         if (migration.version > currentVersion) {
-            db.exec('BEGIN');
+            active.exec('BEGIN');
             try {
-                migration.up(db);
-                db.prepare(`DELETE FROM schema_version`).run();
-                db.prepare(`INSERT INTO schema_version (version) VALUES (?)`).run(migration.version);
-                db.exec('COMMIT');
+                migration.up(active);
+                active.prepare(`DELETE FROM schema_version`).run();
+                active.prepare(`INSERT INTO schema_version (version) VALUES (?)`).run(migration.version);
+                active.exec('COMMIT');
                 currentVersion = migration.version;
             } catch (err) {
-                db.exec('ROLLBACK');
+                active.exec('ROLLBACK');
                 throw err;
             }
         }
@@ -109,7 +111,7 @@ function runMigrations(db) {
     return currentVersion;
 }
 
-function initDb(dbPath = DEFAULT_DB_PATH, options = {}) {
+async function initDb(dbPath = DEFAULT_DB_PATH, options = {}) {
     if (activeDb && activeDbPath === dbPath && options.legacyConfigPath === undefined) {
         return activeDb;
     }
@@ -128,7 +130,7 @@ function initDb(dbPath = DEFAULT_DB_PATH, options = {}) {
     const db = new DatabaseSync(dbPath);
     db.exec(`PRAGMA journal_mode=WAL;`);
     db.exec(`PRAGMA foreign_keys=ON;`);
-    runMigrations(db);
+    await runMigrations(db);
 
     const legacyConfigPath = options.legacyConfigPath !== undefined
         ? options.legacyConfigPath
@@ -136,7 +138,7 @@ function initDb(dbPath = DEFAULT_DB_PATH, options = {}) {
             ? process.env.NHDL_LEGACY_CONFIG
             : path.join(ROOT_DIR, 'config.json'));
     if (legacyConfigPath) {
-        migrateLegacyConfigJson(legacyConfigPath, db);
+        await migrateLegacyConfigJson(legacyConfigPath, db);
     }
 
     activeDb = db;
@@ -144,14 +146,14 @@ function initDb(dbPath = DEFAULT_DB_PATH, options = {}) {
     return db;
 }
 
-function getDb() {
+async function getDb() {
     if (!activeDb) {
-        return initDb(DEFAULT_DB_PATH);
+        return await initDb(DEFAULT_DB_PATH);
     }
     return activeDb;
 }
 
-function closeDb() {
+async function closeDb() {
     if (activeDb) {
         try { activeDb.close(); } catch (e) {}
         activeDb = null;
@@ -160,18 +162,19 @@ function closeDb() {
 }
 
 // Startup recovery: any item left in ON_PROGRESS when the server died must be reset to PENDING
-function resetStuckQueueItems(db = getDb()) {
-    const stuckRows = db.prepare(`SELECT gallery_id FROM queue WHERE status = 'ON_PROGRESS'`).all();
-    const stmt = db.prepare(`
+async function resetStuckQueueItems(db = null) {
+    const active = db || await getDb();
+    const stuckRows = active.prepare(`SELECT gallery_id FROM queue WHERE status = 'ON_PROGRESS'`).all();
+    const stmt = active.prepare(`
         UPDATE queue
         SET status = 'PENDING', updated_at = datetime('now')
         WHERE status = 'ON_PROGRESS'
     `);
     const res = stmt.run();
     if (res.changes > 0) {
-        const batchCount = Math.max(1, getMaxBatch(db));
+        const batchCount = Math.max(1, await getMaxBatch(active));
         for (const r of stuckRows) {
-            const updated = getQueueItem(r.gallery_id, db);
+            const updated = await getQueueItem(r.gallery_id, active);
             if (updated) {
                 dbEvents.emit('item', {
                     type: 'updated',
@@ -186,15 +189,16 @@ function resetStuckQueueItems(db = getDb()) {
 }
 
 // Re-queue ERROR / COOLDOWN / PAUSED items back to PENDING if retries < maxRetries (default 5)
-function requeueFailedItems(options = {}, db = getDb()) {
+async function requeueFailedItems(options = {}, db = null) {
+    const active = db || await getDb();
     const maxRetries = Number.isFinite(options.maxRetries) ? options.maxRetries : 5;
-    const targetRows = db.prepare(`
+    const targetRows = active.prepare(`
         SELECT gallery_id FROM queue
         WHERE status IN ('ERROR', 'COOLDOWN', 'PAUSED')
           AND COALESCE(retries, 0) < ?
     `).all(maxRetries);
 
-    const stmt = db.prepare(`
+    const stmt = active.prepare(`
         UPDATE queue
         SET status = 'PENDING', error = NULL, updated_at = datetime('now')
         WHERE status IN ('ERROR', 'COOLDOWN', 'PAUSED')
@@ -202,9 +206,9 @@ function requeueFailedItems(options = {}, db = getDb()) {
     `);
     const res = stmt.run(maxRetries);
     if (res.changes > 0) {
-        const batchCount = Math.max(1, getMaxBatch(db));
+        const batchCount = Math.max(1, await getMaxBatch(active));
         for (const r of targetRows) {
-            const updated = getQueueItem(r.gallery_id, db);
+            const updated = await getQueueItem(r.gallery_id, active);
             if (updated) {
                 dbEvents.emit('item', {
                     type: 'updated',
@@ -249,7 +253,8 @@ function formatQueueRow(r) {
     };
 }
 
-function enqueueGallery(item, db = getDb()) {
+async function enqueueGallery(item, db = null) {
+    const active = db || await getDb();
     const galleryId = normalizeGalleryId(item.galleryId ?? item.gallery_id);
     const url = item.url || `https://nhentai.net/g/${galleryId}/`;
     const title = item.title ?? null;
@@ -262,7 +267,7 @@ function enqueueGallery(item, db = getDb()) {
     const retries = Number.isFinite(item.retries) ? item.retries : 0;
     const format = item.format ?? null;
 
-    const stmt = db.prepare(`
+    const stmt = active.prepare(`
         INSERT INTO queue (
             gallery_id, url, title, status, batch, priority,
             pages_done, pages_total, error, retries, format
@@ -273,8 +278,8 @@ function enqueueGallery(item, db = getDb()) {
         galleryId, url, title, status, batch, priority,
         pagesDone, pagesTotal, error, retries, format
     );
-    const row = getQueueItem(galleryId, db);
-    const batchCount = Math.max(1, getMaxBatch(db));
+    const row = await getQueueItem(galleryId, active);
+    const batchCount = Math.max(1, await getMaxBatch(active));
     dbEvents.emit('item', {
         type: 'inserted',
         item: formatQueueRow(row),
@@ -284,13 +289,15 @@ function enqueueGallery(item, db = getDb()) {
     return row;
 }
 
-function getQueueItem(galleryId, db = getDb()) {
+async function getQueueItem(galleryId, db = null) {
+    const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
-    return db.prepare(`SELECT * FROM queue WHERE gallery_id = ?`).get(id) || null;
+    return active.prepare(`SELECT * FROM queue WHERE gallery_id = ?`).get(id) || null;
 }
 
-function getNextPendingItem(db = getDb()) {
-    return db.prepare(`
+async function getNextPendingItem(db = null) {
+    const active = db || await getDb();
+    return active.prepare(`
         SELECT * FROM queue
         WHERE status = 'PENDING'
         ORDER BY priority DESC, id ASC
@@ -298,7 +305,8 @@ function getNextPendingItem(db = getDb()) {
     `).get() || null;
 }
 
-function getQueueItems(options = {}, db = getDb()) {
+async function getQueueItems(options = {}, db = null) {
+    const active = db || await getDb();
     const clauses = [];
     const params = [];
 
@@ -328,10 +336,11 @@ function getQueueItems(options = {}, db = getDb()) {
         }
     }
 
-    return db.prepare(sql).all(...params);
+    return active.prepare(sql).all(...params);
 }
 
-function updateQueueItem(galleryId, fields = {}, db = getDb()) {
+async function updateQueueItem(galleryId, fields = {}, db = null) {
+    const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
     const sets = [`updated_at = datetime('now')`];
     const params = [];
@@ -365,10 +374,10 @@ function updateQueueItem(galleryId, fields = {}, db = getDb()) {
     }
 
     params.push(id);
-    db.prepare(`UPDATE queue SET ${sets.join(', ')} WHERE gallery_id = ?`).run(...params);
-    const updated = getQueueItem(id, db);
+    active.prepare(`UPDATE queue SET ${sets.join(', ')} WHERE gallery_id = ?`).run(...params);
+    const updated = await getQueueItem(id, active);
     if (updated) {
-        const batchCount = Math.max(1, getMaxBatch(db));
+        const batchCount = Math.max(1, await getMaxBatch(active));
         dbEvents.emit('item', {
             type: 'updated',
             item: formatQueueRow(updated),
@@ -379,36 +388,38 @@ function updateQueueItem(galleryId, fields = {}, db = getDb()) {
     return updated;
 }
 
-function updateQueueStatus(galleryId, status, extra = {}, db = getDb()) {
+async function updateQueueStatus(galleryId, status, extra = {}, db = null) {
     const fields = { status, ...extra };
     if (status === 'ERROR' && extra.incrementRetries === undefined && extra.retries === undefined) {
         fields.incrementRetries = true;
     }
-    return updateQueueItem(galleryId, fields, db);
+    return await updateQueueItem(galleryId, fields, db);
 }
 
-function deleteQueueItem(galleryId, db = getDb()) {
+async function deleteQueueItem(galleryId, db = null) {
+    const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
-    const res = db.prepare(`DELETE FROM queue WHERE gallery_id = ?`).run(id);
+    const res = active.prepare(`DELETE FROM queue WHERE gallery_id = ?`).run(id);
     if (res.changes > 0) {
-        const batchCount = Math.max(1, getMaxBatch(db));
+        const batchCount = Math.max(1, await getMaxBatch(active));
         dbEvents.emit('item', { type: 'deleted', galleryId: id, batchCount });
     }
     return Number(res.changes || 0);
 }
 
-function pauseQueueItems(ids = [], db = getDb()) {
+async function pauseQueueItems(ids = [], db = null) {
+    const active = db || await getDb();
     if (!Array.isArray(ids) || ids.length === 0) return { paused: 0, stoppingIds: [] };
     let paused = 0;
     const stoppingIds = [];
     const pausableSet = new Set(['PENDING', 'ERROR', 'COOLDOWN', 'PAUSED', 'ON_PROGRESS']);
 
-    db.exec('BEGIN');
+    active.exec('BEGIN');
     try {
         for (const rawId of ids) {
             let gid;
             try { gid = normalizeGalleryId(rawId); } catch (e) { continue; }
-            const row = getQueueItem(gid, db);
+            const row = await getQueueItem(gid, active);
             if (!row) continue;
             const st = String(row.status || '').toUpperCase();
             const isPausable = pausableSet.has(st) || st.startsWith('ERROR') || st.startsWith('COOLDOWN') || st.startsWith('PAUSED');
@@ -417,75 +428,78 @@ function pauseQueueItems(ids = [], db = getDb()) {
             if (st === 'ON_PROGRESS') {
                 stoppingIds.push(gid);
             }
-            updateQueueItem(gid, { status: 'STOPPED' }, db);
+            await updateQueueItem(gid, { status: 'STOPPED' }, active);
             paused++;
         }
-        db.exec('COMMIT');
+        active.exec('COMMIT');
     } catch (err) {
-        db.exec('ROLLBACK');
+        active.exec('ROLLBACK');
         throw err;
     }
 
     return { paused, stoppingIds };
 }
 
-function resumeQueueItems(ids = [], db = getDb()) {
+async function resumeQueueItems(ids = [], db = null) {
+    const active = db || await getDb();
     if (!Array.isArray(ids) || ids.length === 0) return { resumed: 0, resumedIds: [] };
     let resumed = 0;
     const resumedIds = [];
     const resumableSet = new Set(['STOPPED', 'ERROR', 'COOLDOWN', 'PAUSED']);
 
-    db.exec('BEGIN');
+    active.exec('BEGIN');
     try {
         for (const rawId of ids) {
             let gid;
             try { gid = normalizeGalleryId(rawId); } catch (e) { continue; }
-            const row = getQueueItem(gid, db);
+            const row = await getQueueItem(gid, active);
             if (!row) continue;
             const st = String(row.status || '').toUpperCase();
             const isResumable = resumableSet.has(st) || st.startsWith('ERROR') || st.startsWith('COOLDOWN') || st.startsWith('PAUSED');
             if (!isResumable) continue;
 
-            updateQueueItem(gid, { status: 'PENDING', error: null }, db);
+            await updateQueueItem(gid, { status: 'PENDING', error: null }, active);
             resumed++;
             resumedIds.push(gid);
         }
-        db.exec('COMMIT');
+        active.exec('COMMIT');
     } catch (err) {
-        db.exec('ROLLBACK');
+        active.exec('ROLLBACK');
         throw err;
     }
 
     return { resumed, resumedIds };
 }
 
-function deleteQueueItems(ids = [], db = getDb()) {
+async function deleteQueueItems(ids = [], db = null) {
+    const active = db || await getDb();
     if (!Array.isArray(ids) || ids.length === 0) return { deleted: 0, stoppingIds: [] };
     let deleted = 0;
     const stoppingIds = [];
 
-    db.exec('BEGIN');
+    active.exec('BEGIN');
     try {
         for (const rawId of ids) {
             let gid;
             try { gid = normalizeGalleryId(rawId); } catch (e) { continue; }
-            const row = getQueueItem(gid, db);
+            const row = await getQueueItem(gid, active);
             if (!row) continue;
             if (row.status === 'ON_PROGRESS') {
                 stoppingIds.push(gid);
             }
-            deleted += deleteQueueItem(gid, db);
+            deleted += await deleteQueueItem(gid, active);
         }
-        db.exec('COMMIT');
+        active.exec('COMMIT');
     } catch (err) {
-        db.exec('ROLLBACK');
+        active.exec('ROLLBACK');
         throw err;
     }
 
     return { deleted, stoppingIds };
 }
 
-function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
+async function updateQueuePriority(ids = [], action = 'top', db = null) {
+    const active = db || await getDb();
     const validActions = new Set(['top', 'up', 'down', 'bottom']);
     if (!validActions.has(action) || !Array.isArray(ids) || ids.length === 0) {
         return { updated: 0 };
@@ -497,7 +511,7 @@ function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
     }
     if (targetSet.size === 0) return { updated: 0 };
 
-    const rows = db.prepare(`
+    const rows = active.prepare(`
         SELECT id, gallery_id, priority
         FROM queue
         ORDER BY priority DESC, id ASC
@@ -512,13 +526,13 @@ function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
 
     const changedItems = [];
     const nowSql = new Date().toISOString().replace('T', ' ').slice(0, 19);
-    const stmt = db.prepare(`
+    const stmt = active.prepare(`
         UPDATE queue
         SET priority = ?, updated_at = ?
         WHERE gallery_id = ?
     `);
 
-    db.exec('BEGIN IMMEDIATE');
+    active.exec('BEGIN IMMEDIATE');
     try {
         if (action === 'top') {
             const maxP = rows.reduce((m, r) => Math.max(m, Number(r.priority) || 0), 0);
@@ -593,14 +607,14 @@ function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
                 }
             }
         }
-        db.exec('COMMIT');
+        active.exec('COMMIT');
     } catch (err) {
-        db.exec('ROLLBACK');
+        active.exec('ROLLBACK');
         throw err;
     }
 
     if (changedItems.length > 0) {
-        const batchCount = Math.max(1, getMaxBatch(db));
+        const batchCount = Math.max(1, await getMaxBatch(active));
         dbEvents.emit('item', {
             type: 'reordered',
             items: changedItems,
@@ -611,35 +625,38 @@ function updateQueuePriority(ids = [], action = 'top', db = getDb()) {
     return { updated: selectedCount };
 }
 
-function deleteQueueBatch(batchNum, db = getDb()) {
-    const res = db.prepare(`DELETE FROM queue WHERE batch = ?`).run(batchNum);
+async function deleteQueueBatch(batchNum, db = null) {
+    const active = db || await getDb();
+    const res = active.prepare(`DELETE FROM queue WHERE batch = ?`).run(batchNum);
     if (res.changes > 0) {
-        const batchCount = Math.max(1, getMaxBatch(db));
+        const batchCount = Math.max(1, await getMaxBatch(active));
         dbEvents.emit('batch_deleted', { batch: batchNum, batchCount });
         dbEvents.emit('item', { type: 'batch_deleted', batch: batchNum, batchCount });
     }
     return Number(res.changes || 0);
 }
 
-function clearCompletedQueue(db = getDb()) {
-    const rows = db.prepare(`
+async function clearCompletedQueue(db = null) {
+    const active = db || await getDb();
+    const rows = active.prepare(`
         SELECT gallery_id FROM queue
         WHERE status = 'DONE' OR status LIKE 'SKIPPED%'
     `).all();
-    const res = db.prepare(`
+    const res = active.prepare(`
         DELETE FROM queue
         WHERE status = 'DONE' OR status LIKE 'SKIPPED%'
     `).run();
     if (res.changes > 0) {
-        const batchCount = Math.max(1, getMaxBatch(db));
+        const batchCount = Math.max(1, await getMaxBatch(active));
         const removedIds = rows.map(r => Number(r.gallery_id));
         dbEvents.emit('item', { type: 'cleared', removedIds, batchCount });
     }
     return Number(res.changes || 0);
 }
 
-function getMaxBatch(db = getDb()) {
-    const row = db.prepare(`SELECT COALESCE(MAX(batch), 0) AS max_batch FROM queue`).get();
+async function getMaxBatch(db = null) {
+    const active = db || await getDb();
+    const row = active.prepare(`SELECT COALESCE(MAX(batch), 0) AS max_batch FROM queue`).get();
     return row ? Number(row.max_batch) : 0;
 }
 
@@ -691,7 +708,8 @@ function parseListText(text, defaultFormat = null) {
     return parsedItems;
 }
 
-function importListText(text, options = {}, db = getDb()) {
+async function importListText(text, options = {}, db = null) {
+    const active = db || await getDb();
     const { replace = false, defaultFormat = null } = options;
     const parsedItems = parseListText(text, defaultFormat);
     const galleryIds = parsedItems.map(i => i.galleryId);
@@ -700,26 +718,26 @@ function importListText(text, options = {}, db = getDb()) {
     let updated = 0;
     let duplicates = 0;
 
-    db.exec('BEGIN');
+    active.exec('BEGIN');
     try {
         if (replace) {
             const keepSet = new Set(galleryIds);
-            const existingRows = db.prepare(`SELECT gallery_id FROM queue`).all();
+            const existingRows = active.prepare(`SELECT gallery_id FROM queue`).all();
             for (const r of existingRows) {
                 if (!keepSet.has(Number(r.gallery_id))) {
-                    deleteQueueItem(r.gallery_id, db);
+                    await deleteQueueItem(r.gallery_id, active);
                 }
             }
         }
 
         for (const item of parsedItems) {
-            const existing = getQueueItem(item.galleryId, db);
-            let libEntry = getLibraryEntry(item.galleryId, db);
+            const existing = await getQueueItem(item.galleryId, active);
+            let libEntry = await getLibraryEntry(item.galleryId, active);
             const isPermanentSkip = !!(libEntry && libEntry.skipped);
             const isValidLib = !!(libEntry && !libEntry.skipped && libEntry.path && fs.existsSync(libEntry.path));
 
             if (libEntry && !isPermanentSkip && !isValidLib) {
-                deleteLibraryEntry(item.galleryId, db);
+                await deleteLibraryEntry(item.galleryId, active);
                 libEntry = null;
             }
 
@@ -741,7 +759,7 @@ function importListText(text, options = {}, db = getDb()) {
             }
 
             if (!existing) {
-                enqueueGallery({
+                await enqueueGallery({
                     galleryId: item.galleryId,
                     url: item.url,
                     title: initialTitle,
@@ -751,7 +769,7 @@ function importListText(text, options = {}, db = getDb()) {
                     pagesDone,
                     pagesTotal,
                     error: isPermanentSkip ? (libEntry.reason || 'Skipped') : null
-                }, db);
+                }, active);
                 added++;
             } else {
                 duplicates++;
@@ -771,21 +789,22 @@ function importListText(text, options = {}, db = getDb()) {
                     updates.pagesDone = 0;
                     updates.error = null;
                 }
-                updateQueueItem(item.galleryId, updates, db);
+                await updateQueueItem(item.galleryId, updates, active);
                 updated++;
             }
         }
-        db.exec('COMMIT');
+        active.exec('COMMIT');
     } catch (err) {
-        db.exec('ROLLBACK');
+        active.exec('ROLLBACK');
         throw err;
     }
 
     return { added, updated, duplicates, galleryIds, total: parsedItems.length };
 }
 
-function exportListText(db = getDb()) {
-    const rows = getQueueItems({}, db);
+async function exportListText(db = null) {
+    const active = db || await getDb();
+    const rows = await getQueueItems({}, active);
     if (rows.length === 0) return '';
 
     const lines = [];
@@ -809,7 +828,8 @@ function exportListText(db = getDb()) {
 }
 
 // Library queries
-function upsertLibraryEntry(entry, db = getDb()) {
+async function upsertLibraryEntry(entry, db = null) {
+    const active = db || await getDb();
     const galleryId = normalizeGalleryId(entry.galleryId ?? entry.gallery_id);
     const title = entry.title || 'Unknown';
     const folderPath = entry.path || entry.folder || '';
@@ -831,7 +851,7 @@ function upsertLibraryEntry(entry, db = getDb()) {
     }
     const metaJson = metaObj ? JSON.stringify(metaObj) : null;
 
-    db.prepare(`
+    active.prepare(`
         INSERT INTO library (gallery_id, title, path, pages, format, language, artist, added_at, meta)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(gallery_id) DO UPDATE SET
@@ -845,7 +865,7 @@ function upsertLibraryEntry(entry, db = getDb()) {
             meta = COALESCE(excluded.meta, library.meta)
     `).run(galleryId, title, folderPath, pages, format, language, artist, addedAt, metaJson);
 
-    return getLibraryEntry(galleryId, db);
+    return await getLibraryEntry(galleryId, active);
 }
 
 function parseLibraryRow(row) {
@@ -880,19 +900,22 @@ function parseLibraryRow(row) {
     };
 }
 
-function getLibraryEntry(galleryId, db = getDb()) {
+async function getLibraryEntry(galleryId, db = null) {
+    const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
-    const row = db.prepare(`SELECT * FROM library WHERE gallery_id = ?`).get(id);
+    const row = active.prepare(`SELECT * FROM library WHERE gallery_id = ?`).get(id);
     return parseLibraryRow(row);
 }
 
-function getAllLibraryEntries(db = getDb()) {
-    const rows = db.prepare(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`).all();
+async function getAllLibraryEntries(db = null) {
+    const active = db || await getDb();
+    const rows = active.prepare(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`).all();
     return rows.map(parseLibraryRow);
 }
 
-function getLibraryMap(db = getDb()) {
-    const entries = getAllLibraryEntries(db);
+async function getLibraryMap(db = null) {
+    const active = db || await getDb();
+    const entries = await getAllLibraryEntries(active);
     const map = {};
     for (const e of entries) {
         map[e.id] = e;
@@ -900,15 +923,28 @@ function getLibraryMap(db = getDb()) {
     return map;
 }
 
-function deleteLibraryEntry(galleryId, db = getDb()) {
+async function deleteLibraryEntry(galleryId, db = null) {
+    const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
-    const res = db.prepare(`DELETE FROM library WHERE gallery_id = ?`).run(id);
+    const res = active.prepare(`DELETE FROM library WHERE gallery_id = ?`).run(id);
     return Number(res.changes || 0);
 }
 
+function hasActiveLibraryEntries(targetDb = null) {
+    const active = targetDb || activeDb;
+    if (!active) return false;
+    try {
+        const row = active.prepare(`SELECT 1 FROM library WHERE format IS NULL OR format != 'skipped' LIMIT 1`).get();
+        return !!row;
+    } catch (e) {
+        return false;
+    }
+}
+
 // Settings queries
-function getSetting(key, defaultValue = undefined, db = getDb()) {
-    const row = db.prepare(`SELECT value FROM settings WHERE key = ?`).get(String(key));
+async function getSetting(key, defaultValue = undefined, db = null) {
+    const active = db || await getDb();
+    const row = active.prepare(`SELECT value FROM settings WHERE key = ?`).get(String(key));
     if (!row) return defaultValue;
     try {
         return JSON.parse(row.value);
@@ -917,17 +953,19 @@ function getSetting(key, defaultValue = undefined, db = getDb()) {
     }
 }
 
-function setSetting(key, value, db = getDb()) {
+async function setSetting(key, value, db = null) {
+    const active = db || await getDb();
     const encoded = JSON.stringify(value);
-    db.prepare(`
+    active.prepare(`
         INSERT INTO settings (key, value) VALUES (?, ?)
         ON CONFLICT(key) DO UPDATE SET value = excluded.value
     `).run(String(key), encoded);
     return value;
 }
 
-function getAllSettings(db = getDb()) {
-    const rows = db.prepare(`SELECT key, value FROM settings`).all();
+async function getAllSettings(db = null) {
+    const active = db || await getDb();
+    const rows = active.prepare(`SELECT key, value FROM settings`).all();
     const out = {};
     for (const r of rows) {
         try {
@@ -939,9 +977,10 @@ function getAllSettings(db = getDb()) {
     return out;
 }
 
-function migrateLegacyConfigJson(configPath = path.join(ROOT_DIR, 'config.json'), db = getDb()) {
+async function migrateLegacyConfigJson(configPath = path.join(ROOT_DIR, 'config.json'), db = null) {
+    const active = db || await getDb();
     try {
-        const countRow = db.prepare(`SELECT COUNT(*) AS cnt FROM settings`).get();
+        const countRow = active.prepare(`SELECT COUNT(*) AS cnt FROM settings`).get();
         if (countRow && Number(countRow.cnt) > 0) {
             return false;
         }
@@ -956,20 +995,20 @@ function migrateLegacyConfigJson(configPath = path.join(ROOT_DIR, 'config.json')
 
         let copied = 0;
         if (parsed.downloadDir !== undefined) {
-            setSetting('downloadDir', parsed.downloadDir, db);
+            await setSetting('downloadDir', parsed.downloadDir, active);
             copied++;
         }
         if (parsed.downloadFormat !== undefined) {
-            setSetting('downloadFormat', parsed.downloadFormat, db);
+            await setSetting('downloadFormat', parsed.downloadFormat, active);
             copied++;
         }
         if (parsed.autoContinueBatches !== undefined) {
-            setSetting('autoContinueBatches', parsed.autoContinueBatches, db);
+            await setSetting('autoContinueBatches', parsed.autoContinueBatches, active);
             copied++;
         }
 
         if (copied > 0) {
-            logEvent({ level: 'info', message: 'Migrated settings from config.json' }, db);
+            await logEvent({ level: 'info', message: 'Migrated settings from config.json' }, active);
             return true;
         }
         return false;
@@ -979,19 +1018,20 @@ function migrateLegacyConfigJson(configPath = path.join(ROOT_DIR, 'config.json')
 }
 
 // Events (activity & error logs)
-function logEvent({ level = 'info', galleryId = null, message = '', maxRows = 10000 }, db = getDb()) {
+async function logEvent({ level = 'info', galleryId = null, message = '', maxRows = 10000 }, db = null) {
+    const active = db || await getDb();
     const gid = galleryId !== null && galleryId !== undefined && String(galleryId).trim() !== ''
         ? parseInt(String(galleryId), 10) || null
         : null;
     const nowIso = new Date().toISOString();
 
-    db.prepare(`
+    active.prepare(`
         INSERT INTO events (ts, level, gallery_id, message)
         VALUES (?, ?, ?, ?)
     `).run(nowIso, level, gid, String(message));
 
     if (maxRows && maxRows > 0) {
-        db.prepare(`
+        active.prepare(`
             DELETE FROM events
             WHERE id NOT IN (
                 SELECT id FROM events ORDER BY id DESC LIMIT ?
@@ -1000,7 +1040,8 @@ function logEvent({ level = 'info', galleryId = null, message = '', maxRows = 10
     }
 }
 
-function getEvents(options = {}, db = getDb()) {
+async function getEvents(options = {}, db = null) {
+    const active = db || await getDb();
     const clauses = [];
     const params = [];
 
@@ -1016,7 +1057,7 @@ function getEvents(options = {}, db = getDb()) {
     const whereSql = clauses.length ? `WHERE ${clauses.join(' AND ')}` : '';
     const limit = Number.isFinite(options.limit) && options.limit > 0 ? options.limit : 5000;
 
-    const rows = db.prepare(`
+    const rows = active.prepare(`
         SELECT * FROM (
             SELECT * FROM events ${whereSql} ORDER BY id DESC LIMIT ?
         ) ORDER BY id ASC
@@ -1058,6 +1099,7 @@ module.exports = {
     getAllLibraryEntries,
     getLibraryMap,
     deleteLibraryEntry,
+    hasActiveLibraryEntries,
     getSetting,
     setSetting,
     getAllSettings,

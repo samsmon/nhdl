@@ -73,7 +73,6 @@ process.on('unhandledRejection', (reason) => {
 let compressJob = null;
 
 function startBatchCompressJob(ids, ext) {
-    const library = loadLibrary();
     compressJob = {
         total: ids.length,
         done: 0,
@@ -88,12 +87,13 @@ function startBatchCompressJob(ids, ext) {
     };
 
     (async () => {
+        const library = await loadLibrary();
         for (const id of ids) {
             const strId = id.toString();
             compressJob.currentId = strId;
             compressJob.currentTitle = (library[strId] && library[strId].title) || strId;
 
-            const result = compressLibraryEntry(strId, { ext });
+            const result = await compressLibraryEntry(strId, { ext });
             if (result.success) compressJob.converted++;
             else if (result.skipped) compressJob.skipped++;
             else { compressJob.failed++; compressJob.errors.push({ id: strId, error: result.error }); }
@@ -104,12 +104,14 @@ function startBatchCompressJob(ids, ext) {
         compressJob.currentId = null;
         compressJob.currentTitle = null;
         compressJob.finishedAt = new Date().toISOString();
-        logActivity(`Batch compress: ${compressJob.converted} converted to .${ext === 'zip' ? 'zip' : 'cbz'}, ${compressJob.skipped} already compressed (skipped), ${compressJob.failed} failed`);
-    })();
+        await logActivity(`Batch compress: ${compressJob.converted} converted to .${ext === 'zip' ? 'zip' : 'cbz'}, ${compressJob.skipped} already compressed (skipped), ${compressJob.failed} failed`);
+    })().catch(e => {
+        logActivity(`FATAL startBatchCompressJob: ${e.stack || e.message}`).catch(() => {});
+    });
 }
 
-function autoProcessQueue() {
-    const pending = getQueueItems({ status: 'PENDING' });
+async function autoProcessQueue() {
+    const pending = await getQueueItems({ status: 'PENDING' });
     if (pending.length > 0 && !engine.isRunning && !engine.isPaused) {
         console.log(`[+] Auto-processing queue: ${pending.length} pending galleries found.`);
         engine.runBatch().catch(e => {
@@ -160,7 +162,7 @@ function renderLoginPage(error) {
 }
 
 function createRequestHandler() {
-    return (req, res) => {
+    return async (req, res) => {
         if (isAuthRequired()) {
             const cookies = parseCookies(req.headers.cookie);
             const authed = isValidSession(cookies[SESSION_COOKIE]);
@@ -168,17 +170,17 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/login') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     res.setHeader('Content-Type', 'application/json');
                     try {
                         const { password } = JSON.parse(body);
                         if (checkPassword(password)) {
                             const token = createSession();
                             res.setHeader('Set-Cookie', `${SESSION_COOKIE}=${token}; HttpOnly; Path=/; Max-Age=${Math.floor(SESSION_TTL_MS / 1000)}; SameSite=Lax`);
-                            logActivity('Login: success');
+                            await logActivity('Login: success');
                             return res.end(JSON.stringify({ success: true }));
                         }
-                        logActivity('Login: wrong password');
+                        await logActivity('Login: wrong password');
                         res.writeHead(401);
                         return res.end(JSON.stringify({ success: false, error: 'Wrong password' }));
                     } catch (e) {
@@ -193,7 +195,7 @@ function createRequestHandler() {
                 destroySession(cookies[SESSION_COOKIE]);
                 res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
                 res.setHeader('Content-Type', 'application/json');
-                logActivity('Logout');
+                await logActivity('Logout');
                 return res.end(JSON.stringify({ success: true }));
             }
 
@@ -234,8 +236,9 @@ function createRequestHandler() {
                     res.write(`event: ${eventName}\ndata: ${JSON.stringify(payload)}\n\n`);
                 };
 
-                const items = getQueueItems().map(formatQueueRow);
-                const batchCount = Math.max(1, getMaxBatch());
+                const rawItems = await getQueueItems();
+                const items = rawItems.map(formatQueueRow);
+                const batchCount = Math.max(1, await getMaxBatch());
                 sendSse('snapshot', {
                     items,
                     batchCount,
@@ -244,10 +247,10 @@ function createRequestHandler() {
                     autoContinueBatches: engine.autoContinueBatches
                 });
 
-                const onDbItem = (evt) => {
+                const onDbItem = async (evt) => {
                     const { rawRow, ...payload } = evt;
                     if (payload.batchCount === undefined) {
-                        payload.batchCount = Math.max(1, getMaxBatch());
+                        payload.batchCount = Math.max(1, await getMaxBatch());
                     }
                     sendSse('item', payload);
                 };
@@ -314,10 +317,11 @@ function createRequestHandler() {
             }
 
             if (req.method === 'GET' && req.url === '/api/status') {
-                const items = getQueueItems().map(formatQueueRow);
-                const batchCount = Math.max(1, getMaxBatch());
-                const rawList = exportListText();
-                const errorContent = readErrorLog();
+                const rawItems = await getQueueItems();
+                const items = rawItems.map(formatQueueRow);
+                const batchCount = Math.max(1, await getMaxBatch());
+                const rawList = await exportListText();
+                const errorContent = await readErrorLog();
 
                 return res.end(JSON.stringify({
                     items,
@@ -331,7 +335,8 @@ function createRequestHandler() {
             }
 
             if (req.method === 'GET' && req.url === '/api/library') {
-                const entries = getAllLibraryEntries().filter(e => !e.skipped);
+                const allEntries = await getAllLibraryEntries();
+                const entries = allEntries.filter(e => !e.skipped);
                 const items = entries.map(data => ({
                     id: String(data.gallery_id),
                     title: data.title || 'Unknown',
@@ -349,13 +354,13 @@ function createRequestHandler() {
 
             if (req.method === 'POST' && req.url === '/api/library/rescan') {
                 try {
-                    const result = rescanLibrary(engine.baseDownloadDir);
+                    const result = await rescanLibrary(engine.baseDownloadDir);
                     if (result.aborted) {
                         engine.markDownloadDirUnavailable(result.reason || 'Download folder unavailable');
-                        logActivity(`Library rescan aborted: ${result.reason || 'Download folder unavailable'}`);
+                        await logActivity(`Library rescan aborted: ${result.reason || 'Download folder unavailable'}`);
                     } else {
                         engine.clearDownloadDirUnavailable();
-                        logActivity(`Library rescan: ${result.relocated} relocated/added, ${result.pruned} pruned (no folder found), ${result.unchanged} unchanged`);
+                        await logActivity(`Library rescan: ${result.relocated} relocated/added, ${result.pruned} pruned (no folder found), ${result.unchanged} unchanged`);
                     }
                     return res.end(JSON.stringify({ success: !result.aborted, ...result }));
                 } catch (e) {
@@ -367,7 +372,7 @@ function createRequestHandler() {
             if (req.method === 'POST' && (req.url === '/api/queue' || req.url === '/api/queue/import')) {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         let text = '';
                         let replace = req.url === '/api/queue';
@@ -383,8 +388,8 @@ function createRequestHandler() {
                             if (parsed.format) defaultFormat = parsed.format;
                         }
 
-                        const summary = importListText(text, { replace, defaultFormat });
-                        logActivity(`Queue updated: ${summary.total} gallery item(s) (${summary.added} added, ${summary.duplicates} existing)`);
+                        const summary = await importListText(text, { replace, defaultFormat });
+                        await logActivity(`Queue updated: ${summary.total} gallery item(s) (${summary.added} added, ${summary.duplicates} existing)`);
                         res.end(JSON.stringify({ success: true, ...summary }));
 
                         autoProcessQueue();
@@ -397,7 +402,7 @@ function createRequestHandler() {
             }
 
             if (req.method === 'GET' && req.url === '/api/queue/export') {
-                const listText = exportListText();
+                const listText = await exportListText();
                 res.setHeader('Content-Type', 'text/plain; charset=utf-8');
                 res.setHeader('Content-Disposition', 'attachment; filename="list.txt"');
                 return res.end(listText);
@@ -406,7 +411,7 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/queue/pause') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         const { ids } = JSON.parse(body || '{}');
                         if (!Array.isArray(ids)) {
@@ -419,11 +424,11 @@ function createRequestHandler() {
                                 engine.stopGallery(gid, { deleteAfter: false });
                             }
                         }
-                        const result = pauseQueueItems(ids);
+                        const result = await pauseQueueItems(ids);
                         for (const gid of result.stoppingIds) {
                             engine.stopGallery(gid, { deleteAfter: false });
                         }
-                        logActivity(`Queue paused ${result.paused} item(s)`);
+                        await logActivity(`Queue paused ${result.paused} item(s)`);
                         return res.end(JSON.stringify({
                             success: true,
                             paused: result.paused,
@@ -440,18 +445,18 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/queue/resume') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         const { ids } = JSON.parse(body || '{}');
                         if (!Array.isArray(ids)) {
                             res.writeHead(400);
                             return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
                         }
-                        const result = resumeQueueItems(ids);
+                        const result = await resumeQueueItems(ids);
                         for (const gid of result.resumedIds) {
                             engine.cancelStopGallery(gid);
                         }
-                        logActivity(`Queue resumed ${result.resumed} item(s)`);
+                        await logActivity(`Queue resumed ${result.resumed} item(s)`);
                         res.end(JSON.stringify({
                             success: true,
                             resumed: result.resumed
@@ -468,7 +473,7 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/queue/delete') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         const { ids } = JSON.parse(body || '{}');
                         if (!Array.isArray(ids)) {
@@ -481,11 +486,11 @@ function createRequestHandler() {
                                 engine.stopGallery(gid, { deleteAfter: true });
                             }
                         }
-                        const result = deleteQueueItems(ids);
+                        const result = await deleteQueueItems(ids);
                         for (const gid of result.stoppingIds) {
                             engine.stopGallery(gid, { deleteAfter: true });
                         }
-                        logActivity(`Queue deleted ${result.deleted} item(s)`);
+                        await logActivity(`Queue deleted ${result.deleted} item(s)`);
                         return res.end(JSON.stringify({
                             success: true,
                             deleted: result.deleted
@@ -501,15 +506,15 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/queue/priority') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         const { ids, action } = JSON.parse(body || '{}');
                         if (!Array.isArray(ids) || !['top', 'up', 'down', 'bottom'].includes(action)) {
                             res.writeHead(400);
                             return res.end(JSON.stringify({ success: false, error: 'ids array and valid action (top|up|down|bottom) are required' }));
                         }
-                        const result = updateQueuePriority(ids, action);
-                        logActivity(`Queue priority (${action}) updated for ${result.updated} item(s)`);
+                        const result = await updateQueuePriority(ids, action);
+                        await logActivity(`Queue priority (${action}) updated for ${result.updated} item(s)`);
                         return res.end(JSON.stringify({
                             success: true,
                             updated: result.updated
@@ -525,7 +530,7 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/control') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         let action = '';
                         try {
@@ -538,16 +543,16 @@ function createRequestHandler() {
                             else if (body.includes('start')) action = 'start';
                         }
 
-                        logActivity(`Control action: ${action || '(unrecognized)'}`);
+                        await logActivity(`Control action: ${action || '(unrecognized)'}`);
                         if (action === 'pause' || action === 'stop') {
                             engine.pause();
                         } else if (action === 'resume' || action === 'start') {
-                            requeueFailedItems();
+                            await requeueFailedItems();
                             engine.resume();
                             autoProcessQueue();
                         } else if (action === 'restart') {
-                            resetStuckQueueItems();
-                            requeueFailedItems();
+                            await resetStuckQueueItems();
+                            await requeueFailedItems();
                             engine.restart();
                         }
                         return res.end(JSON.stringify({ success: true, engineStatus: engine.getStatus() }));
@@ -574,22 +579,22 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/config') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         const { downloadDir, downloadFormat, autoContinueBatches, apiKey } = JSON.parse(body);
                         if (typeof autoContinueBatches === 'boolean') {
-                            engine.setAutoContinueBatches(autoContinueBatches);
+                            await engine.setAutoContinueBatches(autoContinueBatches);
                             return res.end(JSON.stringify({ success: true, autoContinueBatches: engine.autoContinueBatches }));
                         }
                         if (downloadFormat) {
-                            engine.setDownloadFormat(downloadFormat);
+                            await engine.setDownloadFormat(downloadFormat);
                             return res.end(JSON.stringify({ success: true, downloadFormat: engine.downloadFormat }));
                         }
                         if (downloadDir && typeof downloadDir === 'string') {
                             if (!fs.existsSync(downloadDir)) {
                                 fs.mkdirSync(downloadDir, { recursive: true });
                             }
-                            engine.setDownloadDir(downloadDir);
+                            await engine.setDownloadDir(downloadDir);
                             return res.end(JSON.stringify({ success: true, downloadDir: engine.baseDownloadDir }));
                         }
                         if (typeof apiKey === 'string') {
@@ -630,15 +635,15 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/library/rename') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         const { id, newName } = JSON.parse(body);
                         if (!id || !newName) {
                             res.writeHead(400);
                             return res.end(JSON.stringify({ success: false, error: 'id and newName are required' }));
                         }
-                        const result = renameLibraryEntry(id.toString(), newName);
-                        if (result.success) logActivity(`Renamed ID ${id} -> "${newName}"`);
+                        const result = await renameLibraryEntry(id.toString(), newName);
+                        if (result.success) await logActivity(`Renamed ID ${id} -> "${newName}"`);
                         if (!result.success) res.writeHead(400);
                         return res.end(JSON.stringify(result));
                     } catch (e) {
@@ -652,15 +657,15 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/library/compress') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         const { id, ext } = JSON.parse(body);
                         if (!id) {
                             res.writeHead(400);
                             return res.end(JSON.stringify({ success: false, error: 'id is required' }));
                         }
-                        const result = compressLibraryEntry(id.toString(), { ext });
-                        if (result.success) logActivity(`Compressed ID ${id} to .${ext === 'zip' ? 'zip' : 'cbz'}`);
+                        const result = await compressLibraryEntry(id.toString(), { ext });
+                        if (result.success) await logActivity(`Compressed ID ${id} to .${ext === 'zip' ? 'zip' : 'cbz'}`);
                         if (!result.success) res.writeHead(400);
                         return res.end(JSON.stringify(result));
                     } catch (e) {
@@ -707,7 +712,7 @@ function createRequestHandler() {
 
                 if (galleryIdParam !== null && galleryIdParam.trim() !== '') {
                     try {
-                        const rows = getEvents({
+                        const rows = await getEvents({
                             galleryId: galleryIdParam.trim(),
                             limit: limit || 500
                         });
@@ -722,11 +727,11 @@ function createRequestHandler() {
                     }
                 }
 
-                return res.end(JSON.stringify({ log: readActivityLog(limit) }));
+                return res.end(JSON.stringify({ log: await readActivityLog(limit) }));
             }
 
             if (req.method === 'GET' && req.url === '/api/logs/download') {
-                const log = readActivityLog();
+                const log = await readActivityLog();
                 res.setHeader('Content-Type', 'text/plain');
                 res.setHeader('Content-Disposition', `attachment; filename="nhdl-activity-${Date.now()}.log"`);
                 return res.end(log);
@@ -735,7 +740,7 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/retry') {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
-                req.on('end', () => {
+                req.on('end', async () => {
                     try {
                         let payload = {};
                         if (body && body.trim()) {
@@ -745,10 +750,10 @@ function createRequestHandler() {
                         engine.triggerForceRetry();
 
                         if (galleryId) {
-                            updateQueueStatus(galleryId, 'PENDING', { error: null, retries: 0 });
+                            await updateQueueStatus(galleryId, 'PENDING', { error: null, retries: 0 });
                             autoProcessQueue();
                         } else {
-                            requeueFailedItems();
+                            await requeueFailedItems();
                             autoProcessQueue();
                         }
                         return res.end(JSON.stringify({ success: true, message: 'Force retry triggered' }));
@@ -863,32 +868,32 @@ function createRequestHandler() {
 const server = http.createServer(createRequestHandler());
 
 if (require.main === module) {
-    server.listen(PORT, '0.0.0.0', () => {
+    server.listen(PORT, '0.0.0.0', async () => {
         console.log(`\x1b[32m[+] NHDL Web Daemon aktif pada http://0.0.0.0:${PORT}\x1b[0m`);
         console.log(`[+] Web UI Dashboard: http://localhost:${PORT}`);
 
         try {
-            const resetCount = resetStuckQueueItems();
+            const resetCount = await resetStuckQueueItems();
             if (resetCount > 0) {
                 console.log(`[+] Startup recovery: reset ${resetCount} stuck ON_PROGRESS item(s) back to PENDING.`);
-                logActivity(`Startup recovery: reset ${resetCount} stuck ON_PROGRESS item(s) to PENDING`);
+                await logActivity(`Startup recovery: reset ${resetCount} stuck ON_PROGRESS item(s) to PENDING`);
             }
         } catch (e) {}
 
         let folderHealthy = true;
         try {
-            const result = rescanLibrary(engine.baseDownloadDir);
+            const result = await rescanLibrary(engine.baseDownloadDir);
             if (result.aborted) {
                 folderHealthy = false;
                 engine.markDownloadDirUnavailable(result.reason || 'Download folder unavailable');
                 console.warn(`[!] Startup rescan aborted: ${result.reason || 'Download folder unavailable'}`);
-                logActivity(`Startup rescan aborted: ${result.reason || 'Download folder unavailable'}`);
+                await logActivity(`Startup rescan aborted: ${result.reason || 'Download folder unavailable'}`);
             } else {
                 engine.clearDownloadDirUnavailable();
                 if (result.relocated > 0 || result.pruned > 0) {
                     console.log(`[+] Library rescan: relocated/added ${result.relocated}, pruned ${result.pruned} (no folder on disk).`);
                 }
-                logActivity(`Startup rescan: ${result.relocated} relocated/added, ${result.pruned} pruned, ${result.unchanged} unchanged`);
+                await logActivity(`Startup rescan: ${result.relocated} relocated/added, ${result.pruned} pruned, ${result.unchanged} unchanged`);
             }
         } catch (e) {}
 

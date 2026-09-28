@@ -8,7 +8,7 @@ const path = require('path');
 const dns = require('dns');
 
 const { sanitizeName, toTitleCase, getDynamicDelay, verifyImage, writeBlankPlaceholderImage, sleep, withFsRetryAsync } = require('./utils');
-const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery, isDownloadDirHealthy, rescanLibrary } = require('./tracker');
+const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery, isDownloadDirHealthy, rescanLibrary, hasActiveLibraryEntries } = require('./tracker');
 const { logActivity, setLogDir } = require('./logger');
 const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');
 const {
@@ -48,23 +48,18 @@ const CURL_BIN = resolveCurlBinary();
 class DownloaderEngine extends EventEmitter {
     constructor(options = {}) {
         super();
-        const savedDownloadDir = getSetting('downloadDir', null);
-        const rawFormat = getSetting('downloadFormat', 'cbz');
-        const savedDownloadFormat = (rawFormat === 'folder' || rawFormat === 'zip' || rawFormat === 'cbz') ? rawFormat : 'cbz';
-        const savedAutoContinue = getSetting('autoContinueBatches', true) !== false;
-
         const defaultDownloadDir = path.join(__dirname, '..', 'Download');
-        this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || savedDownloadDir || defaultDownloadDir;
-        const hasLibraryEntries = getAllLibraryEntries().some(e => !e.skipped);
-        if (!fs.existsSync(this.baseDownloadDir) && !hasLibraryEntries) {
+        this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || defaultDownloadDir;
+        const hasLibrary = hasActiveLibraryEntries();
+        if (!fs.existsSync(this.baseDownloadDir) && !hasLibrary) {
             try {
                 fs.mkdirSync(this.baseDownloadDir, { recursive: true });
             } catch (e) {}
         }
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
-        this.downloadFormat = options.downloadFormat || savedDownloadFormat;
-        this.autoContinueBatches = options.autoContinueBatches !== undefined ? options.autoContinueBatches : savedAutoContinue;
+        this.downloadFormat = options.downloadFormat || 'cbz';
+        this.autoContinueBatches = options.autoContinueBatches !== undefined ? options.autoContinueBatches : true;
         this.batchSize = options.batchSize || 50;
         this.batchRestMinutes = options.batchRestMinutes || 5;
         this.concurrency = options.concurrency || 3;
@@ -85,7 +80,7 @@ class DownloaderEngine extends EventEmitter {
         this.deletingGalleries = new Set();
         this.activeGalleryId = null;
 
-        if (!isDownloadDirHealthy(this.baseDownloadDir)) {
+        if (!fs.existsSync(this.baseDownloadDir)) {
             this.markDownloadDirUnavailable('Download folder unavailable');
         }
     }
@@ -159,34 +154,35 @@ class DownloaderEngine extends EventEmitter {
         }
     }
 
-    checkDownloadDirRecovery() {
+    async checkDownloadDirRecovery() {
         if (!this.downloadDirUnavailable) {
             this.stopDownloadDirWatch();
             return false;
         }
-        const hasActiveLibrary = getAllLibraryEntries().some(e => !e.skipped);
+        const activeEntries = (await getAllLibraryEntries()).filter(e => !e.skipped);
+        const hasActiveLibrary = activeEntries.length > 0;
         if (!hasActiveLibrary && this.baseDownloadDir && !fs.existsSync(this.baseDownloadDir)) {
             try {
                 fs.mkdirSync(this.baseDownloadDir, { recursive: true });
             } catch (e) {}
         }
-        if (!isDownloadDirHealthy(this.baseDownloadDir)) {
+        if (!(await isDownloadDirHealthy(this.baseDownloadDir))) {
             return false;
         }
-        const rescanResult = rescanLibrary(this.baseDownloadDir);
+        const rescanResult = await rescanLibrary(this.baseDownloadDir);
         if (rescanResult && rescanResult.aborted) {
             this.statusReason = rescanResult.reason || this.statusReason || 'Download folder unavailable';
             return false;
         }
         this.clearDownloadDirUnavailable();
-        logEvent({
+        await logEvent({
             level: 'info',
             message: `Download folder recovered and healthy (${this.baseDownloadDir})`
         });
-        logActivity(`Download folder recovered: ${this.baseDownloadDir}`);
+        await logActivity(`Download folder recovered: ${this.baseDownloadDir}`);
         this.emit('resumed', { recovered: true, downloadDir: this.baseDownloadDir });
-        requeueFailedItems();
-        const pending = getQueueItems({ status: 'PENDING' });
+        await requeueFailedItems();
+        const pending = await getQueueItems({ status: 'PENDING' });
         if (pending.length > 0 && !this.isRunning && !this.isPaused) {
             this.runBatch().catch(e => {
                 logActivity(`FATAL runBatch (recovery): ${e.stack || e.message}`);
@@ -220,38 +216,39 @@ class DownloaderEngine extends EventEmitter {
         return 'RUNNING';
     }
 
-    setDownloadDir(newDir) {
+    async setDownloadDir(newDir) {
         if (!newDir || typeof newDir !== 'string') return;
         this.baseDownloadDir = path.resolve(newDir);
         this.clearDownloadDirUnavailable();
-        if (!fs.existsSync(this.baseDownloadDir) && !getAllLibraryEntries().some(e => !e.skipped)) {
+        const active = (await getAllLibraryEntries()).filter(e => !e.skipped);
+        if (!fs.existsSync(this.baseDownloadDir) && active.length === 0) {
             fs.mkdirSync(this.baseDownloadDir, { recursive: true });
         }
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
         try {
-            setSetting('downloadDir', this.baseDownloadDir);
+            await setSetting('downloadDir', this.baseDownloadDir);
             this.emit('config_updated', { downloadDir: this.baseDownloadDir });
         } catch (e) {
             console.error('Failed to save downloadDir to settings:', e.message);
         }
     }
 
-    setDownloadFormat(format) {
+    async setDownloadFormat(format) {
         if (format !== 'folder' && format !== 'cbz' && format !== 'zip') return;
         this.downloadFormat = format;
         try {
-            setSetting('downloadFormat', format);
+            await setSetting('downloadFormat', format);
             this.emit('config_updated', { downloadFormat: format });
         } catch (e) {
             console.error('Failed to save downloadFormat to settings:', e.message);
         }
     }
 
-    setAutoContinueBatches(enabled) {
+    async setAutoContinueBatches(enabled) {
         this.autoContinueBatches = !!enabled;
         try {
-            setSetting('autoContinueBatches', this.autoContinueBatches);
+            await setSetting('autoContinueBatches', this.autoContinueBatches);
             this.emit('config_updated', { autoContinueBatches: this.autoContinueBatches });
         } catch (e) {
             console.error('Failed to save autoContinueBatches to settings:', e.message);
@@ -263,11 +260,11 @@ class DownloaderEngine extends EventEmitter {
         this.emit('retry_triggered');
     }
 
-    maybeCompress(galleryId) {
-        const format = getBatchFormatForGallery(null, galleryId) || this.downloadFormat;
+    async maybeCompress(galleryId) {
+        const format = (await getBatchFormatForGallery(null, galleryId)) || this.downloadFormat;
         if (format === 'cbz' || format === 'zip') {
-            const result = compressLibraryEntry(galleryId, { ext: format });
-            if (result.success) logActivity(`Compressed ID ${galleryId} to .${format}`);
+            const result = await compressLibraryEntry(galleryId, { ext: format });
+            if (result.success) await logActivity(`Compressed ID ${galleryId} to .${format}`);
         }
     }
 
@@ -593,10 +590,10 @@ class DownloaderEngine extends EventEmitter {
             return null;
         }
 
-        saveArchivedGallery(galleryId, sanitizedTitle, archivePath, format, { author: authorStr, lang: langStr, pages: numPages, extraMeta });
-        updateListStatus(null, galleryId, 'DONE');
-        updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
-        logActivity(`[API] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
+        await saveArchivedGallery(galleryId, sanitizedTitle, archivePath, format, { author: authorStr, lang: langStr, pages: numPages, extraMeta });
+        await updateListStatus(null, galleryId, 'DONE');
+        await updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
+        await logActivity(`[API] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
         this.currentProgress = null;
         this.emit('done', { galleryId, title, pages: numPages, currentTaskNum, totalTasks });
         return { status: "SUCCESS", numPages };
@@ -609,17 +606,17 @@ class DownloaderEngine extends EventEmitter {
         try {
             if (this.isGalleryStopping(gid)) {
                 if (!this.isGalleryDeleting(gid)) {
-                    updateQueueItem(galleryId, { status: 'STOPPED' });
+                    await updateQueueItem(galleryId, { status: 'STOPPED' });
                 } else {
-                    deleteQueueItem(galleryId);
+                    await deleteQueueItem(galleryId);
                 }
                 this.clearGalleryStopFlags(gid);
                 return { status: "STOPPED", numPages: 0 };
             }
 
-            updateListStatus(null, galleryId, 'ON_PROGRESS');
+            await updateListStatus(null, galleryId, 'ON_PROGRESS');
 
-            const library = loadLibrary();
+            const library = await loadLibrary();
             if (library[galleryId] && library[galleryId].folder && fs.existsSync(library[galleryId].folder) && library[galleryId].pages && library[galleryId].ext) {
                 const data = library[galleryId];
                 let allValid = !!data.archived;
@@ -634,9 +631,9 @@ class DownloaderEngine extends EventEmitter {
                     }
                 }
                 if (allValid) {
-                    updateListStatus(null, galleryId, 'SKIPPED - Already in Library');
-                    updateListDisplayName(null, galleryId, buildDisplayName(data.title, data.author));
-                    updateQueueItem(galleryId, { pagesDone: data.pages, pagesTotal: data.pages });
+                    await updateListStatus(null, galleryId, 'SKIPPED - Already in Library');
+                    await updateListDisplayName(null, galleryId, buildDisplayName(data.title, data.author));
+                    await updateQueueItem(galleryId, { pagesDone: data.pages, pagesTotal: data.pages });
                     this.emit('skipped', { galleryId, title: data.title, currentTaskNum, totalTasks, reason: 'Already in Library' });
                     return { status: "SUCCESS", numPages: data.pages, skipped: true, skipReason: 'library' };
                 }
@@ -645,33 +642,33 @@ class DownloaderEngine extends EventEmitter {
             const meta = await this.fetchMetadata(galleryId);
             if (this.isGalleryStopping(gid)) {
                 if (!this.isGalleryDeleting(gid)) {
-                    updateQueueItem(galleryId, { status: 'STOPPED' });
+                    await updateQueueItem(galleryId, { status: 'STOPPED' });
                 } else {
-                    deleteQueueItem(galleryId);
+                    await deleteQueueItem(galleryId);
                 }
                 this.clearGalleryStopFlags(gid);
                 return { status: "STOPPED", numPages: 0 };
             }
 
             if (meta.status === "RATE_LIMIT") {
-                const cached = getCachedDisplayName(null, galleryId);
+                const cached = await getCachedDisplayName(null, galleryId);
                 if (cached && cached.title) {
                     const found = this.findExistingOnDisk(cached.title, cached.author);
                     if (found) {
                         if (found.archived) {
-                            saveArchivedToLibrary(galleryId, found.title, found.path, found.archiveExt, { author: cached.author });
+                            await saveArchivedToLibrary(galleryId, found.title, found.path, found.archiveExt, { author: cached.author });
                         } else {
-                            saveToLibrary(galleryId, found.title, found.path, found.pages, found.ext, found.pageExts, { author: cached.author });
+                            await saveToLibrary(galleryId, found.title, found.path, found.pages, found.ext, found.pageExts, { author: cached.author });
                         }
-                        updateListStatus(null, galleryId, "SKIPPED - Found on disk (metadata was 429'd)");
-                        updateQueueItem(galleryId, { pagesDone: found.pages || 0, pagesTotal: found.pages || 0 });
-                        logActivity(`SKIPPED ID ${galleryId}: found existing file on disk, avoided 429 cooldown`);
+                        await updateListStatus(null, galleryId, "SKIPPED - Found on disk (metadata was 429'd)");
+                        await updateQueueItem(galleryId, { pagesDone: found.pages || 0, pagesTotal: found.pages || 0 });
+                        await logActivity(`SKIPPED ID ${galleryId}: found existing file on disk, avoided 429 cooldown`);
                         this.emit('skipped', { galleryId, title: found.title, currentTaskNum, totalTasks, reason: 'Already on disk (metadata blocked by 429)' });
                         return { status: "SUCCESS", numPages: found.pages || 0, skipped: true, skipReason: 'library' };
                     }
                 }
                 logError(galleryId, "Cloudflare Rate Limit / Challenge (429)");
-                updateListStatus(null, galleryId, "COOLDOWN - CLOUDFLARE 429");
+                await updateListStatus(null, galleryId, "COOLDOWN - CLOUDFLARE 429");
                 return { status: "RATE_LIMIT" };
             }
 
@@ -682,8 +679,8 @@ class DownloaderEngine extends EventEmitter {
             const sanitizedTitle = sanitizeName(title) || galleryId;
 
             if (!this.isGalleryDeleting(gid)) {
-                updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
-                updateQueueItem(galleryId, { pagesTotal: numPages });
+                await updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
+                await updateQueueItem(galleryId, { pagesTotal: numPages });
             }
 
             const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
@@ -701,10 +698,10 @@ class DownloaderEngine extends EventEmitter {
                     if (archiveMatch) {
                         const archiveExt = archiveMatch.name.match(/\.(cbz|zip)$/i)[1].toLowerCase();
                         const archivePath = path.join(parentDir, archiveMatch.name);
-                        saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages });
-                        updateListStatus(null, galleryId, "SKIPPED - Already in Library");
-                        updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
-                        updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
+                        await saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages });
+                        await updateListStatus(null, galleryId, "SKIPPED - Already in Library");
+                        await updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
+                        await updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
                         this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Already Downloaded (Archive)' });
                         return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
                     }
@@ -715,7 +712,7 @@ class DownloaderEngine extends EventEmitter {
             }
 
             const apiKey = process.env.NHENTAI_API_KEY;
-            const targetFormat = getBatchFormatForGallery(null, galleryId) || this.downloadFormat;
+            const targetFormat = (await getBatchFormatForGallery(null, galleryId)) || this.downloadFormat;
             if (apiKey && (targetFormat === 'cbz' || targetFormat === 'zip') && !this.isGalleryStopping(gid)) {
                 const apiResult = await this.tryApiArchiveDownload(galleryId, targetFormat, apiKey, {
                     sanitizedTitle, title, folderPath, numPages, authorStr, langStr, extraMeta,
@@ -756,24 +753,24 @@ class DownloaderEngine extends EventEmitter {
             }
 
             if (!this.isGalleryDeleting(gid)) {
-                updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
+                await updateQueueItem(galleryId, { pagesDone: completed, pagesTotal: numPages });
             }
 
             if (this.isGalleryStopping(gid)) {
                 const wasDeleted = this.isGalleryDeleting(gid);
                 if (!wasDeleted) {
-                    updateQueueItem(galleryId, { status: 'STOPPED', pagesDone: completed, pagesTotal: numPages });
+                    await updateQueueItem(galleryId, { status: 'STOPPED', pagesDone: completed, pagesTotal: numPages });
                 } else {
-                    deleteQueueItem(galleryId);
+                    await deleteQueueItem(galleryId);
                 }
                 this.clearGalleryStopFlags(gid);
                 return { status: "STOPPED", numPages, pagesDone: completed };
             }
 
             if (completed === numPages) {
-                saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
-                this.maybeCompress(galleryId);
-                updateListStatus(null, galleryId, "SKIPPED - Files Complete");
+                await saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
+                await this.maybeCompress(galleryId);
+                await updateListStatus(null, galleryId, "SKIPPED - Files Complete");
                 this.emit('skipped', { galleryId, title, currentTaskNum, totalTasks, reason: 'Files 100% Complete' });
                 return { status: "SUCCESS", numPages, skipped: true, skipReason: 'disk_after_metadata' };
             }
@@ -831,7 +828,7 @@ class DownloaderEngine extends EventEmitter {
                     this.emit('progress', this.currentProgress);
                 }, 1000);
 
-                const next = () => {
+                const next = async () => {
                     if (this.isStopped) {
                         clearInterval(heartbeat);
                         return resolve();
@@ -842,11 +839,11 @@ class DownloaderEngine extends EventEmitter {
                             this.currentProgress = null;
                             const wasDeleted = this.isGalleryDeleting(gid);
                             if (!wasDeleted) {
-                                updateQueueItem(galleryId, { status: 'STOPPED', pagesDone: completed, pagesTotal: numPages });
-                                logActivity(`Paused gallery ID ${galleryId} at page boundary (${completed}/${numPages} pages saved)`);
+                                await updateQueueItem(galleryId, { status: 'STOPPED', pagesDone: completed, pagesTotal: numPages });
+                                await logActivity(`Paused gallery ID ${galleryId} at page boundary (${completed}/${numPages} pages saved)`);
                             } else {
-                                deleteQueueItem(galleryId);
-                                logActivity(`Deleted gallery ID ${galleryId} from queue at page boundary`);
+                                await deleteQueueItem(galleryId);
+                                await logActivity(`Deleted gallery ID ${galleryId} from queue at page boundary`);
                             }
                             this.clearGalleryStopFlags(gid);
                             galleryStopped = true;
@@ -856,16 +853,16 @@ class DownloaderEngine extends EventEmitter {
                         return;
                     }
                     if (this.isPaused) {
-                        setTimeout(next, 500);
+                        setTimeout(() => { next().catch(() => {}); }, 500);
                         return;
                     }
                     if (pendingPages.length === 0 && active === 0) {
                         clearInterval(heartbeat);
-                        saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
-                        this.maybeCompress(galleryId);
-                        updateListStatus(null, galleryId, "DONE");
-                        updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
-                        logActivity(`[CDN] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
+                        await saveToLibrary(galleryId, sanitizedTitle, folderPath, numPages, ext, pageExts, { author: authorStr, lang: langStr, extraMeta });
+                        await this.maybeCompress(galleryId);
+                        await updateListStatus(null, galleryId, "DONE");
+                        await updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
+                        await logActivity(`[CDN] DONE ID ${galleryId}: "${title}" (${numPages} pages)`);
                         this.currentProgress = null;
                         this.emit('done', { galleryId, title, pages: numPages, currentTaskNum, totalTasks });
                         return resolve();
@@ -897,7 +894,7 @@ class DownloaderEngine extends EventEmitter {
                                 pageEntry.totalBytes = total;
                                 lastByteAt = Date.now();
                             }))
-                            .then(() => {
+                            .then(async () => {
                                 if (!verifyImage(destPath)) {
                                     const attempt = retryCount + 1;
                                     let failedSize = 0;
@@ -906,14 +903,14 @@ class DownloaderEngine extends EventEmitter {
                                     if (attempt >= PLACEHOLDER_RETRY_THRESHOLD && failedSize > 0 && failedSize < PLACEHOLDER_SIZE_CEILING) {
                                         if (fs.existsSync(destPath)) fs.unlinkSync(destPath);
                                         writeBlankPlaceholderImage(destPath);
-                                        logPlaceholderPage(galleryId, currentPage, title);
-                                        logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: CDN served a blank image ${attempt}x in a row - substituted a blank page instead of retrying forever`);
+                                        await logPlaceholderPage(galleryId, currentPage, title);
+                                        await logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: CDN served a blank image ${attempt}x in a row - substituted a blank page instead of retrying forever`);
                                         pageRetryCounts.delete(currentPage);
                                         pageErrors.delete(currentPage);
                                         completedBytes += failedSize;
                                         completed++;
                                         if (!this.isGalleryDeleting(gid)) {
-                                            updateQueueItem(galleryId, {
+                                            await updateQueueItem(galleryId, {
                                                 status: this.isGalleryStopping(gid) ? 'STOPPED' : 'ON_PROGRESS',
                                                 pagesDone: completed,
                                                 pagesTotal: numPages
@@ -934,7 +931,7 @@ class DownloaderEngine extends EventEmitter {
                                     completedBytes += pageEntry.bytesReceived;
                                     completed++;
                                     if (!this.isGalleryDeleting(gid)) {
-                                        updateQueueItem(galleryId, {
+                                        await updateQueueItem(galleryId, {
                                             status: this.isGalleryStopping(gid) ? 'STOPPED' : 'ON_PROGRESS',
                                             pagesDone: completed,
                                             pagesTotal: numPages
@@ -959,11 +956,11 @@ class DownloaderEngine extends EventEmitter {
                             .finally(() => {
                                 activePages.delete(currentPage);
                                 active--;
-                                next();
+                                next().catch(() => {});
                             });
                     }
                 };
-                next();
+                next().catch(() => {});
             });
 
             if (galleryStopped) {
@@ -990,27 +987,28 @@ class DownloaderEngine extends EventEmitter {
     }
 
     async _runBatchBody(galleryIds = null) {
-        const hasActiveLibrary = getAllLibraryEntries().some(e => !e.skipped);
+        const activeEntries = (await getAllLibraryEntries()).filter(e => !e.skipped);
+        const hasActiveLibrary = activeEntries.length > 0;
         if (!hasActiveLibrary && this.baseDownloadDir && !fs.existsSync(this.baseDownloadDir)) {
             try {
                 fs.mkdirSync(this.baseDownloadDir, { recursive: true });
             } catch (e) {}
         }
 
-        if (!isDownloadDirHealthy(this.baseDownloadDir)) {
+        if (!(await isDownloadDirHealthy(this.baseDownloadDir))) {
             this.markDownloadDirUnavailable('Download folder unavailable');
             return;
         }
         this.clearDownloadDirUnavailable();
 
-        const library = loadLibrary();
+        const library = await loadLibrary();
         if (Array.isArray(galleryIds) && galleryIds.length > 0) {
             for (const rawId of galleryIds) {
-                const existing = getQueueItem(rawId);
+                const existing = await getQueueItem(rawId);
                 if (!existing) {
                     const isDone = isLibraryEntryValid(library[rawId]);
                     const isSkipped = isPermanentlySkipped(library[rawId]);
-                    enqueueGallery({
+                    await enqueueGallery({
                         galleryId: rawId,
                         status: isDone ? 'DONE' : (isSkipped ? 'SKIPPED' : 'PENDING')
                     });
@@ -1018,29 +1016,29 @@ class DownloaderEngine extends EventEmitter {
             }
         }
 
-        requeueFailedItems();
+        await requeueFailedItems();
 
-        const allQueue = getQueueItems();
+        const allQueue = await getQueueItems();
         for (const row of allQueue) {
             if (row.status === 'STOPPED') continue;
             const idStr = String(row.gallery_id);
             const libEntry = library[idStr];
             if (row.status === 'PENDING') {
                 if (isLibraryEntryValid(libEntry)) {
-                    updateListStatus(null, row.gallery_id, 'DONE');
+                    await updateListStatus(null, row.gallery_id, 'DONE');
                 } else if (isPermanentlySkipped(libEntry)) {
-                    updateListStatus(null, row.gallery_id, `SKIPPED - ${libEntry.reason || 'Skipped'}`);
+                    await updateListStatus(null, row.gallery_id, `SKIPPED - ${libEntry.reason || 'Skipped'}`);
                 } else if (libEntry) {
-                    deleteLibraryEntry(row.gallery_id);
+                    await deleteLibraryEntry(row.gallery_id);
                     delete library[idStr];
                 }
             } else if (row.status === 'DONE') {
                 if (!isLibraryEntryValid(libEntry)) {
                     if (libEntry && !isPermanentlySkipped(libEntry)) {
-                        deleteLibraryEntry(row.gallery_id);
+                        await deleteLibraryEntry(row.gallery_id);
                         delete library[idStr];
                     }
-                    updateQueueItem(row.gallery_id, {
+                    await updateQueueItem(row.gallery_id, {
                         status: 'PENDING',
                         pagesDone: 0,
                         error: null
@@ -1049,14 +1047,14 @@ class DownloaderEngine extends EventEmitter {
             }
         }
 
-        const initialPending = getQueueItems({ status: 'PENDING' });
+        const initialPending = await getQueueItems({ status: 'PENDING' });
         const totalQueueCount = allQueue.length;
         this.emit('batch_start', {
             total: totalQueueCount,
             pending: initialPending.length,
             skipped: Math.max(0, totalQueueCount - initialPending.length)
         });
-        logActivity(`Run started: ${initialPending.length} pending / ${totalQueueCount} total (${Math.max(0, totalQueueCount - initialPending.length)} already in library)`);
+        await logActivity(`Run started: ${initialPending.length} pending / ${totalQueueCount} total (${Math.max(0, totalQueueCount - initialPending.length)} already in library)`);
 
         if (initialPending.length === 0) {
             this.emit('batch_complete', { processed: 0 });
@@ -1065,7 +1063,7 @@ class DownloaderEngine extends EventEmitter {
 
         if (!this.skipStartupJitter) {
             const startupJitterMs = 5000 + Math.floor(Math.random() * 10000);
-            logActivity(`Run starting in ${Math.round(startupJitterMs / 1000)}s (startup jitter, anti-burst)`);
+            await logActivity(`Run starting in ${Math.round(startupJitterMs / 1000)}s (startup jitter, anti-burst)`);
             await sleep(startupJitterMs);
         }
 
@@ -1078,12 +1076,12 @@ class DownloaderEngine extends EventEmitter {
             }
             if (this.isStopped) break;
 
-            const nextRow = getNextPendingItem();
+            const nextRow = await getNextPendingItem();
             if (!nextRow) break;
 
             const id = String(nextRow.gallery_id);
             processedCount++;
-            const remainingNow = getQueueItems({ status: 'PENDING' }).length;
+            const remainingNow = (await getQueueItems({ status: 'PENDING' })).length;
             totalTasksSnapshot = Math.max(totalTasksSnapshot, processedCount + Math.max(0, remainingNow - 1));
 
             let result = null;
@@ -1091,14 +1089,14 @@ class DownloaderEngine extends EventEmitter {
                 result = await this.processGallery(id, processedCount, totalTasksSnapshot, null);
             } catch (err) {
                 if (err.permanent) {
-                    saveSkippedToLibrary(id, err.message);
-                    logActivity(`SKIPPED ID ${id}: ${err.message}`);
-                    updateListStatus(null, id, `SKIPPED - ${err.message.substring(0, 60)}`);
+                    await saveSkippedToLibrary(id, err.message);
+                    await logActivity(`SKIPPED ID ${id}: ${err.message}`);
+                    await updateListStatus(null, id, `SKIPPED - ${err.message.substring(0, 60)}`);
                     this.emit('skipped', { galleryId: id, reason: err.message, currentTaskNum: processedCount, totalTasks: totalTasksSnapshot });
                 } else {
                     logError(id, err.message);
-                    logActivity(`ERROR ID ${id}: ${err.message}`);
-                    updateListStatus(null, id, `ERROR - ${err.message.substring(0, 30)}`);
+                    await logActivity(`ERROR ID ${id}: ${err.message}`);
+                    await updateListStatus(null, id, `ERROR - ${err.message.substring(0, 30)}`);
                     this.emit('error', { galleryId: id, error: err.message, currentTaskNum: processedCount, totalTasks: totalTasksSnapshot });
                 }
             }
@@ -1117,16 +1115,16 @@ class DownloaderEngine extends EventEmitter {
                 if (this.consecutiveRateLimits > MAX_CONSECUTIVE_RATE_LIMITS) {
                     this.circuitBreakerTripped = true;
                     const msg = `Circuit breaker: ${this.consecutiveRateLimits - 1} consecutive rate limits — pausing the run entirely instead of continuing to hammer nhentai. Resume manually once the flag has had time to cool down.`;
-                    logActivity(`CIRCUIT BREAKER: ${msg}`);
+                    await logActivity(`CIRCUIT BREAKER: ${msg}`);
                     logError(id, msg);
                     this.emit('circuit_breaker', { galleryId: id, consecutiveRateLimits: this.consecutiveRateLimits - 1 });
                     this.pause();
-                    updateListStatus(null, id, "PAUSED - Circuit breaker (too many 429s)");
+                    await updateListStatus(null, id, "PAUSED - Circuit breaker (too many 429s)");
                     break;
                 }
 
                 const waitSeconds = Math.min(BASE_RATE_LIMIT_WAIT * 2 ** (this.consecutiveRateLimits - 1), MAX_RATE_LIMIT_WAIT);
-                logActivity(`RATE LIMIT ID ${id}: cooling down ${waitSeconds}s (consecutive hit #${this.consecutiveRateLimits})`);
+                await logActivity(`RATE LIMIT ID ${id}: cooling down ${waitSeconds}s (consecutive hit #${this.consecutiveRateLimits})`);
                 this.emit('rate_limit', { galleryId: id, waitSeconds, consecutiveRateLimits: this.consecutiveRateLimits });
                 for (let s = waitSeconds; s > 0; s--) {
                     if (this.isStopped || this.forceRetry || this.isGalleryStopping(id)) break;
@@ -1152,9 +1150,9 @@ class DownloaderEngine extends EventEmitter {
                 }
                 if (this.isGalleryStopping(id)) {
                     if (!this.isGalleryDeleting(id)) {
-                        updateQueueItem(id, { status: 'STOPPED' });
+                        await updateQueueItem(id, { status: 'STOPPED' });
                     } else {
-                        deleteQueueItem(id);
+                        await deleteQueueItem(id);
                     }
                     this.clearGalleryStopFlags(id);
                     result = { status: "STOPPED" };
@@ -1177,7 +1175,7 @@ class DownloaderEngine extends EventEmitter {
                 this.consecutiveRateLimits = 0;
             }
 
-            const hasMorePending = !!getNextPendingItem();
+            const hasMorePending = !!(await getNextPendingItem());
             const wasFreeSkip = !!(result && result.skipped && result.skipReason === 'library');
 
             if (wasFreeSkip && hasMorePending && !this.isStopped) {
@@ -1243,7 +1241,7 @@ class DownloaderEngine extends EventEmitter {
             }
         }
 
-        logActivity(`Run finished: ${processedCount} galleries processed`);
+        await logActivity(`Run finished: ${processedCount} galleries processed`);
         this.emit('batch_complete', { processed: processedCount });
     }
 
