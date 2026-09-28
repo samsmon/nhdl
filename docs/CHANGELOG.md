@@ -9,6 +9,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Backup Otomatis Pre-Import / Pre-Restore Mode Replace (`server/index.js`, `docs/API.md`, `webui/src/lib/components/FolderPickerModal.svelte`, `test/db.test.js`)**:
+  - Implementasikan pembuatan backup otomatis `nhdl-backup-pre-import-<ts>.json` di `POST /api/db/import` dan `POST /api/db/restore` sebelum data dikosongkan pada mode `replace`.
+  - Jika pembuatan backup gagal, proses import/restore dibatalkan dan server mengembalikan error 500.
+  - Nama file backup (`preImportBackup`) disertakan pada respons JSON dan ditampilkan di notifikasi toast serta banner antarmuka modal Database.
+  - Tambahkan unit/integration test di `test/db.test.js` untuk memverifikasi pembuatan file backup pre-import dan integritas datanya (36/36 test lulus, build UI 0 warning).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Proteksi 409 Conflict Import/Restore Saat Engine Berjalan (`server/index.js`, `docs/API.md`, `webui/src/lib/api.js`, `webui/src/lib/components/FolderPickerModal.svelte`, `test/db.test.js`)**:
   - Dokumentasikan respon 409 pada `/api/db/import` dan `/api/db/restore` di `docs/API.md`.
   - Server menolak request import dan restore database dengan `409 Conflict` dan pesan `"Pause engine first"` (`needsPause: true`) bila `engine.isRunning` atau terdapat item antrian berstatus `ON_PROGRESS`.

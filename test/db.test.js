@@ -1791,4 +1791,96 @@ test('Point 2: /api/db/import and /api/db/restore reject with 409 Pause engine f
     }
 });
 
+test('Point 3: automatic pre-import backup is created before replace mode import and restore, returned in response', async () => {
+    const ctx = await createTempDb();
+    const { createRequestHandler } = require('../server/index');
+    const http = require('http');
+
+    const srv = http.createServer(createRequestHandler());
+    await new Promise(r => srv.listen(0, '127.0.0.1', r));
+    const port = srv.address().port;
+
+    const request = (method, urlPath, body = null) => {
+        return new Promise((resolve, reject) => {
+            const req = http.request({
+                hostname: '127.0.0.1',
+                port,
+                path: urlPath,
+                method,
+                headers: { 'Content-Type': 'application/json' }
+            }, res => {
+                let data = '';
+                res.on('data', chunk => { data += chunk.toString(); });
+                res.on('end', () => {
+                    let json = null;
+                    try { json = JSON.parse(data); } catch (e) {}
+                    resolve({ statusCode: res.statusCode, data, json });
+                });
+            });
+            req.on('error', reject);
+            if (body) req.write(body);
+            req.end();
+        });
+    };
+
+    const createdBackups = [];
+
+    try {
+        // Seed an initial queue item and library entry
+        await dbMod.enqueueGallery({ galleryId: 88801, title: 'Original Item Before Replace', status: 'PENDING', batch: 1 });
+        await dbMod.upsertLibraryEntry({ galleryId: 88801, title: 'Original Item Before Replace', path: '/downloads/88801' });
+
+        // 1. Test POST /api/db/import with mode 'replace'
+        const importPayload = JSON.stringify({
+            mode: 'replace',
+            data: {
+                format: 'nhdl-export',
+                version: 1,
+                tables: {
+                    queue: [{ gallery_id: 88802, url: 'https://certain.site/g/88802/', title: 'New Imported Item' }]
+                }
+            }
+        });
+
+        const impRes = await request('POST', '/api/db/import', importPayload);
+        assert.strictEqual(impRes.statusCode, 200);
+        assert.strictEqual(impRes.json.success, true);
+        assert.ok(impRes.json.preImportBackup, 'Must return preImportBackup filename');
+        assert.ok(impRes.json.preImportBackup.startsWith('nhdl-backup-pre-import-'));
+        assert.ok(impRes.json.preImportBackup.endsWith('.json'));
+        createdBackups.push(impRes.json.preImportBackup);
+
+        // Verify pre-import backup file exists and contains the original item 88801
+        const backupPath = path.join(dbMod.BACKUP_DIR, impRes.json.preImportBackup);
+        assert.strictEqual(fs.existsSync(backupPath), true);
+        const backupContent = JSON.parse(fs.readFileSync(backupPath, 'utf8'));
+        assert.ok(backupContent.tables.queue.some(q => Number(q.gallery_id) === 88801));
+
+        // 2. Test POST /api/db/restore
+        // Create another backup first to restore from
+        const bkpRes = await request('POST', '/api/db/backup', JSON.stringify({ name: 'nhdl-backup-to-restore.json' }));
+        assert.strictEqual(bkpRes.statusCode, 200);
+        createdBackups.push('nhdl-backup-to-restore.json');
+
+        const restRes = await request('POST', '/api/db/restore', JSON.stringify({
+            filename: 'nhdl-backup-to-restore.json',
+            mode: 'replace'
+        }));
+        assert.strictEqual(restRes.statusCode, 200);
+        assert.strictEqual(restRes.json.success, true);
+        assert.ok(restRes.json.preImportBackup, 'Restore must return preImportBackup filename in replace mode');
+        assert.ok(restRes.json.preImportBackup.startsWith('nhdl-backup-pre-import-'));
+        createdBackups.push(restRes.json.preImportBackup);
+
+        const restBackupPath = path.join(dbMod.BACKUP_DIR, restRes.json.preImportBackup);
+        assert.strictEqual(fs.existsSync(restBackupPath), true);
+    } finally {
+        for (const f of createdBackups) {
+            try { dbMod.deleteBackup(f); } catch (e) {}
+        }
+        await new Promise(r => srv.close(r));
+        await ctx.cleanup();
+    }
+});
+
 

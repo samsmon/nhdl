@@ -55,6 +55,9 @@
   let engineNeedsPause = $state(false);
   let pausingEngine = $state(false);
 
+  // Pre-import backup display state (Point 3)
+  let lastPreImportBackup = $state(null);
+
   async function handlePauseEngine() {
     pausingEngine = true;
     try {
@@ -192,8 +195,13 @@
     restoreLoading = true;
     engineNeedsPause = false;
     try {
-      await api.restoreDbBackup(filename, 'replace');
-      appStore.showToast(`Database restored from ${filename}`, 'success');
+      const res = await api.restoreDbBackup(filename, 'replace');
+      if (res.preImportBackup) {
+        lastPreImportBackup = res.preImportBackup;
+        appStore.showToast(`Database restored from ${filename} (Pre-import backup: ${res.preImportBackup})`, 'success', 6000);
+      } else {
+        appStore.showToast(`Database restored from ${filename}`, 'success');
+      }
       confirmingRestore = null;
       await appStore.loadConfig();
       appStore.refreshLibraryIndex();
@@ -257,10 +265,19 @@
       const res = await api.importDbData(dataPayload, importMode);
       const queueCount = res.imported?.queue ?? 0;
       const libCount = res.imported?.library ?? 0;
-      appStore.showToast(
-        `Import complete (${importMode} mode): ${queueCount} queue, ${libCount} library items`,
-        'success'
-      );
+      if (res.preImportBackup) {
+        lastPreImportBackup = res.preImportBackup;
+        appStore.showToast(
+          `Import complete (${importMode} mode): ${queueCount} queue, ${libCount} library items. Pre-import backup: ${res.preImportBackup}`,
+          'success',
+          6000
+        );
+      } else {
+        appStore.showToast(
+          `Import complete (${importMode} mode): ${queueCount} queue, ${libCount} library items`,
+          'success'
+        );
+      }
       importFile = null;
       importConfirmChecked = false;
       await appStore.loadConfig();
@@ -506,6 +523,21 @@
                 class="px-2.5 py-1 rounded bg-[#f87171] hover:bg-[#ef4444] text-black font-semibold text-xs cursor-pointer shrink-0 disabled:opacity-50"
               >
                 {pausingEngine ? 'Pausing...' : 'Pause Engine'}
+              </button>
+            </div>
+          {/if}
+
+          {#if lastPreImportBackup}
+            <div class="bg-[#1c2612] border border-[#a3e635]/40 rounded p-2.5 flex items-center justify-between gap-2 text-[#d9f99d]">
+              <div class="flex items-center gap-2 min-w-0">
+                <Archive class="w-4 h-4 text-[#a3e635] shrink-0" />
+                <span class="truncate">Pre-import backup created: <strong class="text-white font-mono">{lastPreImportBackup}</strong></span>
+              </div>
+              <button
+                onclick={() => lastPreImportBackup = null}
+                class="text-[#888] hover:text-white text-[11px] cursor-pointer shrink-0 ml-2"
+              >
+                Dismiss
               </button>
             </div>
           {/if}

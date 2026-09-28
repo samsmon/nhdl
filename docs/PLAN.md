@@ -213,3 +213,4 @@ Task:
 | 2026-09-28 | 7 | 7.7: Update docker-compose.yml & .env.example (contoh DATABASE_URL, network eksternal, penjelasan volume data/ opsional) dan test lintas database (eksekusi migrasi skema v1->v2, ekspor SQLite -> impor PostgreSQL verifikasi integritas data, dan suite live Postgres via TEST_DATABASE_URL) — 33/33 test lulus, npm run build:ui 0 warning |
 | 2026-09-28 | 7 | Validasi ketat importData: tolak format/version/tables invalid, cek schemaVersion, validasi gallery_id tiap baris queue/library, dan proteksi replace kosong tanpa allowEmpty — 34/34 test lulus |
 | 2026-09-28 | 7 | Proteksi 409 saat import/restore ketika engine berjalan atau ada item ON_PROGRESS, UI tombol Pause Engine, kontrak docs/API.md — 35/35 test lulus |
+| 2026-09-28 | 7 | Auto backup pre-import nhdl-backup-pre-import-<ts>.json sebelum import/restore mode replace, batalkan jika backup gagal, tampilkan di response dan UI — 36/36 test lulus |

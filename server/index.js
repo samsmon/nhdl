@@ -867,7 +867,28 @@ function createRequestHandler() {
                         const parsed = JSON.parse(body);
                         const mode = parsed.mode === 'merge' ? 'merge' : 'replace';
                         const payload = parsed.data || parsed;
+
+                        let preImportBackup = null;
+                        if (mode === 'replace') {
+                            const pad = (n) => String(n).padStart(2, '0');
+                            const now = new Date();
+                            const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+                            const backupName = `nhdl-backup-pre-import-${ts}.json`;
+                            try {
+                                const backupRes = await createBackup(null, backupName);
+                                preImportBackup = backupRes.filename;
+                                await logActivity(`Pre-import backup created: ${preImportBackup}`);
+                            } catch (err) {
+                                await logActivity(`Import cancelled: failed to create pre-import backup (${err.message})`, 'error');
+                                res.writeHead(500, { 'Content-Type': 'application/json' });
+                                return res.end(JSON.stringify({ success: false, error: `Failed to create pre-import backup: ${err.message}` }));
+                            }
+                        }
+
                         const result = await importData(payload, { mode });
+                        if (preImportBackup) {
+                            result.preImportBackup = preImportBackup;
+                        }
                         await logActivity(`Database imported: mode ${mode}, ${result.imported.queue} queue, ${result.imported.library} library`);
                         res.setHeader('Content-Type', 'application/json');
                         return res.end(JSON.stringify(result));
@@ -920,12 +941,33 @@ function createRequestHandler() {
                 req.on('data', chunk => { body += chunk.toString(); });
                 req.on('end', async () => {
                     try {
-                        const { filename, mode } = JSON.parse(body);
+                        const { filename, mode = 'replace' } = JSON.parse(body);
                         if (!filename) {
                             res.writeHead(400);
                             return res.end(JSON.stringify({ success: false, error: 'filename is required' }));
                         }
+
+                        let preImportBackup = null;
+                        if (mode === 'replace') {
+                            const pad = (n) => String(n).padStart(2, '0');
+                            const now = new Date();
+                            const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+                            const backupName = `nhdl-backup-pre-import-${ts}.json`;
+                            try {
+                                const backupRes = await createBackup(null, backupName);
+                                preImportBackup = backupRes.filename;
+                                await logActivity(`Pre-restore backup created: ${preImportBackup}`);
+                            } catch (err) {
+                                await logActivity(`Restore cancelled: failed to create pre-restore backup (${err.message})`, 'error');
+                                res.writeHead(500, { 'Content-Type': 'application/json' });
+                                return res.end(JSON.stringify({ success: false, error: `Failed to create pre-import backup: ${err.message}` }));
+                            }
+                        }
+
                         const result = await restoreBackup(filename, mode);
+                        if (preImportBackup) {
+                            result.preImportBackup = preImportBackup;
+                        }
                         await logActivity(`Database restored from ${filename}`);
                         res.setHeader('Content-Type', 'application/json');
                         return res.end(JSON.stringify(result));
