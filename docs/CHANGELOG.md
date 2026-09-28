@@ -8,6 +8,15 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-28 · AI (Claude Code, Opus 5.5) · Fase 8
+- Tambah `docs/AI_AGENT.md` (bahasa Inggris) untuk AI agent: larangan tanpa izin user, deploy (lokal, Docker, SQLite vs PostgreSQL, auto-migrasi), tabel env var yang dicek ke kode, health check dengan output yang diharapkan, manage lewat API (antrian, prioritas, log, API key, backup/export/import/restore), peta modul dan pola fitur DB → REST → SSE, serta tabel troubleshooting per gejala.
+- `README.md`: blok pemicu "If you are an AI agent" di paling atas.
+- `AGENTS.md`: tautan ke `docs/AI_AGENT.md`, dan aturan arsitektur diperbarui untuk DB async + dua adapter (migrasi skema wajib di SQLite dan Postgres).
+- Validasi: langkah deploy diikuti dari clone bersih (setup 17 detik), dan health check sesuai dokumen.
+
+## 2026-09-28 · Manual (Maja) · Fase 8
+- Meminta Fase 8 dikerjakan langsung oleh Claude Code.
+
 ## 2026-09-28 · AI (Claude Code, Opus 5.5) · Rilis
 - **Fix container crash:** `Dockerfile` tidak menginstal dependency backend, padahal `core/db.js` selalu memuat `pg`, sehingga container gagal start ("Cannot find module 'pg'") bahkan di mode SQLite. Sekarang `npm ci --omit=dev` dijalankan di image, dan `.dockerignore` ditambahkan supaya `node_modules` lokal, `data/`, dan `.env` tidak ikut masuk image.
 - `start.bat`: instal dependency backend otomatis kalau `pg` belum ada.

@@ -173,12 +173,12 @@ Keputusan:
   > **If you are an AI agent:** read [docs/AI_AGENT.md](docs/AI_AGENT.md) before deploying, managing, modifying, or maintaining this project.
 
 Task:
-- [ ] **Deploy**: prasyarat (Node ≥ 22.13 / Docker), lokal (`start.bat`, `npm start`), Docker Compose, mode SQLite vs PostgreSQL (`DATABASE_URL`), daftar lengkap env var beserta default, port, dan cara verifikasi server sehat (endpoint + output yang diharapkan)
-- [ ] **Manage**: cara menambah antrian (UI, API, import `list.txt`), pause/resume, membaca log (`events`), cek dan ganti API key, backup/export/import database, `npm run check:archives`
-- [ ] **Modify**: peta modul singkat (tautan ke `docs/ARCHITECTURE.md` dan `docs/API.md`), pola fitur baru DB → REST → SSE, cara menambah migrasi skema, cara menjalankan test
-- [ ] **Maintain**: upgrade versi (pull, rebuild, migrasi otomatis), troubleshooting berdasarkan gejala (Cloudflare challenge/403, DNS ISP diblokir, item stuck `ON_PROGRESS`, rate limit 429, DB tidak bisa connect), dan hal yang **tidak boleh** dilakukan agent (menghapus `data/`/volume DB, commit secret, mengubah identitas git)
-- [ ] Blok pemicu di `README.md` + tautan dari `AGENTS.md`
-- [ ] Validasi: minta agent baru (sesi bersih) mendeploy dan mengoperasikan NHDL hanya berbekal `README.md`; catat bagian yang membuatnya bingung lalu perbaiki dokumennya
+- [x] **Deploy**: prasyarat (Node ≥ 22.13 / Docker), lokal (`start.bat`, `npm start`), Docker Compose, mode SQLite vs PostgreSQL (`DATABASE_URL`), daftar lengkap env var beserta default, port, dan cara verifikasi server sehat (endpoint + output yang diharapkan)
+- [x] **Manage**: cara menambah antrian (UI, API, import `list.txt`), pause/resume, membaca log (`events`), cek dan ganti API key, backup/export/import database, `npm run check:archives`
+- [x] **Modify**: peta modul singkat (tautan ke `docs/ARCHITECTURE.md` dan `docs/API.md`), pola fitur baru DB → REST → SSE, cara menambah migrasi skema, cara menjalankan test
+- [x] **Maintain**: upgrade versi (pull, rebuild, migrasi otomatis), troubleshooting berdasarkan gejala (Cloudflare challenge/403, DNS ISP diblokir, item stuck `ON_PROGRESS`, rate limit 429, DB tidak bisa connect), dan hal yang **tidak boleh** dilakukan agent (menghapus `data/`/volume DB, commit secret, mengubah identitas git)
+- [x] Blok pemicu di `README.md` + tautan dari `AGENTS.md`
+- [x] Validasi: minta agent baru (sesi bersih) mendeploy dan mengoperasikan NHDL hanya berbekal `README.md`; catat bagian yang membuatnya bingung lalu perbaiki dokumennya — dijalankan dari clone bersih mengikuti `docs/AI_AGENT.md`: `npm install` + build UI 17 detik, server start, `/api/db/info` dan `/api/status` sesuai output yang didokumentasikan. Belum diuji oleh sesi agent baru
 
 ## Log
 | Tanggal | Fase | Catatan |
@@ -219,3 +219,4 @@ Task:
 | 2026-09-28 | 7 | Event reordered kosong dihapus, emit event reloaded/snapshot baru via SSE setelah import/restore berhasil, store UI update otomatis — 39/39 test lulus |
 | 2026-09-28 | 7 | pg driver type parser: daftarkan parser OID 20 (BIGINT/BIGSERIAL/COUNT(*)) agar menghasilkan number bukan string — 40/40 test lulus |
 | 2026-09-28 | 7 | Eksekusi live test suite PostgreSQL sungguhan (TEST_DATABASE_URL): uji migrasi skema, enqueue, done, library, export/import, proteksi format invalid, dan verifikasi tipe number — 41/41 test lulus (0 fail, 0 skip) |
+| 2026-09-28 | 8 | Fase 8 selesai: `docs/AI_AGENT.md` (deploy/manage/modify/maintain, env var dicek ke kode, troubleshooting, larangan untuk agent), blok pemicu di README, tautan di AGENTS.md; divalidasi dari clone bersih |

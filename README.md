@@ -1,5 +1,7 @@
 # NHDL (Batch Downloader for a certain site ( ͡° ͜ʖ ͡°))
 
+> **If you are an AI agent:** read [docs/AI_AGENT.md](docs/AI_AGENT.md) before deploying, managing, modifying, or maintaining this project.
+
 A self-hosted download manager for galleries from a certain site ( ͡° ͜ʖ ͡°). It runs as a web daemon with a real-time dashboard styled like qBittorrent/IDM, keeps its state in SQLite or a central PostgreSQL server, and is built to run unattended on a homelab or NAS.
 
 ---
@@ -107,7 +109,7 @@ test/            node:test suites
 docs/            architecture, API contract, Postgres guide, plan, changelog
 ```
 
-Further reading: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/API.md](docs/API.md), [docs/POSTGRES.md](docs/POSTGRES.md). Contributors and AI agents should start with [AGENTS.md](AGENTS.md).
+Further reading: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/API.md](docs/API.md), [docs/POSTGRES.md](docs/POSTGRES.md). Contributors should start with [AGENTS.md](AGENTS.md); AI agents with [docs/AI_AGENT.md](docs/AI_AGENT.md).
 
 ---
 
