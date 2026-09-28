@@ -1,4 +1,6 @@
-const { Pool } = require('pg');
+const pg = require('pg');
+const { Pool } = pg;
+pg.types.setTypeParser(20, v => parseInt(v, 10)); // int8/bigint -> number
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');

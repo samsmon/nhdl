@@ -9,6 +9,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 ---
 
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
+- **Registrasi Driver Parser Tipe OID 20 PostgreSQL (`core/db/postgres.js`, `test/db.test.js`)**:
+  - Daftarkan parser kustom `pg.types.setTypeParser(20, v => parseInt(v, 10))` di `core/db/postgres.js`.
+  - Mengonversi nilai PostgreSQL `int8` / `BIGSERIAL` / `BIGINT` / `COUNT(*)` menjadi tipe data JavaScript `Number` alih-alih `String`.
+  - Mencegah inkonsistensi tipe data saat komparasi `item.gallery_id === 123` di backend dan frontend.
+  - Tambahkan unit/integration test di `test/db.test.js` dan verifikasi bahwa parsing `COUNT(*)`, `gallery_id`, dan `id` bernilai `number` (40/40 test lulus).
+
+## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 7
 - **Hapus Event Reordered Kosong & Pancarkan Event Reloaded/Snapshot Baru Setelah Import/Restore (`core/db/sqlite.js`, `core/db/postgres.js`, `server/index.js`, `docs/API.md`, `webui/src/lib/stores/app.svelte.js`, `test/sse.test.js`)**:
   - Hapus pemancaran event `item` bertipe `reordered` dengan `items: []` pada akhir `importData()` di adapter SQLite dan PostgreSQL.
   - Ganti dengan pemancaran event `reloaded` dari `dbEvents` setiap kali operasi `importData` (maupun `restoreBackup`) sukses diselesaikan.

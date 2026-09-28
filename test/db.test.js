@@ -1550,8 +1550,13 @@ test('Fase 7.7: PostgreSQL live test suite against real server (skipped if TEST_
         await postgresAdapter.enqueueGallery({ galleryId: gid, url: `https://certain.site/g/${gid}/`, title: 'Live Postgres Test' }, pool);
         const item = await postgresAdapter.getQueueItem(gid, pool);
         assert.ok(item);
-        assert.strictEqual(Number(item.galleryId), gid);
+        assert.strictEqual(item.galleryId, gid);
+        assert.strictEqual(typeof item.galleryId, 'number', 'gallery_id must be parsed as number');
+        assert.strictEqual(typeof item.id, 'number', 'id must be parsed as number');
         assert.strictEqual(item.status, 'PENDING');
+
+        const countRes = await pool.query(`SELECT COUNT(*) AS cnt FROM queue`);
+        assert.strictEqual(typeof countRes.rows[0].cnt, 'number', 'COUNT(*) must be parsed as number');
 
         await postgresAdapter.updateQueueStatus(gid, 'DONE', null, pool);
         const doneItem = await postgresAdapter.getQueueItem(gid, pool);
@@ -2115,6 +2120,47 @@ test('Point 5: autoMigrateSqliteToPostgres writes pre-migration backup before Po
         postgresAdapter.importData = origImportData;
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
     }
+});
+
+test('Point 7: pg driver type parser for OID 20 (BIGINT/BIGSERIAL/COUNT(*)) converts strings to numbers', async () => {
+    const pg = require('pg');
+    require('../core/db/postgres'); // ensures type parser is registered
+
+    const parser = pg.types.getTypeParser(20);
+    assert.strictEqual(typeof parser, 'function', 'pg type parser for OID 20 must be defined');
+
+    // Verify parsing behavior for various integers
+    assert.strictEqual(parser('123456'), 123456);
+    assert.strictEqual(typeof parser('123456'), 'number');
+
+    assert.strictEqual(parser('0'), 0);
+    assert.strictEqual(typeof parser('0'), 'number');
+
+    assert.strictEqual(parser('999999999'), 999999999);
+    assert.strictEqual(typeof parser('999999999'), 'number');
+
+    assert.strictEqual(parser('468614'), 468614);
+    assert.strictEqual(typeof parser('468614'), 'number');
+
+    // Verify simulated row results have number types for BIGINT fields
+    const mockPgResult = {
+        command: 'SELECT',
+        rowCount: 1,
+        oid: null,
+        rows: [{ cnt: parser('42'), gallery_id: parser('468614'), id: parser('1') }],
+        fields: [
+            { name: 'cnt', dataTypeID: 20 },
+            { name: 'gallery_id', dataTypeID: 20 },
+            { name: 'id', dataTypeID: 20 }
+        ]
+    };
+
+    assert.strictEqual(typeof mockPgResult.rows[0].cnt, 'number');
+    assert.strictEqual(mockPgResult.rows[0].cnt, 42);
+    assert.strictEqual(typeof mockPgResult.rows[0].gallery_id, 'number');
+    assert.strictEqual(mockPgResult.rows[0].gallery_id, 468614);
+    assert.strictEqual(typeof mockPgResult.rows[0].id, 'number');
+    assert.strictEqual(mockPgResult.rows[0].id, 1);
 });
 
 

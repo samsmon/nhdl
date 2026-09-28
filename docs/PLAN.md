@@ -217,3 +217,4 @@ Task:
 | 2026-09-28 | 7 | Otomatisasi backup: penjadwalan via DB settings (backupIntervalHours, backupKeep, lastBackupAt), rotasi file lama, override direktori NHDL_BACKUP_DIR, retry tiap 10m saat gagal, UI konfigurasi jadwal dan estimasi backup berikutnya — 37/37 test lulus |
 | 2026-09-28 | 7 | Auto-migrate backup: tulis backup JSON dari SQLite ke folder backup sebelum impor Postgres, batalkan migrasi dan jangan rename SQLite jika backup gagal — 38/38 test lulus |
 | 2026-09-28 | 7 | Event reordered kosong dihapus, emit event reloaded/snapshot baru via SSE setelah import/restore berhasil, store UI update otomatis — 39/39 test lulus |
+| 2026-09-28 | 7 | pg driver type parser: daftarkan parser OID 20 (BIGINT/BIGSERIAL/COUNT(*)) agar menghasilkan number bukan string — 40/40 test lulus |
