@@ -8,6 +8,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-09-28 · AI (Claude Code, Opus 5.5) · Rilis
+- Merge `rework` ke `main` (fast-forward): Fase 4 (layout qBittorrent/IDM, virtual table, pause/resume/delete/prioritas per item, panel detail, status bar) kini ada di `main`.
+- Sebelum merge sudah direview: 27/27 test lulus; uji browser 5000 item (~700 elemen DOM, kembali ke filter "All" 15ms, scroll sampai item terakhir, tampilan mobile 375px); prioritas Up/Down/Top/Bottom di antrian 1000 item benar dan ter-update real-time lewat SSE.
+
+## 2026-09-28 · Manual (Maja) · Rilis
+- Menyetujui merge Fase 4 ke `main`.
+
 ## 2026-09-28 · AI (Antigravity, Gemini 3.8 Flash High) · Fase 4
 - **Perbaikan bug payload event SSE `reordered` hilang di `onDbItem` (`server/index.js`, `test/sse.test.js`)**: ubah handler `onDbItem` di `server/index.js` agar meneruskan seluruh properti event ke payload SSE (`const { rawRow, ...payload } = evt;`) kecuali `rawRow` (data internal baris DB mentah). Sebelumnya, `onDbItem` hanya menyalin `item`, `galleryId`, `batch`, dan `removedIds`, sehingga field `items` pada event `reordered` terbuang dan urutan baris di UI tidak berubah sampai reload. Urutan tabel virtual kini langsung terurut ulang secara real-time di semua tab saat kolom `#` aktif sebagai sort dan seleksi tetap menempel ke item yang sama. Ditambahkan unit test level SSE di `test/sse.test.js` yang memverifikasi `POST /api/queue/priority` ("up" dan "top") memancarkan event `reordered` lengkap dengan `items` dan tanpa `rawRow` (total 27/27 test lulus, `npm run build:ui` 0 warning).
 - **Perbaikan bug `updateQueuePriority()` pada antrian `> 500` item (`core/db.js`, `webui/src/lib/stores/app.svelte.js`, `docs/API.md`)**: hapus cabang `reordered.length > 500` yang sebelumnya hanya melakukan `priority ± 1` (menyebabkan item di tengah melompat ke `#1` atau `#1000` saat item lain berprioritas `0`). `up`/`down` kini selalu menukar posisi dengan tetangga langsung (`ORDER BY priority DESC, id ASC`, termasuk pergeseran blok multi-select dengan urutan internal tetap) untuk ukuran antrian berapa pun. Bila prioritas sudah menurun ketat (`isStrictlyDecreasing`), hanya baris yang bertukar posisi (2 baris untuk 1 item) yang di-update; bila ada duplikasi prioritas (mis. semua `0`), seluruh antrian dinormalisasi ke `total - idx` dalam satu transaksi `BEGIN IMMEDIATE` dengan satu prepared statement tanpa memanggil `updateQueueItem()` per baris, lalu memancarkan satu event SSE `item` bertipe `reordered` (`{ type: "reordered", items: [{ galleryId, priority }] }`) yang ditangani di `applyItemEvent()` store frontend (normalisasi 5.000 item selesai `< 200ms` dengan 1 event SSE, 26/26 test lulus).
