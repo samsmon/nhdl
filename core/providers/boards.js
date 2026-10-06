@@ -39,7 +39,7 @@ function taxonomy(html, kind) {
 }
 
 function createBoardsProvider(cfg) {
-    const { id, label, origin, galleryPath, hosts, imageHost } = cfg;
+    const { id, label, origin, galleryPath, hosts, imageHost, imageBase } = cfg;
     const hostPattern = hosts.map(h => h.replace(/\./g, '\\.')).join('|');
 
     function parseBody(body) {
@@ -81,7 +81,12 @@ function createBoardsProvider(cfg) {
             authorStr: authorSlug ? titleCaseSlug(authorSlug) : 'Other',
             extraMeta: { tags, source: id },
             pageUrls(n) {
-                return PAGE_EXTS.map(ext => ({ ext, url: `https://${host}/${dir}/${loadId}/${n}.${ext}` }));
+                return PAGE_EXTS.map(ext => ({
+                    ext,
+                    url: imageBase
+                        ? imageBase(host, dir, loadId, n, ext)
+                        : `https://${host}/${dir}/${loadId}/${n}.${ext}`
+                }));
             }
         };
     }

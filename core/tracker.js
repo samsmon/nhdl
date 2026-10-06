@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { sanitizeName } = require('./utils');
 const { buildZip } = require('./zip');
+const { canonicalKey } = require('./providers');
 const {
     getLibraryEntry,
     getAllLibraryEntries,
@@ -221,8 +222,8 @@ async function rescanLibrary(baseDownloadDir) {
             result.scanned++;
             try {
                 const rawId = fs.readFileSync(path.join(dir, MARKER_FILENAME), 'utf-8').trim();
-                const id = parseInt(rawId, 10);
-                if (Number.isFinite(id) && id > 0) {
+                const id = canonicalKey(rawId);
+                if (id) {
                     const existing = await getLibraryEntry(id);
                     const { artist, language } = deriveLineageFromPath(dir, baseDownloadDir);
                     const { pages, ext, pageExts } = inspectFolderPages(dir);
@@ -272,8 +273,8 @@ async function rescanLibrary(baseDownloadDir) {
             result.scanned++;
             try {
                 const rawId = fs.readFileSync(path.join(dir, d.name), 'utf-8').trim();
-                const id = parseInt(rawId, 10);
-                if (Number.isFinite(id) && id > 0) {
+                const id = canonicalKey(rawId);
+                if (id) {
                     const existing = await getLibraryEntry(id);
                     const extMatch = archivePath.match(/\.(cbz|zip)$/i);
                     const archiveExt = extMatch ? extMatch[1].toLowerCase() : 'cbz';

@@ -39,6 +39,7 @@ initDb();
 
 const { verifyApiKey } = require('../core/nhentaiApi');
 const DownloaderEngine = require('../core/engine');
+const { sourceOf, listSources } = require('../core/providers');
 const {
     loadLibrary,
     rescanLibrary,
@@ -369,6 +370,7 @@ function createRequestHandler() {
                 const entries = allEntries.filter(e => !e.skipped);
                 const items = entries.map(data => ({
                     id: String(data.gallery_id),
+                    source: sourceOf(data.gallery_id),
                     title: data.title || 'Unknown',
                     author: data.artist || null,
                     lang: data.language || null,
@@ -449,8 +451,8 @@ function createRequestHandler() {
                             return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
                         }
                         for (const id of ids) {
-                            const gid = parseInt(String(id), 10);
-                            if (Number.isFinite(gid) && engine.activeGalleryId === gid) {
+                            const gid = String(id);
+                            if (engine.activeGalleryId === gid) {
                                 engine.stopGallery(gid, { deleteAfter: false });
                             }
                         }
@@ -511,8 +513,8 @@ function createRequestHandler() {
                             return res.end(JSON.stringify({ success: false, error: 'ids array is required' }));
                         }
                         for (const id of ids) {
-                            const gid = parseInt(String(id), 10);
-                            if (Number.isFinite(gid) && engine.activeGalleryId === gid) {
+                            const gid = String(id);
+                            if (engine.activeGalleryId === gid) {
                                 engine.stopGallery(gid, { deleteAfter: true });
                             }
                         }
@@ -601,6 +603,7 @@ function createRequestHandler() {
                     downloadFormat: engine.downloadFormat,
                     autoContinueBatches: engine.autoContinueBatches,
                     authRequired: isAuthRequired(),
+                    sources: listSources(),
                     apiKeyConfigured: !!apiKey,
                     apiKeyMasked: apiKey ? `${apiKey.slice(0, 4)}${'*'.repeat(Math.max(apiKey.length - 8, 4))}${apiKey.slice(-4)}` : '',
                     backupIntervalHours: await getSetting('backupIntervalHours', 24),
