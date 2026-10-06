@@ -5,6 +5,7 @@ const { dbEvents } = require('./events');
 const { urlForKey, normalizeGalleryId, toPublicId, publicRow, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
 const { parseListText, parseListTextDetailed } = require('./listParser');
 const { canonicalKey } = require('../providers');
+const { isContentType } = require('../providers/contentType');
 
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
 const DEFAULT_DB_PATH = process.env.NHDL_DB_PATH || path.join(ROOT_DIR, 'data', 'nhdl.db');
@@ -136,6 +137,15 @@ const MIGRATIONS = [
             }
             // events.gallery_id keeps INTEGER affinity on purpose: SQLite stores non-numeric
             // text (prefixed keys) as TEXT in such a column, and numeric keys stay INTEGER.
+        }
+    }
+    ,{
+        version: 4,
+        up(db) {
+            const cols = db.prepare(`PRAGMA table_info(queue)`).all().map(c => c.name);
+            if (!cols.includes('category')) {
+                db.exec(`ALTER TABLE queue ADD COLUMN category TEXT`);
+            }
         }
     }
 ];
@@ -394,7 +404,8 @@ async function updateQueueItem(galleryId, fields = {}, db = null) {
         pages_total: 'pages_total',
         error: 'error',
         retries: 'retries',
-        format: 'format'
+        format: 'format',
+        category: 'category'
     };
 
     const seenCols = new Set();
@@ -1098,8 +1109,8 @@ async function importData(payload, options = {}, db = null) {
         const queueStmt = active.prepare(`
             INSERT ${mode === 'merge' ? 'OR IGNORE' : 'OR REPLACE'} INTO queue (
                 gallery_id, url, title, status, batch, priority,
-                pages_done, pages_total, error, retries, created_at, updated_at, format
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                pages_done, pages_total, error, retries, created_at, updated_at, format, category
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         for (const r of queueRows) {
             const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
@@ -1115,10 +1126,11 @@ async function importData(payload, options = {}, db = null) {
             const createdAt = r.created_at || r.createdAt || new Date().toISOString();
             const updatedAt = r.updated_at || r.updatedAt || new Date().toISOString();
             const format = r.format || null;
+            const category = isContentType(r.category) ? r.category : null;
 
             const res = queueStmt.run(
                 gid, url, title, status, batch, priority,
-                pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format
+                pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format, category
             );
             if (res.changes > 0) imported.queue++;
         }

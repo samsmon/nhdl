@@ -198,7 +198,7 @@ test('migration v3 upgrades a v2 database in place: ids stay, order/priority kep
 
     try {
         const db = await dbMod.initDb(dbPath, { legacyConfigPath: path.join(tmpDir, 'none.json') });
-        assert.strictEqual(await dbMod.getSchemaVersion(db), 3);
+        assert.strictEqual(await dbMod.getSchemaVersion(db), 4);
 
         const cols = Object.fromEntries(db.prepare(`PRAGMA table_info(queue)`).all().map(c => [c.name, c.type]));
         assert.strictEqual(cols.gallery_id, 'TEXT');
@@ -217,7 +217,7 @@ test('migration v3 upgrades a v2 database in place: ids stay, order/priority kep
 
         await dbMod.closeDb();
         const again = await dbMod.initDb(dbPath, { legacyConfigPath: path.join(tmpDir, 'none.json') });
-        assert.strictEqual(await dbMod.getSchemaVersion(again), 3);
+        assert.strictEqual(await dbMod.getSchemaVersion(again), 4);
         assert.strictEqual((await dbMod.getQueueItems({}, again)).length, 2);
     } finally {
         await dbMod.closeDb();

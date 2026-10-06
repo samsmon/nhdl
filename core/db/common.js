@@ -32,6 +32,7 @@ function formatQueueRow(r) {
         error: r.error || null,
         retries: r.retries || 0,
         format: r.format || null,
+        category: r.category || null,
         createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
         updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at
     };
@@ -54,7 +55,7 @@ function maskDatabaseUrl(url) {
     }
 }
 
-const CURRENT_APP_SCHEMA_VERSION = 3;
+const CURRENT_APP_SCHEMA_VERSION = 4;
 
 function isValidGalleryId(rawId) {
     return canonicalKey(rawId) !== null;

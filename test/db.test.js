@@ -1405,7 +1405,7 @@ test('Fase 7.5: autoMigrateSqliteToPostgres transfers data when Postgres is empt
 test('Fase 7.7: PostgreSQL schema migrations version 1 to latest execute in order', async () => {
     const postgresAdapter = require('../core/db/postgres');
     assert.ok(Array.isArray(postgresAdapter.MIGRATIONS), 'MIGRATIONS array must exist');
-    assert.strictEqual(postgresAdapter.MIGRATIONS.length, 3, 'Must have 3 migrations defined');
+    assert.strictEqual(postgresAdapter.MIGRATIONS.length, 4, 'Must have 4 migrations defined');
 
     // Test migration v1 query execution
     const executedV1 = [];
@@ -1455,8 +1455,8 @@ test('Fase 7.7: PostgreSQL schema migrations version 1 to latest execute in orde
     };
 
     const finalVer = await postgresAdapter.runMigrations(mockDb);
-    assert.strictEqual(finalVer, 3, 'Final schema version must be 3');
-    assert.strictEqual(currentVersionInDb, 3, 'schema_version table must record version 3');
+    assert.strictEqual(finalVer, 4, 'Final schema version must be 4');
+    assert.strictEqual(currentVersionInDb, 4, 'schema_version table must record version 4');
 });
 
 test('Fase 7.7: Cross-database export SQLite -> import PostgreSQL verifies data integrity', async () => {
@@ -1485,7 +1485,7 @@ test('Fase 7.7: Cross-database export SQLite -> import PostgreSQL verifies data 
 
         // 2. Export SQLite database
         const exported = await sqliteAdapter.exportData(ctx.db);
-        assert.strictEqual(exported.schema_version, 3);
+        assert.strictEqual(exported.schema_version, 4);
         assert.strictEqual(exported.tables.queue.length, 2);
         assert.strictEqual(exported.tables.library.length, 1);
         assert.ok(exported.tables.settings.some(s => s.key === 'downloadDir'));

@@ -7,6 +7,7 @@ const { dbEvents } = require('./events');
 const { urlForKey, normalizeGalleryId, toPublicId, publicRow, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
 const { parseListText, parseListTextDetailed } = require('./listParser');
 const { canonicalKey } = require('../providers');
+const { isContentType } = require('../providers/contentType');
 
 let activePool = null;
 let activeUrl = null;
@@ -85,6 +86,12 @@ const MIGRATIONS = [
                 ALTER TABLE library ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text;
                 ALTER TABLE events  ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text;
             `);
+        }
+    },
+    {
+        version: 4,
+        async up(client) {
+            await client.query(`ALTER TABLE queue ADD COLUMN IF NOT EXISTS category TEXT;`);
         }
     }
 ];
@@ -382,7 +389,8 @@ async function updateQueueItem(galleryId, fields = {}, db = null) {
         pages_total: 'pages_total',
         error: 'error',
         retries: 'retries',
-        format: 'format'
+        format: 'format',
+        category: 'category'
     };
 
     const seenCols = new Set();
@@ -1120,12 +1128,13 @@ async function importData(payload, options = {}, db = null) {
             const createdAt = r.created_at || r.createdAt || new Date().toISOString();
             const updatedAt = r.updated_at || r.updatedAt || new Date().toISOString();
             const format = r.format || null;
+            const category = isContentType(r.category) ? r.category : null;
 
             const res = await client.query(`
                 INSERT INTO queue (
                     gallery_id, url, title, status, batch, priority,
-                    pages_done, pages_total, error, retries, created_at, updated_at, format
-                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+                    pages_done, pages_total, error, retries, created_at, updated_at, format, category
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
                 ON CONFLICT (gallery_id) DO ${mode === 'merge' ? 'NOTHING' : `UPDATE SET
                     url = EXCLUDED.url,
                     title = EXCLUDED.title,
@@ -1137,8 +1146,9 @@ async function importData(payload, options = {}, db = null) {
                     error = EXCLUDED.error,
                     retries = EXCLUDED.retries,
                     updated_at = EXCLUDED.updated_at,
-                    format = EXCLUDED.format`}
-            `, [gid, url, title, status, batch, priority, pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format]);
+                    format = EXCLUDED.format,
+                    category = EXCLUDED.category`}
+            `, [gid, url, title, status, batch, priority, pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format, category]);
             if (res.rowCount > 0) imported.queue++;
         }
 
