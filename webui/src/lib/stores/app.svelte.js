@@ -1,7 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import * as api from '../api.js';
 import { urlKey, matchesSourceFilter, countBySource } from '../sources.js';
-import { TYPE_ORDER, matchesTypeFilter, countByType } from '../contentType.js';
+import { TYPE_ORDER, matchesTypeFilter, countByType, effectiveTypeFilter } from '../contentType.js';
 import { isQueuedStatus, parseAddedAt, cooldownInfo } from '../queueView.js';
 
 // Reactive item map keyed by galleryId string so SSE `item` updates mutate
@@ -236,7 +236,7 @@ class AppStore {
     const sf = this.statusFilter;
     const bf = this.batchFilter;
     const srcf = this.sourceFilter;
-    const tf = this.typeFilter;
+    const tf = effectiveTypeFilter(this.typeFilter, this.filterCounts.types.map((t) => t.id));
     const q = this.searchQuery.trim().toLowerCase();
     const col = this.sortColumn;
     const dir = this.sortDirection === 'desc' ? -1 : 1;
@@ -457,6 +457,7 @@ class AppStore {
 
   setTypeFilter(id) {
     this.typeFilter = this.typeFilter === id ? 'all' : id;
+    this.mobileSidebarOpen = false;
   }
 
   setSourceFilter(id) {

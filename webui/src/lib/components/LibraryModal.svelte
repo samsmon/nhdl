@@ -14,7 +14,7 @@
   import { appStore } from '../stores/app.svelte.js';
   import * as api from '../api.js';
   import { itemSource, sourceLabel } from '../sources.js';
-  import { itemType, typeLabel, typeBadgeClass } from '../contentType.js';
+  import { itemType, typeLabel, typeBadgeClass, effectiveTypeFilter } from '../contentType.js';
 
   let { open, onClose } = $props();
 
@@ -44,10 +44,12 @@
 
   let libraryTypeOptions = $derived(['comic', 'manga', 'other'].filter(t => libraryItems.some(i => itemType(i) === t)));
 
+  let effLibraryType = $derived(effectiveTypeFilter(libraryType, libraryTypeOptions));
+
   let filteredLibrary = $derived(
     libraryItems.filter(item => {
       if (librarySource !== 'all' && itemSource(item) !== librarySource) return false;
-      if (libraryType !== 'all' && itemType(item) !== libraryType) return false;
+      if (effLibraryType !== 'all' && itemType(item) !== effLibraryType) return false;
       if (!librarySearch.trim()) return true;
       const q = librarySearch.toLowerCase();
       return (
@@ -306,7 +308,7 @@
             </select>
           {/if}
           {#if libraryTypeOptions.length > 0}
-            <select bind:value={libraryType} class="bg-[var(--bg-elevated)] text-xs font-mono text-white border border-[var(--border-subtle)] rounded px-2 py-1">
+            <select value={effLibraryType} onchange={(e) => (libraryType = e.currentTarget.value)} class="bg-[var(--bg-elevated)] text-xs font-mono text-white border border-[var(--border-subtle)] rounded px-2 py-1">
               <option value="all">All types</option>
               {#each libraryTypeOptions as t (t)}
                 <option value={t}>{typeLabel(t)}</option>

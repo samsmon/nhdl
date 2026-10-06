@@ -35,3 +35,9 @@ export function countByType(items) {
 export function typeBadgeClass(type) {
   return BADGE_CLASSES[type] || BADGE_CLASSES.other;
 }
+
+// A stored type filter only applies while some item still has that type; otherwise show everything.
+export function effectiveTypeFilter(filter, availableTypes) {
+  if (!filter || filter === 'all') return 'all';
+  return (availableTypes || []).includes(filter) ? filter : 'all';
+}

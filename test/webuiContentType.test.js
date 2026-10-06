@@ -35,3 +35,13 @@ test('matchesTypeFilter and countByType ignore untyped items', async () => {
     const counts = t.countByType(items);
     assert.deepStrictEqual([...counts.entries()].sort(), [['comic', 1], ['manga', 2]]);
 });
+
+test('effectiveTypeFilter falls back to all when the type is unavailable', async () => {
+    const t = await load();
+    assert.strictEqual(t.effectiveTypeFilter('all', ['manga']), 'all');
+    assert.strictEqual(t.effectiveTypeFilter(null, ['manga']), 'all');
+    assert.strictEqual(t.effectiveTypeFilter(undefined, ['manga']), 'all');
+    assert.strictEqual(t.effectiveTypeFilter('manga', ['comic', 'manga']), 'manga');
+    assert.strictEqual(t.effectiveTypeFilter('manga', ['comic']), 'all');
+    assert.strictEqual(t.effectiveTypeFilter('manga', []), 'all');
+});
