@@ -758,7 +758,7 @@ class DownloaderEngine extends EventEmitter {
                     if (archiveMatch) {
                         const archiveExt = archiveMatch.name.match(/\.(cbz|zip)$/i)[1].toLowerCase();
                         const archivePath = path.join(parentDir, archiveMatch.name);
-                        await saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages });
+                        await saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages, extraMeta });
                         await updateListStatus(null, galleryId, "SKIPPED - Already in Library");
                         await updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
                         await updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });

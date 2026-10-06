@@ -92,6 +92,7 @@ function createBoardsProvider(cfg) {
             authorStr: authorSlug ? titleCaseSlug(authorSlug) : 'Other',
             extraMeta: { tags, source: id },
             category,
+            categoryError: category ? null : 'no category link found on the gallery page',
             contentType: mapCategoryToType(category),
             pageUrls(n) {
                 return PAGE_EXTS.map(ext => ({

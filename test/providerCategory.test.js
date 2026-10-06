@@ -25,6 +25,7 @@ test('boards: category slug comes from the gallery tag link (single-quoted), not
     const meta = await boards().fetchMeta('xxx:1', { fetchText: fetchHtml(boardHtml(`<a class='tag' href='/category/manga/'></a>`)) });
     assert.strictEqual(meta.category, 'manga');
     assert.strictEqual(meta.contentType, 'manga');
+    assert.strictEqual(meta.categoryError, null);
 });
 
 test('boards: western maps to comic; unknown valid slug maps to other', async () => {
@@ -38,6 +39,7 @@ test('boards: no category link, or an invalid slug, gives null and does not fail
     const none = await boards().fetchMeta('xxx:1', { fetchText: fetchHtml(boardHtml('')) });
     assert.strictEqual(none.category, null);
     assert.strictEqual(none.contentType, null);
+    assert.ok(typeof none.categoryError === 'string' && none.categoryError.length > 0);
     const bad = await boards().fetchMeta('xxx:1', { fetchText: fetchHtml(boardHtml(`<a href='/category/..%2Fx/'></a>`)) });
     assert.strictEqual(bad.contentType, null);
 });

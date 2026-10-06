@@ -124,3 +124,20 @@ test('GET /api/library item mapping exposes category from library meta', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'server', 'index.js'), 'utf8');
     assert.ok(/category:\s*\(data\.meta && data\.meta\.contentType\) \|\| null/.test(src), 'server maps category from meta.contentType');
 });
+
+test('existing typed archive is skipped and the library entry still records the content type', async () => {
+    const site = await startSite('manga');
+    const ctx = await setup(site);
+    try {
+        const dir = path.join(ctx.downloadDir, 'Manga', 'English', 'Tester');
+        fs.mkdirSync(dir, { recursive: true });
+        fs.writeFileSync(path.join(dir, 'Typed Gallery.cbz'), Buffer.alloc(64, 1));
+        await dbMod.enqueueGallery({ galleryId: 'xxx:777', url: `${site.origin}/g/777/` }, ctx.db);
+        const result = await ctx.engine.processGallery('xxx:777');
+        assert.strictEqual(result.skipped, true);
+        assert.strictEqual(result.skipReason, 'disk_after_metadata');
+        const lib = await dbMod.getLibraryEntry('xxx:777', ctx.db);
+        assert.ok(lib, 'library entry saved');
+        assert.strictEqual(lib.meta.contentType, 'manga');
+    } finally { site.server.close(); await ctx.cleanup(); }
+});
