@@ -13,7 +13,7 @@ const { logActivity, setLogDir } = require('./logger');
 const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');
 const providers = require('./providers');
 const { toPublicId } = providers;
-const { fetchText, downloadToFile } = require('./providers/http');
+const { fetchText, downloadToFile, curlFetchText, curlDownloadToFile } = require('./providers/http');
 const { PAGE_EXTS } = require('./providers/boards');
 
 // Gallery keys can contain ":" (invalid in Windows paths); never use them raw as folder names.
@@ -564,7 +564,7 @@ class DownloaderEngine extends EventEmitter {
     // "fall back to the normal per-page CDN flow" (bad key, feature disabled, rate limited,
     // network error — anything that isn't a clean success is treated as non-fatal here).
     async fetchProviderMetadata(provider, galleryId) {
-        const meta = await provider.fetchMeta(String(galleryId), { fetchText });
+        const meta = await provider.fetchMeta(String(galleryId), { fetchText: provider.transport === 'curl' ? curlFetchText : fetchText });
         return meta;
     }
 
@@ -573,10 +573,11 @@ class DownloaderEngine extends EventEmitter {
     // retry/backoff handles it. When every candidate 404s, the last 404 is thrown.
     async downloadProviderPage(provider, candidates, folderPath, page, onProgress) {
         let lastErr = null;
+        const download = provider.transport === 'curl' ? curlDownloadToFile : downloadToFile;
         for (const candidate of candidates) {
             const dest = path.join(folderPath, `${page}.${candidate.ext}`);
             try {
-                await downloadToFile(candidate.url, dest, provider.imageHeaders(), onProgress);
+                await download(candidate.url, dest, provider.imageHeaders(), onProgress);
                 return { path: dest, ext: candidate.ext };
             } catch (err) {
                 if (err.statusCode === 404) { lastErr = err; continue; }

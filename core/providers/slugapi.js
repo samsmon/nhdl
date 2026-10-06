@@ -23,6 +23,7 @@ function createSlugApiProvider(cfg) {
         label,
         prefix: id,
         isDefault: false,
+        transport: 'curl',
         origin,
         urlPatterns: [new RegExp(`^https?:\\/\\/(?:www\\.)?(?:${hostPattern})\\/(?:[a-z]{2}\\/)?comic\\/([A-Za-z0-9-]+)`, 'i')],
         parseBody,

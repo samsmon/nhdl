@@ -96,6 +96,7 @@ function createBoardsProvider(cfg) {
         label,
         prefix: id,
         isDefault: false,
+        transport: 'node',
         origin,
         urlPatterns: [new RegExp(`^https?:\\/\\/(?:www\\.)?(?:${hostPattern})\\/${galleryPath}\\/(\\d+)`, 'i')],
         parseBody,

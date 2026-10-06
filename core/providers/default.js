@@ -12,6 +12,7 @@ module.exports = {
     label: 'nhentai.net',
     prefix: null,
     isDefault: true,
+    transport: 'node',
     urlPatterns: [/^https?:\/\/(?:www\.)?(?:nhentai\.net|certain\.site)\/g\/(\d+)/i],
     parseBody,
     makeKey: parseBody,

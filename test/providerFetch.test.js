@@ -4,7 +4,8 @@ const http = require('http');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { fetchText, downloadToFile } = require('../core/providers/http');
+const { fetchText, downloadToFile, resolveCurlPath, curlFetchText, curlDownloadToFile } = require('../core/providers/http');
+const { execFileSync } = require('child_process');
 const { createBoardsProvider, PAGE_EXTS } = require('../core/providers/boards');
 const { createSlugApiProvider } = require('../core/providers/slugapi');
 
@@ -184,4 +185,70 @@ test('fetchText rejects with Too many redirects when server redirects forever', 
             /Too many redirects/
         );
     } finally { server.close(); }
+});
+
+function curlAvailable() {
+    try { execFileSync(resolveCurlPath(), ['--version'], { stdio: 'ignore' }); return true; } catch (e) { return false; }
+}
+const CURL_SKIP = curlAvailable() ? false : 'system curl is not executable here';
+
+test('transport selection: slug API provider uses curl, boards and default use node', () => {
+    assert.strictEqual(slug().transport, 'curl');
+    assert.strictEqual(boards().transport, 'node');
+    assert.strictEqual(require('../core/providers/default').transport, 'node');
+});
+
+test('curlFetchText returns body and status, sends Referer, follows redirects', { skip: CURL_SKIP }, async () => {
+    let seenReferer = null;
+    const server = await startServer((req, res) => {
+        if (req.url === '/a') { res.writeHead(302, { Location: '/b' }); return res.end(); }
+        if (req.url === '/missing') { res.writeHead(404); return res.end('nf'); }
+        seenReferer = req.headers.referer;
+        res.writeHead(200, { 'Content-Type': 'text/plain' });
+        res.end('hello\nworld');
+    });
+    try {
+        const base = `http://127.0.0.1:${server.address().port}`;
+        const r = await curlFetchText(`${base}/a`, { Referer: 'https://ref.example/' });
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.body, 'hello\nworld');
+        assert.strictEqual(seenReferer, 'https://ref.example/');
+        const nf = await curlFetchText(`${base}/missing`);
+        assert.strictEqual(nf.status, 404);
+        assert.strictEqual(nf.body, 'nf');
+    } finally { server.close(); }
+});
+
+test('curlFetchText rejects when the connection is refused', { skip: CURL_SKIP }, async () => {
+    const server = await startServer(() => {});
+    const port = server.address().port;
+    await new Promise(r => server.close(r));
+    await assert.rejects(curlFetchText(`http://127.0.0.1:${port}/`, {}, 3000), (e) => e instanceof Error && e.message.length > 0);
+});
+
+test('curlDownloadToFile writes the file, 404 rejects with statusCode, timeout leaves no files', { skip: CURL_SKIP }, async () => {
+    const payload = Buffer.alloc(5000, 7);
+    const server = await startServer((req, res) => {
+        if (req.url === '/missing') { res.writeHead(404, { 'Content-Type': 'text/html' }); return res.end('nf'); }
+        if (req.url === '/hang') { res.writeHead(200, { 'Content-Length': 1000 }); return; }
+        res.writeHead(200, { 'Content-Length': payload.length });
+        res.end(payload);
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-curl-test-'));
+    try {
+        const base = `http://127.0.0.1:${server.address().port}`;
+        const calls = [];
+        await curlDownloadToFile(`${base}/ok`, path.join(dir, 'a.webp'), {}, (r, t) => calls.push([r, t]));
+        assert.strictEqual(fs.statSync(path.join(dir, 'a.webp')).size, 5000);
+        assert.deepStrictEqual(calls[calls.length - 1], [5000, 5000]);
+        await assert.rejects(
+            curlDownloadToFile(`${base}/missing`, path.join(dir, 'b.webp')),
+            (e) => e.statusCode === 404
+        );
+        await assert.rejects(
+            curlDownloadToFile(`${base}/hang`, path.join(dir, 'c.webp'), {}, null, 1000),
+            (e) => e instanceof Error && e.statusCode === undefined
+        );
+        assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['a.webp']);
+    } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

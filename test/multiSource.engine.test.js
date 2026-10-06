@@ -205,3 +205,20 @@ test('resume records an explicit extension for every page, matching the files on
         await ctx.cleanup();
     }
 });
+
+test('downloadProviderPage uses curl for a transport:curl provider and falls through 404 candidates', async () => {
+    const site = await startSite({ pages: 2, jpgPages: [1] });
+    const ctx = await setup(site);
+    try {
+        const provider = { id: 'xxx', transport: 'curl', imageHeaders: () => ({ Referer: `${site.origin}/` }) };
+        const candidates = [{ ext: 'webp', url: `${site.origin}/img/001/abcd/1.webp` }, { ext: 'jpg', url: `${site.origin}/img/001/abcd/1.jpg` }];
+        const folder = fs.mkdtempSync(path.join(ctx.tmpDir, 'pg-'));
+        const res = await ctx.engine.downloadProviderPage(provider, candidates, folder, 1, () => {});
+        assert.strictEqual(res.ext, 'jpg');
+        assert.deepStrictEqual(fs.readdirSync(folder), ['1.jpg']);
+        assert.strictEqual(fs.statSync(path.join(folder, '1.jpg')).size, 4096);
+    } finally {
+        site.server.close();
+        await ctx.cleanup();
+    }
+});
