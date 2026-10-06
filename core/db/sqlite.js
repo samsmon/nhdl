@@ -77,6 +77,8 @@ const MIGRATIONS = [
             }
         }
     }
+    // NOTE: gallery_id must always be bound as the canonical string from normalizeGalleryId;
+    // node:sqlite binds JS numbers as REAL, which would store '202.0' in a TEXT column.
     ,{
         version: 3,
         up(db) {
@@ -1053,8 +1055,8 @@ async function getEvents(options = {}, db = null) {
 async function exportData(db = null) {
     const active = db || await getDb();
     const schemaVersion = await getSchemaVersion(active);
-    const queue = active.prepare(`SELECT * FROM queue ORDER BY batch ASC, id ASC`).all();
-    const library = active.prepare(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`).all();
+    const queue = active.prepare(`SELECT * FROM queue ORDER BY batch ASC, id ASC`).all().map(publicRow);
+    const library = active.prepare(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`).all().map(publicRow);
     const settings = active.prepare(`SELECT * FROM settings ORDER BY key ASC`).all();
     const events = active.prepare(`SELECT * FROM events ORDER BY id ASC`).all();
 

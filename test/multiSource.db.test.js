@@ -224,3 +224,20 @@ test('migration v3 upgrades a v2 database in place: ids stay, order/priority kep
         try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch (e) {}
     }
 });
+
+test('exportData emits numeric ids as numbers and prefixed ids as strings', async () => {
+    const ctx = await createTempDb();
+    try {
+        await dbMod.enqueueGallery({ galleryId: 101, url: 'u/101' }, ctx.db);
+        await dbMod.enqueueGallery({ galleryId: 'xxx:5', url: 'u/xxx5' }, ctx.db);
+        await dbMod.upsertLibraryEntry({ galleryId: 101, title: 'T', path: ctx.tmpDir, pages: 1, format: 'folder' }, ctx.db);
+        await dbMod.upsertLibraryEntry({ galleryId: 'xxx:5', title: 'X', path: ctx.tmpDir, pages: 1, format: 'folder' }, ctx.db);
+        const exp = await dbMod.exportData(ctx.db);
+        assert.ok(exp.tables.queue.some(r => r.gallery_id === 101));
+        assert.ok(exp.tables.queue.some(r => r.gallery_id === 'xxx:5'));
+        assert.ok(exp.tables.library.some(r => r.gallery_id === 101));
+        assert.ok(exp.tables.library.some(r => r.gallery_id === 'xxx:5'));
+    } finally {
+        await ctx.cleanup();
+    }
+});

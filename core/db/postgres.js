@@ -300,7 +300,7 @@ async function enqueueGallery(item, db = null) {
         RETURNING *
     `, [galleryId, url, title, status, batch, priority, pagesDone, pagesTotal, error, retries, format]);
 
-    const row = res.rows[0] || await getQueueItem(galleryId, active);
+    const row = publicRow(res.rows[0]) || await getQueueItem(galleryId, active);
     const batchCount = Math.max(1, await getMaxBatch(active));
     dbEvents.emit('item', {
         type: 'inserted',
@@ -401,7 +401,7 @@ async function updateQueueItem(galleryId, fields = {}, db = null) {
     params.push(id);
     const sql = `UPDATE queue SET ${sets.join(', ')} WHERE gallery_id = $${params.length} RETURNING *`;
     const res = await active.query(sql, params);
-    const updated = res.rows[0] || null;
+    const updated = publicRow(res.rows[0] || null);
 
     if (updated) {
         const batchCount = Math.max(1, await getMaxBatch(active));
