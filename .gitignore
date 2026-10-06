@@ -20,3 +20,6 @@ temp.html
 
 # Editor / tooling
 .claude/
+
+# Local probe/test downloads (never commit)
+samples/
