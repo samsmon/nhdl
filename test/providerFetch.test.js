@@ -75,7 +75,7 @@ function slug() {
 test('slugapi.fetchMeta uses all returned images (sorted by page), strips title suffix, reads author', async () => {
     let requested = null;
     const meta = await slug().fetchMeta('com:amys-country-wrangle-porn-comic', {
-        fetchText: async (url) => { requested = url; return { status: 200, body: SLUG_JSON }; }
+        fetchText: async (url) => { if (!requested) requested = url; return { status: 200, body: SLUG_JSON }; }
     });
     assert.strictEqual(requested, 'https://c.example/api/comics/amys-country-wrangle-porn-comic/images');
     assert.strictEqual(meta.title, 'Amy’s Country Wrangle');

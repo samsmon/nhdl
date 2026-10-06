@@ -1,5 +1,6 @@
 const PAGE_EXTS = ['webp', 'jpg', 'png', 'gif'];
 const NON_LANGUAGE_FLAGS = new Set(['translated', 'rewritten', 'speechless', 'text-cleaned']);
+const { normalizeCategorySlug, mapCategoryToType } = require('./contentType');
 
 function decodeEntities(s) {
     return s
@@ -38,6 +39,13 @@ function taxonomy(html, kind) {
     return out;
 }
 
+// The gallery's own category tag link is single-quoted, like the other taxonomy links;
+// navigation links on the page use double quotes and must not be picked up.
+function categorySlug(html) {
+    const m = html.match(/href='\/category\/([^'/]+)\/'/);
+    return m ? normalizeCategorySlug(m[1]) : null;
+}
+
 function createBoardsProvider(cfg) {
     const { id, label, origin, galleryPath, hosts, imageHost, imageBase } = cfg;
     const hostPattern = hosts.map(h => h.replace(/\./g, '\\.')).join('|');
@@ -73,6 +81,7 @@ function createBoardsProvider(cfg) {
         const languages = taxonomy(html, 'language').filter(l => !NON_LANGUAGE_FLAGS.has(l));
         const tags = taxonomy(html, 'tag').map(slug => ({ name: slug.replace(/-/g, ' ') }));
         const host = imageHost(server);
+        const category = categorySlug(html);
 
         return {
             title: title || `Gallery ${key.slice(id.length + 1)}`,
@@ -82,6 +91,8 @@ function createBoardsProvider(cfg) {
             langStr: languages[0] ? titleCaseSlug(languages[0]) : 'Unknown',
             authorStr: authorSlug ? titleCaseSlug(authorSlug) : 'Other',
             extraMeta: { tags, source: id },
+            category,
+            contentType: mapCategoryToType(category),
             pageUrls(n) {
                 return PAGE_EXTS.map(ext => ({
                     ext,
