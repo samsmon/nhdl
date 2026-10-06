@@ -13,12 +13,14 @@
   } from 'lucide-svelte';
   import { appStore } from '../stores/app.svelte.js';
   import * as api from '../api.js';
+  import { itemSource, sourceLabel } from '../sources.js';
 
   let { open, onClose } = $props();
 
   let libraryItems = $state([]);
   let libraryCount = $state(0);
   let librarySearch = $state('');
+  let librarySource = $state('all');
   let rescanLoading = $state(false);
   let rescanMessage = $state('');
   let rescanTimeout = null;
@@ -34,12 +36,17 @@
   let batchCompressProgress = $state(null);
   let batchCompressPollTimer = null;
 
+  let librarySourceOptions = $derived(
+    Array.from(new Set(libraryItems.map(itemSource))).map(id => ({ id, label: sourceLabel(id, appStore.sources) }))
+  );
+
   let filteredLibrary = $derived(
     libraryItems.filter(item => {
+      if (librarySource !== 'all' && itemSource(item) !== librarySource) return false;
       if (!librarySearch.trim()) return true;
       const q = librarySearch.toLowerCase();
       return (
-        item.id.includes(q) ||
+        String(item.id).toLowerCase().includes(q) ||
         item.title?.toLowerCase().includes(q) ||
         item.artist?.toLowerCase().includes(q)
       );
@@ -285,6 +292,14 @@
             placeholder="Search by ID, title, or artist..."
             class="w-full bg-transparent text-xs font-mono text-white focus:outline-none"
           />
+          {#if librarySourceOptions.length > 1}
+            <select bind:value={librarySource} class="bg-[var(--bg-elevated)] text-xs font-mono text-white border border-[var(--border-subtle)] rounded px-2 py-1">
+              <option value="all">All sources</option>
+              {#each librarySourceOptions as opt (opt.id)}
+                <option value={opt.id}>{opt.label}</option>
+              {/each}
+            </select>
+          {/if}
           {#if librarySearch}
             <button onclick={() => (librarySearch = '')} class="text-[10px] font-mono text-[#666] hover:text-white cursor-pointer">
               CLEAR
@@ -431,6 +446,9 @@
                       <span class="text-[9px] px-1.5 py-0.5 rounded bg-[#242424] text-white border border-[#3a3a3a] uppercase shrink-0">
                         .{item.format}
                       </span>
+                    {/if}
+                    {#if itemSource(item) !== 'default'}
+                      <span class="px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] shrink-0">{sourceLabel(itemSource(item), appStore.sources)}</span>
                     {/if}
                     <span class="text-white truncate" title={item.title}>{item.title}</span>
                   </div>

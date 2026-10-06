@@ -7,11 +7,17 @@
     OctagonPause,
     AlertCircle,
     FolderGit2,
+    Globe,
     X
   } from 'lucide-svelte';
   import { appStore } from '../stores/app.svelte.js';
+  import { sourceLabel } from '../sources.js';
 
   const counts = $derived(appStore.filterCounts);
+
+  const sourceItems = $derived(
+    counts.sources.map((s) => ({ ...s, label: sourceLabel(s.id, appStore.sources) }))
+  );
 
   const statusItems = $derived([
     { id: 'all', label: 'All', count: counts.all, icon: Layers, color: 'text-[#e5e5e5]' },
@@ -78,6 +84,30 @@
       </button>
     {/each}
   </div>
+
+  {#if sourceItems.length > 1}
+    <div class="p-2 pt-0 flex flex-col gap-0.5">
+      <div class="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)] font-semibold">
+        Source
+      </div>
+      {#each sourceItems as s (s.id)}
+        {@const active = appStore.sourceFilter === s.id}
+        <button
+          type="button"
+          onclick={() => appStore.setSourceFilter(s.id)}
+          class="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer {active
+            ? 'bg-[var(--bg-selected-focus)] text-white font-semibold border border-[var(--accent)]/40'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white border border-transparent'}"
+        >
+          <div class="flex items-center gap-2 truncate">
+            <Globe class="w-3.5 h-3.5 shrink-0 text-[#7dd3fc]" />
+            <span class="truncate">{s.label}</span>
+          </div>
+          <span class="text-[11px] px-1.5 rounded font-mono {active ? 'bg-[var(--accent)] text-black font-bold' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}">{s.count}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <div class="h-px bg-[var(--border-subtle)] mx-2 my-1"></div>
 

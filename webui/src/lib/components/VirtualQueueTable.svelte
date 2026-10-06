@@ -236,7 +236,7 @@
 
   function getRowProgress(item, lp) {
     const raw = getItemRawStatus(item);
-    const isLive = lp && Number(lp.galleryId) === Number(item.galleryId);
+    const isLive = lp && String(lp.galleryId) === String(item.galleryId);
     const done = isLive
       ? (lp.completed ?? lp.downloadedPages ?? item.pagesDone ?? 0)
       : (item.pagesDone ?? 0);
@@ -376,9 +376,9 @@
           style="position: absolute; top: 0; left: 0; right: 0; transform: translateY({offsetY}px); will-change: transform;"
         >
           {#each visibleRows as item (item.galleryId)}
-            {@const gid = Number(item.galleryId)}
+            {@const gid = String(item.galleryId)}
             {@const isSelected = appStore.selectedIds.has(gid)}
-            {@const isFocused = Number(appStore.focusedId) === gid}
+            {@const isFocused = String(appStore.focusedId) === gid}
             {@const raw = getItemRawStatus(item)}
             {@const prog = getRowProgress(item, appStore.liveProgress)}
             {@const rank = appStore.rankById.get(gid) ?? item.id}
