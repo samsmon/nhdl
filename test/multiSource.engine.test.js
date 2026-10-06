@@ -231,3 +231,34 @@ test('downloadProviderPage uses curl for transport:curl and Node for transport:n
         await ctx.cleanup();
     }
 });
+
+test('a 429/503 from a non-default provider maps to RATE_LIMIT (cooldown path), 404 stays permanent', async () => {
+    for (const status of [429, 503]) {
+        const site = await startSite();
+        site.server.removeAllListeners('request');
+        site.server.on('request', (req, res) => { res.writeHead(status, { 'Content-Type': 'text/html' }); res.end('slow down'); });
+        const ctx = await setup(site);
+        try {
+            await dbMod.enqueueGallery({ galleryId: 'xxx:777', url: `${site.origin}/g/777/` }, ctx.db);
+            const result = await ctx.engine.processGallery('xxx:777');
+            assert.deepStrictEqual(result, { status: 'RATE_LIMIT' });
+            const q = dbMod.formatQueueRow(await dbMod.getQueueItem('xxx:777', ctx.db));
+            assert.match(String(q.status), /COOLDOWN/);
+        } finally {
+            site.server.close();
+            await ctx.cleanup();
+        }
+    }
+
+    const site = await startSite();
+    site.server.removeAllListeners('request');
+    site.server.on('request', (req, res) => { res.writeHead(404); res.end('nf'); });
+    const ctx = await setup(site);
+    try {
+        await dbMod.enqueueGallery({ galleryId: 'xxx:777', url: `${site.origin}/g/777/` }, ctx.db);
+        await assert.rejects(ctx.engine.processGallery('xxx:777'), (e) => e.permanent === true && /^404/.test(e.message));
+    } finally {
+        site.server.close();
+        await ctx.cleanup();
+    }
+});

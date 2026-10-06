@@ -43,11 +43,20 @@ function createSlugApiProvider(cfg) {
                 e.permanent = true;
                 throw e;
             }
-            if (res.status !== 200) throw new Error(`Comic API returned status ${res.status}`);
+            if (res.status !== 200) {
+                const e = new Error(`Comic API returned status ${res.status}`);
+                e.statusCode = res.status;
+                throw e;
+            }
 
             let data;
             try { data = JSON.parse(res.body); } catch (e) { data = null; }
-            if (!data || !data.comic || !Array.isArray(data.images) || data.images.length === 0
+            if (data && data.comic && Array.isArray(data.images) && data.images.length === 0) {
+                const e = new Error('404 - comic has no images');
+                e.permanent = true;
+                throw e;
+            }
+            if (!data || !data.comic || !Array.isArray(data.images)
                 || !data.images.every(img => img && typeof img.source_url === 'string' && /^https?:\/\//i.test(img.source_url))) {
                 throw new Error('Unexpected response from comic API (blocked page or changed format)');
             }

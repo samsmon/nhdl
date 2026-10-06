@@ -241,3 +241,52 @@ test('exportData emits numeric ids as numbers and prefixed ids as strings', asyn
         await ctx.cleanup();
     }
 });
+
+test('parseListText: scheme-less site B/C URLs resolve to their own provider, not a site A id', () => {
+    const items = parseListText([
+        'nhentai.xxx/g/539224/',
+        'www.nhentai.xxx/g/539225/',
+        'www.hentairox.com/gallery/817456/',
+        'hentairox.com/gallery/817457/ | T',
+        'nhentai.com/en/comic/some-title-123456',
+        'www.nhentai.com/comic/other-slug',
+        'nhentai.net/g/468614/',
+        'www.nhentai.net/g/468615/'
+    ].join('\n'));
+    assert.deepStrictEqual(items.map(i => i.galleryId), [
+        'xxx:539224', 'xxx:539225', 'rox:817456', 'rox:817457',
+        'com:some-title-123456', 'com:other-slug', 468614, 468615
+    ]);
+});
+
+test('parseListText: unknown scheme-less host is ignored, never falls back to digits', () => {
+    const { items, ignored } = parseListTextDetailed([
+        'example.org/g/123456/',
+        'www.example.org/gallery/1234567/',
+        '468614 | Title',
+        'see gallery 1234567 here'
+    ].join('\n'));
+    assert.deepStrictEqual(items.map(i => i.galleryId), [468614, 1234567]);
+    assert.strictEqual(ignored, 2);
+});
+
+test('missing url falls back to the key\'s own site URL (enqueue and import), site A unchanged', async () => {
+    const ctx = await createTempDb();
+    try {
+        await dbMod.enqueueGallery({ galleryId: 468614 }, ctx.db);
+        await dbMod.enqueueGallery({ galleryId: 'xxx:539224' }, ctx.db);
+        await dbMod.enqueueGallery({ galleryId: 'com:some-slug' }, ctx.db);
+        const urls = Object.fromEntries((await dbMod.getQueueItems({}, ctx.db)).map(r => [String(r.gallery_id), r.url]));
+        assert.strictEqual(urls['468614'], 'https://nhentai.net/g/468614/');
+        assert.strictEqual(urls['xxx:539224'], 'https://nhentai.xxx/g/539224/');
+        assert.strictEqual(urls['com:some-slug'], 'https://nhentai.com/en/comic/some-slug');
+
+        const exp = await dbMod.exportData(ctx.db);
+        exp.tables.queue = exp.tables.queue.map(r => ({ ...r, url: null }));
+        await dbMod.importData(exp, { mode: 'replace' }, ctx.db);
+        const after = Object.fromEntries((await dbMod.getQueueItems({}, ctx.db)).map(r => [String(r.gallery_id), r.url]));
+        assert.deepStrictEqual(after, urls);
+    } finally {
+        await ctx.cleanup();
+    }
+});

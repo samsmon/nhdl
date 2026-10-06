@@ -564,8 +564,13 @@ class DownloaderEngine extends EventEmitter {
     // "fall back to the normal per-page CDN flow" (bad key, feature disabled, rate limited,
     // network error — anything that isn't a clean success is treated as non-fatal here).
     async fetchProviderMetadata(provider, galleryId) {
-        const meta = await provider.fetchMeta(String(galleryId), { fetchText: provider.transport === 'curl' ? curlFetchText : fetchText });
-        return meta;
+        try {
+            return await provider.fetchMeta(String(galleryId), { fetchText: provider.transport === 'curl' ? curlFetchText : fetchText });
+        } catch (err) {
+            // 429/503 from a provider feeds the same cooldown/circuit-breaker path as site A.
+            if (err && (err.statusCode === 429 || err.statusCode === 503)) return { status: "RATE_LIMIT" };
+            throw err;
+        }
     }
 
     // Tries each candidate URL for a page in order. A 404 means "wrong extension" and moves on to

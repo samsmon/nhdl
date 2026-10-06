@@ -4,7 +4,7 @@ pg.types.setTypeParser(20, v => parseInt(v, 10)); // int8/bigint -> number
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, toPublicId, publicRow, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { urlForKey, normalizeGalleryId, toPublicId, publicRow, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
 const { parseListText, parseListTextDetailed } = require('./listParser');
 const { canonicalKey } = require('../providers');
 
@@ -280,7 +280,7 @@ async function requeueFailedItems(options = {}, db = null) {
 async function enqueueGallery(item, db = null) {
     const active = db || await getDb();
     const galleryId = normalizeGalleryId(item.galleryId ?? item.gallery_id);
-    const url = item.url || `https://nhentai.net/g/${galleryId}/`;
+    const url = item.url || urlForKey(galleryId);
     const title = item.title ?? null;
     const status = item.status || 'PENDING';
     const batch = Number.isFinite(item.batch) ? item.batch : 1;
@@ -816,7 +816,7 @@ async function exportListText(db = null) {
             const fmtSuffix = row.format ? ` FORMAT=${row.format}` : '';
             lines.push(`# BATCH ${currentBatch}${fmtSuffix}`);
         }
-        const baseUrl = row.url || `https://nhentai.net/g/${row.gallery_id}/`;
+        const baseUrl = row.url || urlForKey(row.gallery_id);
         if (row.title) {
             lines.push(`${baseUrl} | ${row.title}`);
         } else {
@@ -1108,7 +1108,7 @@ async function importData(payload, options = {}, db = null) {
 
         for (const r of queueRows) {
             const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
-            const url = r.url || `https://nhentai.net/g/${gid}/`;
+            const url = r.url || urlForKey(gid);
             const title = r.title || null;
             const status = r.status || 'PENDING';
             const batch = Number(r.batch || 1);

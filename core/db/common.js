@@ -1,4 +1,9 @@
-const { canonicalKey, toPublicId, sourceOf } = require('../providers');
+const { canonicalKey, toPublicId, sourceOf, providerForKey } = require('../providers');
+
+// Site URL for a canonical key (used when a row has no url): each source builds its own.
+function urlForKey(key) {
+    return providerForKey(String(key)).buildUrl(String(key));
+}
 
 function normalizeGalleryId(galleryId) {
     const key = canonicalKey(galleryId);
@@ -115,6 +120,7 @@ function validateImportPayload(payload, options = {}, appSchemaVersion = CURRENT
 module.exports = {
     CURRENT_APP_SCHEMA_VERSION,
     normalizeGalleryId,
+    urlForKey,
     isValidGalleryId,
     formatQueueRow,
     toPublicId,

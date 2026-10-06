@@ -41,6 +41,31 @@ async function fetchText(url, headers = {}, timeoutMs = 20000) {
     return { status: res.statusCode, body: Buffer.concat(chunks).toString('utf-8') };
 }
 
+// Block/challenge pages come back as 200 text/html, so the status code alone is not enough:
+// the downloaded bytes must start with a known image signature (webp, jpeg, png, gif).
+function hasImageSignature(filePath) {
+    let fd;
+    try {
+        fd = fs.openSync(filePath, 'r');
+        const b = Buffer.alloc(12);
+        const n = fs.readSync(fd, b, 0, 12, 0);
+        if (n < 4) return false;
+        if (b[0] === 0xFF && b[1] === 0xD8 && b[2] === 0xFF) return true;
+        if (b[0] === 0x89 && b[1] === 0x50 && b[2] === 0x4E && b[3] === 0x47) return true;
+        const head = b.toString('latin1', 0, 6);
+        if (head === 'GIF87a' || head === 'GIF89a') return true;
+        return n >= 12 && b.toString('latin1', 0, 4) === 'RIFF' && b.toString('latin1', 8, 12) === 'WEBP';
+    } catch (e) {
+        return false;
+    } finally {
+        if (fd !== undefined) { try { fs.closeSync(fd); } catch (e) {} }
+    }
+}
+
+function blockedError(contentType) {
+    return new Error(`Response is not an image (blocked or unexpected HTML page${contentType ? `, content-type: ${contentType}` : ''})`);
+}
+
 async function downloadToFile(url, destPath, headers = {}, onProgress = null, timeoutMs = 30000) {
     const res = await openFollowing(url, headers, timeoutMs);
     if (res.statusCode !== 200) {
@@ -76,6 +101,10 @@ async function downloadToFile(url, destPath, headers = {}, onProgress = null, ti
         out.on('finish', () => {
             out.once('close', () => {
                 try {
+                    if (!hasImageSignature(partPath)) {
+                        try { fs.unlinkSync(partPath); } catch (e) {}
+                        return reject(blockedError(res.headers['content-type']));
+                    }
                     fs.renameSync(partPath, destPath);
                     resolve();
                 } catch (err) {
@@ -154,6 +183,10 @@ function curlDownloadToFile(url, destPath, headers = {}, onProgress = null, time
             }
             try {
                 const size = fs.statSync(partPath).size;
+                if (!hasImageSignature(partPath)) {
+                    cleanup();
+                    return reject(blockedError(null));
+                }
                 fs.renameSync(partPath, destPath);
                 if (onProgress) onProgress(size, size);
                 resolve();

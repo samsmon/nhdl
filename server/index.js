@@ -421,7 +421,7 @@ function createRequestHandler() {
                         }
 
                         const summary = await importListText(text, { replace, defaultFormat });
-                        await logActivity(`Queue updated: ${summary.total} gallery item(s) (${summary.added} added, ${summary.duplicates} existing)`);
+                        await logActivity(`Queue updated: ${summary.total} gallery item(s) (${summary.added} added, ${summary.duplicates} existing, ${summary.ignored || 0} ignored)`);
                         res.end(JSON.stringify({ success: true, ...summary }));
 
                         autoProcessQueue();

@@ -99,6 +99,15 @@ test('slugapi.fetchMeta: 404 is permanent and JSON without comic is rejected', a
     );
 });
 
+function imagePayload(size, kind = 'webp') {
+    const b = Buffer.alloc(size, 7);
+    if (kind === 'webp') { b.write('RIFF', 0); b.writeUInt32LE(size - 8, 4); b.write('WEBP', 8); }
+    else if (kind === 'jpeg') { b[0] = 0xFF; b[1] = 0xD8; b[2] = 0xFF; }
+    else if (kind === 'png') { Buffer.from([0x89, 0x50, 0x4E, 0x47]).copy(b, 0); }
+    else if (kind === 'gif') { b.write('GIF89a', 0); }
+    return b;
+}
+
 function startServer(handler) {
     return new Promise(resolve => {
         const server = http.createServer(handler);
@@ -123,7 +132,7 @@ test('fetchText follows redirects and sends given headers', async () => {
 });
 
 test('downloadToFile writes the file, reports progress, rejects non-200 with statusCode and leaves no partial file', async () => {
-    const payload = Buffer.alloc(5000, 7);
+    const payload = imagePayload(5000);
     const server = await startServer((req, res) => {
         if (req.url === '/missing') { res.writeHead(404, { 'Content-Type': 'text/html' }); return res.end('nf'); }
         res.writeHead(200, { 'Content-Length': payload.length });
@@ -227,7 +236,7 @@ test('curlFetchText rejects when the connection is refused', { skip: CURL_SKIP }
 });
 
 test('curlDownloadToFile writes the file, 404 rejects with statusCode, timeout leaves no files', { skip: CURL_SKIP }, async () => {
-    const payload = Buffer.alloc(5000, 7);
+    const payload = imagePayload(5000);
     const server = await startServer((req, res) => {
         if (req.url === '/missing') { res.writeHead(404, { 'Content-Type': 'text/html' }); return res.end('nf'); }
         if (req.url === '/hang') { res.writeHead(200, { 'Content-Length': 1000 }); return; }
@@ -289,4 +298,87 @@ test('slugapi.fetchMeta rejects non-http(s) image source_url values', async () =
             /unexpected response/i
         );
     }
+});
+
+const HTML_BLOCK = '<html><head><title>Just a moment...</title></head><body>' + 'x'.repeat(3000) + '</body></html>';
+
+test('boards.fetchMeta and slugapi.fetchMeta attach statusCode to non-200/404 statuses (429/503)', async () => {
+    for (const status of [429, 503]) {
+        await assert.rejects(
+            boards().fetchMeta('xxx:1', { fetchText: async () => ({ status, body: 'x' }) }),
+            (e) => e.statusCode === status && !e.permanent
+        );
+        await assert.rejects(
+            slug().fetchMeta('com:nope', { fetchText: async () => ({ status, body: 'x' }) }),
+            (e) => e.statusCode === status && !e.permanent
+        );
+    }
+});
+
+test('boards.fetchMeta rejects hidden values that are unsafe to put into a URL', async () => {
+    const bad = [
+        BOARD_HTML.replace('value="4"', 'value="4.evil.example/x"'),
+        BOARD_HTML.replace('value="016"', 'value="../../x"'),
+        BOARD_HTML.replace('value="vgtjw9nz2i"', 'value="a/b?c"')
+    ];
+    for (const body of bad) {
+        await assert.rejects(
+            boards().fetchMeta('xxx:1', { fetchText: async () => ({ status: 200, body }) }),
+            /blocked or unexpected page layout/i
+        );
+    }
+});
+
+test('slugapi.fetchMeta: an empty images array is a permanent skip (404-style), malformed stays a plain error', async () => {
+    const empty = JSON.stringify({ comic: { id: 1, title: 'T', tags: [] }, images: [] });
+    await assert.rejects(
+        slug().fetchMeta('com:empty', { fetchText: async () => ({ status: 200, body: empty }) }),
+        (e) => e.permanent === true && /^404/.test(e.message)
+    );
+    await assert.rejects(
+        slug().fetchMeta('com:bad', { fetchText: async () => ({ status: 200, body: '{"x":1}' }) }),
+        (e) => !e.permanent && /unexpected response/i.test(e.message)
+    );
+});
+
+test('downloadToFile rejects an HTML 200 (block/challenge page), leaves no file, and has no statusCode', async () => {
+    const server = await startServer((req, res) => {
+        if (req.url === '/html') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(HTML_BLOCK); }
+        const kind = req.url.slice(1);
+        res.writeHead(200, { 'Content-Type': 'image/x' }); res.end(imagePayload(3000, kind));
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-sig-test-'));
+    try {
+        const base = `http://127.0.0.1:${server.address().port}`;
+        await assert.rejects(
+            downloadToFile(`${base}/html`, path.join(dir, 'h.webp')),
+            (e) => /blocked or unexpected HTML/.test(e.message) && e.statusCode === undefined
+        );
+        assert.deepStrictEqual(fs.readdirSync(dir), []);
+        for (const kind of ['webp', 'jpeg', 'png', 'gif']) {
+            await downloadToFile(`${base}/${kind}`, path.join(dir, `${kind}.bin`));
+        }
+        assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['gif.bin', 'jpeg.bin', 'png.bin', 'webp.bin']);
+    } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('curlDownloadToFile rejects an HTML 200 (block/challenge page), leaves no file, and has no statusCode', { skip: CURL_SKIP }, async () => {
+    const server = await startServer((req, res) => {
+        if (req.url === '/html') { res.writeHead(200, { 'Content-Type': 'text/html' }); return res.end(HTML_BLOCK); }
+        const kind = req.url.slice(1);
+        res.writeHead(200, { 'Content-Type': 'image/x' }); res.end(imagePayload(3000, kind));
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-sigc-test-'));
+    try {
+        const base = `http://127.0.0.1:${server.address().port}`;
+        await assert.rejects(
+            curlDownloadToFile(`${base}/html`, path.join(dir, 'h.webp')),
+            (e) => /blocked or unexpected HTML/.test(e.message) && e.statusCode === undefined
+        );
+        assert.deepStrictEqual(fs.readdirSync(dir), []);
+        for (const kind of ['webp', 'jpeg', 'png', 'gif']) {
+            await curlDownloadToFile(`${base}/${kind}`, path.join(dir, `${kind}.bin`));
+        }
+        assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['gif.bin', 'jpeg.bin', 'png.bin', 'webp.bin']);
+    } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });

@@ -58,7 +58,9 @@ function createBoardsProvider(cfg) {
         const dir = hiddenValue(html, 'load_dir');
         const loadId = hiddenValue(html, 'load_id');
         const pages = parseInt(hiddenValue(html, 'load_pages'), 10);
-        if (!server || !dir || !loadId || !Number.isFinite(pages) || pages <= 0) {
+        // These values end up in image URLs, so they must be plain tokens, not arbitrary remote text.
+        if (!server || !dir || !loadId || !Number.isFinite(pages) || pages <= 0
+            || !/^[0-9]+$/.test(server) || !/^[A-Za-z0-9_-]+$/.test(dir) || !/^[A-Za-z0-9_-]+$/.test(loadId)) {
             throw new Error('Gallery page is blocked or unexpected page layout (no page data found)');
         }
 
@@ -116,7 +118,11 @@ function createBoardsProvider(cfg) {
                 e.permanent = true;
                 throw e;
             }
-            if (res.status !== 200) throw new Error(`Gallery page returned status ${res.status}`);
+            if (res.status !== 200) {
+                const e = new Error(`Gallery page returned status ${res.status}`);
+                e.statusCode = res.status;
+                throw e;
+            }
             return parseGallery(key, res.body);
         },
         cfg
