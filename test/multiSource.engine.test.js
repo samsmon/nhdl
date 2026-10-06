@@ -206,17 +206,26 @@ test('resume records an explicit extension for every page, matching the files on
     }
 });
 
-test('downloadProviderPage uses curl for a transport:curl provider and falls through 404 candidates', async () => {
+
+test('downloadProviderPage uses curl for transport:curl and Node for transport:node, with 404 candidate fallthrough', async () => {
     const site = await startSite({ pages: 2, jpgPages: [1] });
+    const encodings = [];
+    site.server.on('request', (req) => { if (/^\/img\//.test(req.url)) encodings.push(req.headers['accept-encoding']); });
     const ctx = await setup(site);
     try {
-        const provider = { id: 'xxx', transport: 'curl', imageHeaders: () => ({ Referer: `${site.origin}/` }) };
         const candidates = [{ ext: 'webp', url: `${site.origin}/img/001/abcd/1.webp` }, { ext: 'jpg', url: `${site.origin}/img/001/abcd/1.jpg` }];
-        const folder = fs.mkdtempSync(path.join(ctx.tmpDir, 'pg-'));
-        const res = await ctx.engine.downloadProviderPage(provider, candidates, folder, 1, () => {});
-        assert.strictEqual(res.ext, 'jpg');
-        assert.deepStrictEqual(fs.readdirSync(folder), ['1.jpg']);
-        assert.strictEqual(fs.statSync(path.join(folder, '1.jpg')).size, 4096);
+        for (const transport of ['curl', 'node']) {
+            const provider = { id: 'xxx', transport, imageHeaders: () => ({ Referer: `${site.origin}/` }) };
+            const folder = fs.mkdtempSync(path.join(ctx.tmpDir, 'pg-'));
+            encodings.length = 0;
+            const res = await ctx.engine.downloadProviderPage(provider, candidates, folder, 1, () => {});
+            assert.strictEqual(res.ext, 'jpg');
+            assert.deepStrictEqual(fs.readdirSync(folder), ['1.jpg']);
+            assert.strictEqual(fs.statSync(path.join(folder, '1.jpg')).size, 4096);
+            assert.strictEqual(encodings.length, 2, 'webp 404 then jpg 200');
+            if (transport === 'curl') assert.ok(encodings.every(e => /gzip|deflate/.test(e || '')), 'curl sends compressed Accept-Encoding: ' + encodings);
+            else assert.ok(encodings.every(e => e === 'identity'), 'node sends identity: ' + encodings);
+        }
     } finally {
         site.server.close();
         await ctx.cleanup();

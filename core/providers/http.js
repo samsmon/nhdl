@@ -104,18 +104,20 @@ function resolveCurlPath() {
     return 'curl';
 }
 
-function curlArgs(url, headers, timeoutMs) {
-    const args = ['-sS', '-L', '--max-redirs', '3', '--compressed',
+function curlArgs(url, headers, timeoutMs, extra = []) {
+    if (!/^https?:\/\//i.test(String(url))) throw new Error(`curl: refusing non-http(s) URL: ${String(url).slice(0, 80)}`);
+    const args = ['-sS', '-L', '--proto', '=http,https', '--proto-redir', '=http,https', '--max-redirs', '3', '--compressed',
         '--max-time', String(Math.max(1, Math.ceil(timeoutMs / 1000))), '-A', USER_AGENT];
     for (const [name, value] of Object.entries(headers || {})) args.push('-H', `${name}: ${value}`);
-    args.push(url);
+    args.push(...extra, '--', String(url));
     return args;
 }
 
 function curlFetchText(url, headers = {}, timeoutMs = 20000) {
     const marker = `__NHDL_STATUS_${process.pid}_${Date.now()}__`;
-    const args = [...curlArgs(url, headers, timeoutMs).slice(0, -1), '-w', '\n' + marker + '%{http_code}', url];
     return new Promise((resolve, reject) => {
+        let args;
+        try { args = curlArgs(url, headers, timeoutMs, ['-w', '\n' + marker + '%{http_code}']); } catch (e) { return reject(e); }
         execFile(resolveCurlPath(), args, { maxBuffer: 32 * 1024 * 1024, encoding: 'buffer', windowsHide: true }, (err, stdout, stderr) => {
             if (err) {
                 const detail = String(stderr || '').trim() || err.message;
@@ -132,9 +134,10 @@ function curlFetchText(url, headers = {}, timeoutMs = 20000) {
 
 function curlDownloadToFile(url, destPath, headers = {}, onProgress = null, timeoutMs = 30000) {
     const partPath = `${destPath}.part`;
-    const args = [...curlArgs(url, headers, timeoutMs).slice(0, -1), '-o', partPath, '-w', '%{http_code}', url];
-    if (onProgress) onProgress(0, 0);
     return new Promise((resolve, reject) => {
+        let args;
+        try { args = curlArgs(url, headers, timeoutMs, ['-o', partPath, '-w', '%{http_code}']); } catch (e) { return reject(e); }
+        if (onProgress) onProgress(0, 0);
         execFile(resolveCurlPath(), args, { maxBuffer: 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
             const cleanup = () => { try { fs.unlinkSync(partPath); } catch (e) {} };
             if (err) {

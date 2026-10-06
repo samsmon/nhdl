@@ -252,3 +252,41 @@ test('curlDownloadToFile writes the file, 404 rejects with statusCode, timeout l
         assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['a.webp']);
     } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('curl helpers refuse non-http(s) URLs and option-looking URLs without side effects', { skip: CURL_SKIP }, async () => {
+    const { pathToFileURL } = require('url');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-curl-sec-'));
+    try {
+        const secret = path.join(dir, 'secret.txt');
+        fs.writeFileSync(secret, 'top secret');
+        const target = path.join(dir, 'a.webp');
+        const evil = path.join(dir, 'evil.out');
+        const bad = [pathToFileURL(secret).href, `-o${evil}`, `--output=${evil}`];
+        for (const u of bad) {
+            await assert.rejects(curlFetchText(u), (e) => e instanceof Error && e.statusCode === undefined && /non-http/.test(e.message));
+            await assert.rejects(curlDownloadToFile(u, target), (e) => e instanceof Error && e.statusCode === undefined && /non-http/.test(e.message));
+        }
+        assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['secret.txt']);
+    } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('curlFetchText parses a body that itself contains status-marker-like text', { skip: CURL_SKIP }, async () => {
+    const tricky = 'x\n__NHDL_STATUS_1_2__404 tail';
+    const server = await startServer((req, res) => { res.writeHead(200); res.end(tricky); });
+    try {
+        const r = await curlFetchText(`http://127.0.0.1:${server.address().port}/`);
+        assert.strictEqual(r.status, 200);
+        assert.strictEqual(r.body, tricky);
+    } finally { server.close(); }
+});
+
+test('slugapi.fetchMeta rejects non-http(s) image source_url values', async () => {
+    for (const bad of ['file:///etc/hosts', '--output=x', 123, null]) {
+        const body = JSON.parse(SLUG_JSON);
+        body.images[0].source_url = bad;
+        await assert.rejects(
+            slug().fetchMeta('com:amys-country-wrangle-porn-comic', { fetchText: async () => ({ status: 200, body: JSON.stringify(body) }) }),
+            /unexpected response/i
+        );
+    }
+});
