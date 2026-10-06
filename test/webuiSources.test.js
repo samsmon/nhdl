@@ -30,6 +30,9 @@ test('sourceLabel falls back to id', async () => {
     const s = await load();
     assert.strictEqual(s.sourceLabel('xxx', [{ id: 'xxx', label: 'Site' }]), 'Site');
     assert.strictEqual(s.sourceLabel('zzz', []), 'zzz');
+    assert.strictEqual(s.sourceLabel('default', []), 'nhentai.net');
+    assert.strictEqual(s.sourceLabel('default', undefined), 'nhentai.net');
+    assert.strictEqual(s.sourceLabel('default', [{ id: 'default', label: 'Server Label' }]), 'Server Label');
 });
 
 test('urlKey recognises all four URL shapes and ids', async () => {

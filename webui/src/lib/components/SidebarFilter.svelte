@@ -85,7 +85,7 @@
     {/each}
   </div>
 
-  {#if sourceItems.length > 1}
+  {#if sourceItems.length > 0}
     <div class="p-2 pt-0 flex flex-col gap-0.5">
       <div class="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)] font-semibold">
         Source

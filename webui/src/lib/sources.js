@@ -31,7 +31,8 @@ export function countBySource(items) {
 
 export function sourceLabel(id, sources) {
   const found = (sources || []).find((s) => s.id === id);
-  return found ? found.label : id;
+  if (found) return found.label;
+  return id === 'default' ? 'nhentai.net' : id;
 }
 
 export function shortKey(key) {

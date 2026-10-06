@@ -429,7 +429,7 @@
                 <!-- Mobile (< 768px): Judul, Status, Progress -->
                 <div class="px-2 truncate font-sans text-xs" title={formatRowTitle(item)}>
                   <span class="text-[var(--text-muted)] font-mono mr-1">#{gid}</span>
-                  {#if src !== 'default'}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{/if}
+                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>
                   <span>{formatRowTitle(item)}</span>
                 </div>
                 <div class="px-1.5 flex items-center">
@@ -460,7 +460,7 @@
                   {rank}
                 </div>
                 <div class="px-2 truncate font-sans text-xs" title={formatRowTitle(item)}>
-                  {#if src !== 'default'}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{/if}{formatRowTitle(item)}
+                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{formatRowTitle(item)}
                 </div>
                 <div class="px-2 text-[11px] text-[var(--text-secondary)] truncate">
                   {gid}

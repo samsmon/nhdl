@@ -447,9 +447,7 @@
                         .{item.format}
                       </span>
                     {/if}
-                    {#if itemSource(item) !== 'default'}
-                      <span class="px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] shrink-0">{sourceLabel(itemSource(item), appStore.sources)}</span>
-                    {/if}
+                    <span class="px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] shrink-0">{sourceLabel(itemSource(item), appStore.sources)}</span>
                     <span class="text-white truncate" title={item.title}>{item.title}</span>
                   </div>
                   {#if item.path}
