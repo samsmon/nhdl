@@ -8,6 +8,14 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Tipe konten (comic/manga/other)
+- Modul baru `core/providers/contentType.js`: slug kategori situs dipetakan ke tipe (`western`/`porn-comic`/`comic` -> `comic`; `manga`/`doujinshi` -> `manga`; lainnya -> `other`). Provider site B1/B2/C mengekstrak kategori; kegagalan ekstraksi dicatat di `categoryError` tanpa menggagalkan unduhan.
+- Skema v4: kolom `queue.category` (SQLite dan PostgreSQL), ikut export/import. Library menyimpan `meta.contentType`.
+- Engine: galeri sumber berprefix disimpan di `<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`; site A tidak berubah. `findExistingOnDisk` bertipe.
+- UI: badge tipe dan filter Type di antrian dan library; filter dengan tipe yang sudah tidak ada diabaikan, dan sidebar menutup saat tipe dipilih.
+- Pengecekan langsung ke situs asli TIDAK dapat dijalankan (DNS sedang diblokir, sertifikat yang diterima bukan milik situs). Diganti pengecekan offline: parser asli dijalankan terhadap markup/JSON asli yang tersimpan, satu galeri per sumber. Hasil: site B1 -> kategori `manga` -> tipe `manga` (240 halaman, bahasa Japanese); site B2 -> `western` -> `comic` (51 halaman, English); site C -> `porn-comic` -> `comic` (17 gambar, tanpa `categoryError`; respons detail site C disuplai stub). Pengecekan langsung masih terbuka.
+- Test suite: 122 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Pembaruan tampilan antrian
 - Filter sidebar "Queued" menjadi **Queue** dan kini mencakup `PENDING` dan `ON_PROGRESS` (item yang sedang diunduh tetap terlihat di antrian; "Downloading" hanya `ON_PROGRESS`, "Completed" tetap `DONE`/`SKIPPED`). Status bar tetap menghitung `PENDING` saja lewat `filterCounts.pending` supaya "Active" dan "Queued" tidak dihitung ganda.
 - Baris `ON_PROGRESS` diberi penanda aksen biru di tepi kiri dan latar tipis.

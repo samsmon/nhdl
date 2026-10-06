@@ -196,6 +196,14 @@ Task:
 - [x] UI antrian: filter "Queue" (PENDING + ON_PROGRESS), penanda baris aktif, chip cooldown, kolom "Ditambahkan"
 - [ ] Putuskan apakah `samples/` (sampel manual user) masuk `.gitignore`
 
+## Content type (comic/manga/other)
+- [x] Pemetaan kategori -> tipe (`core/providers/contentType.js`) dan ekstraksi kategori di provider B1/B2/C
+- [x] Skema v4 `queue.category` + export/import
+- [x] Folder bertipe di engine dan `findExistingOnDisk` bertipe, `meta.contentType` di library
+- [x] UI: badge tipe dan filter Type
+- [x] Verifikasi offline parser terhadap markup asli tersimpan (B1 manga, B2 western -> comic, C porn-comic -> comic)
+- [ ] live metadata check against the real sites (needs working DNS)
+
 ## Log
 | Tanggal | Fase | Catatan |
 |---|---|---|
@@ -240,3 +248,4 @@ Task:
 | 2026-10-06 | Multi-source | Transport curl untuk site C (`curlFetchText`/`curlDownloadToFile`, field `transport` di provider). Tes langsung site C 17/17 lulus. 84 lulus, 1 skip, 0 gagal |
 | 2026-10-06 | Multi-source | Perbaikan review akhir (URL tanpa skema, 429/503 provider ke cooldown, signature gambar, `ignored` di log/toast, URL fallback per sumber, validasi nilai remote, API kosong = SKIPPED). 96 lulus, 1 skip, 0 gagal |
 | 2026-10-06 | Multi-source | Pembaruan tampilan antrian (filter Queue = PENDING + ON_PROGRESS, penanda baris aktif, chip cooldown, kolom Ditambahkan; hanya UI). 101 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Content type | Tipe konten comic/manga/other: pemetaan kategori, skema v4, folder bertipe, badge/filter UI. Cek langsung ke situs tidak bisa dijalankan (DNS diblokir); diganti cek offline parser pada markup asli tersimpan. 122 lulus, 1 skip, 0 gagal |

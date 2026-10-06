@@ -21,6 +21,7 @@ nhdl/
 │   ├── providers/                           — Lapisan multi-source (satu file per jenis sumber)
 │   │   ├── index.js                         — Registry: `resolveInput`, `canonicalKey`, `toPublicId`, `sourceOf`, `byPrefix`, `registerProvider`
 │   │   ├── default.js                       — Provider site A (certain site ( ͡° ͜ʖ ͡°)): kunci angka polos, jalur API/CDN lama di engine
+│   │   ├── contentType.js                   — Tipe konten: `mapCategoryToType(slug)` (slug kategori situs -> `comic`/`manga`/`other`), `typeFolderName`, `isContentType`
 │   │   ├── boards.js                        — Pabrik provider site B1/B2 (halaman HTML galeri + daftar halaman ber-ekstensi per halaman)
 │   │   ├── slugapi.js                       — Pabrik provider site C (slug galeri + JSON API gambar)
 │   │   └── http.js                          — `fetchText` & `downloadToFile` bersama (User-Agent, redirect, file `.part` atomik; sebelum rename, `.part` harus diawali signature gambar webp/jpeg/png/gif, kalau tidak dianggap halaman blokir HTML dan ditolak tanpa `statusCode`) plus `curlFetchText` & `curlDownloadToFile` (system `curl` lewat `execFile`)
@@ -109,6 +110,8 @@ Semua file state diletakkan di dalam direktori download (`setStateDir(baseDownlo
 - **Interface provider** (objek di registry): `id`, `label`, `prefix`, `isDefault`, `transport` (`'node'` atau `'curl'`), `origin`, `urlPatterns` (regex URL galeri, grup 1 = isi kunci), `makeKey(body)`, `buildUrl(key)`, `imageHeaders()`, `fetchMeta(key, { fetchText })` -> `{ title, numPages, ext, pageExts, langStr, authorStr, extraMeta, pageUrls(n) }` dengan `pageUrls(n)` mengembalikan kandidat `[{ ext, url }]` per halaman. Galeri berprefix diunduh engine lewat provider (halaman per halaman, tanpa filter: semua halaman yang diumumkan diunduh); site A tetap lewat jalur API/CDN lama. `transport: 'curl'` (site C) membuat engine memakai `curlFetchText`/`curlDownloadToFile` di `core/providers/http.js`: CDN site C menyajikan halaman tantangan ke stack HTTP Node tetapi tidak ke `curl` sistem (site A memakai `curl` karena alasan yang sama). Kontrak error sama dengan helper Node (HTTP non-200 -> `err.statusCode`; kegagalan jaringan/timeout -> Error tanpa `statusCode`), jadi fallback 404 per kandidat tetap berlaku. Hanya `curl` biasa: argumen array tanpa shell, DNS normal, tanpa impersonasi atau penyelesaian tantangan.
 - **Parsing input**: `core/db/listParser.js` memanggil `resolveInput()`; baris yang tidak dikenali dilewati dan dihitung di `ignored`.
 - **Migrasi skema v3**: kolom `gallery_id` berubah dari `INTEGER`/`BIGINT` ke `TEXT` di kedua adapter; baris lama dikonversi ke teks angka tanpa kehilangan data. Export/import tetap membawa `gallery_id` publik (angka untuk site A).
+- **Tipe konten (comic/manga/other)**: provider B1/B2/C mengambil slug kategori situs (`extraMeta`/`meta.category`; kegagalan ekstraksi dicatat di `categoryError`) dan `core/providers/contentType.js` memetakannya: `western`, `porn-comic`, `comic` -> `comic`; `manga`, `doujinshi` -> `manga`; slug lain yang valid -> `other`; tidak ada/tidak valid -> `null`. Nama folder tipe hanya dari tabel tetap (`Comic`/`Manga`/`Other`), tidak pernah dari teks remote. Layout folder sumber berprefix: `<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`; site A tidak berubah (`<base>/<Bahasa>/<Author>/<Judul>`). Tipe disimpan di `queue.category` (kolom `TEXT` nullable; berisi tipe, bukan slug mentah) dan `library.meta.contentType`; keduanya ikut export/import. `findExistingOnDisk` bertipe: mencari di folder tipe item, sehingga galeri yang sama di tipe berbeda tidak dianggap duplikat. UI menampilkan badge tipe dan filter **Type** di antrian dan library (filter yang tipenya sudah tidak ada diabaikan).
+- **Migrasi skema v4**: menambah kolom `queue.category TEXT` di kedua adapter; baris lama bernilai `NULL`; export/import membawa `category`.
 - **Nama folder**: bila judul kosong, nama folder diturunkan dari kunci lewat `safeKeyName()` (`core/engine.js`) agar tanda `:` tidak pernah muncul di path (tidak valid di Windows).
 
 ---
@@ -118,7 +121,7 @@ Semua file state diletakkan di dalam direktori download (`setStateDir(baseDownlo
 Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
 
 ### Properti Utama
-- `baseDownloadDir`: Folder output (`<base>/<Language>/<Author>/<Title>`).
+- `baseDownloadDir`: Folder output (site A: `<base>/<Language>/<Author>/<Title>`; sumber berprefix: `<base>/<Tipe>/<Language>/<Author>/<Title>`).
 - `downloadFormat`: `'cbz'` (default) | `'folder'`.
 - `autoContinueBatches`: `boolean` (default `true`).
 - `batchSize`: `50` galeri sebelum istirahat batch (`batchRestMinutes`: `5` menit).
