@@ -202,7 +202,8 @@ Task:
 - [x] Folder bertipe di engine dan `findExistingOnDisk` bertipe, `meta.contentType` di library
 - [x] UI: badge tipe dan filter Type
 - [x] Verifikasi offline parser terhadap markup asli tersimpan (B1 manga, B2 western -> comic, C porn-comic -> comic)
-- [ ] live metadata check against the real sites (needs working DNS)
+- [x] live metadata check against the real sites (2026-10-06: site B1 manga, site B2 western -> comic, site C porn-comic -> comic, plus a real typed download under the Comic folder)
+- [x] PostgreSQL adapter run against a real server (PG 18, throwaway instance): live suite 32/32 and 129/129 with the live env var, plus a v2 -> v4 upgrade check
 
 ## Log
 | Tanggal | Fase | Catatan |

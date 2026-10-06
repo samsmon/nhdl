@@ -8,6 +8,11 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Verifikasi: PostgreSQL nyata dan cek metadata langsung
+- Adapter PostgreSQL dijalankan pertama kali pada server PostgreSQL 18 sementara (localhost, port khusus, dihapus setelahnya): suite live `test/db.test.js` 32/32 lulus, seluruh `npm test` dengan `TEST_DATABASE_URL` 129/129 lulus, dan pemeriksaan tambahan upgrade DB skema v2 → v4 (tipe `gallery_id` menjadi TEXT, kolom `category`, baris/prioritas tetap, ID angka tetap angka di API, kunci berprefix, import/export dengan `category`, `initDb` idempoten) lulus. Tidak ada cacat adapter ditemukan.
+- Catatan kecil: `importData` mode merge menyisipkan event tanpa dedup sehingga impor berulang menggandakan baris event (belum diubah; mungkin memang disengaja).
+- Cek metadata ke situs asli (DNS sudah aktif): site B1 → kategori manga (tipe manga), site B2 → western (comic), site C → porn-comic (comic) lewat transport curl tanpa `categoryError`. Unduhan nyata dari site B1 tersimpan di `Download/Comic/<Bahasa>/<Author>/` dengan `contentType` di meta library.
+
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Perbaikan: pengaturan tersimpan diterapkan saat startup
 - Bug: `downloadDir`, `downloadFormat`, dan `autoContinueBatches` yang disimpan lewat `POST /api/config` ke tabel `settings` tidak pernah dibaca saat server start, sehingga setelah restart kembali ke `DOWNLOAD_DIR`/`./Download`, `cbz`, dan `true`.
 - `core/engine.js`: method baru `applySavedSettings()` membaca ketiga pengaturan setelah DB siap. Prioritas folder: `DOWNLOAD_DIR` > `settings.downloadDir` > `./Download`. Nilai tidak valid (tipe salah, format tak dikenal) diabaikan. Memakai jalur `setDownloadDir` yang sama (`setStateDir`/`setLogDir`, folder tidak dibuat bila library punya entri, status `Download folder unavailable`); `setDownloadDir` mendapat opsi `{ persist: false }`.
