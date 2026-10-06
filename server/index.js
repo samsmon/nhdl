@@ -1102,6 +1102,10 @@ if (require.main === module) {
             }
         } catch (e) {}
 
+        try {
+            await engine.applySavedSettings();
+        } catch (e) {}
+
         let folderHealthy = true;
         try {
             const result = await rescanLibrary(engine.baseDownloadDir);

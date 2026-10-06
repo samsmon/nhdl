@@ -223,7 +223,7 @@ class DownloaderEngine extends EventEmitter {
         return 'RUNNING';
     }
 
-    async setDownloadDir(newDir) {
+    async setDownloadDir(newDir, options = {}) {
         if (!newDir || typeof newDir !== 'string') return;
         this.baseDownloadDir = path.resolve(newDir);
         this.clearDownloadDirUnavailable();
@@ -233,6 +233,7 @@ class DownloaderEngine extends EventEmitter {
         }
         setStateDir(this.baseDownloadDir);
         setLogDir(this.baseDownloadDir);
+        if (options.persist === false) return;
         try {
             await setSetting('downloadDir', this.baseDownloadDir);
             this.emit('config_updated', { downloadDir: this.baseDownloadDir });
@@ -259,6 +260,36 @@ class DownloaderEngine extends EventEmitter {
             this.emit('config_updated', { autoContinueBatches: this.autoContinueBatches });
         } catch (e) {
             console.error('Failed to save autoContinueBatches to settings:', e.message);
+        }
+    }
+
+    // Apply settings saved via POST /api/config. Call once after the DB is initialized.
+    // Precedence for the folder: DOWNLOAD_DIR env > saved downloadDir > constructor default.
+    async applySavedSettings() {
+        let savedDir, savedFormat, savedAuto;
+        try {
+            savedDir = await getSetting('downloadDir', undefined);
+            savedFormat = await getSetting('downloadFormat', undefined);
+            savedAuto = await getSetting('autoContinueBatches', undefined);
+        } catch (e) {
+            console.error('Failed to read saved settings:', e.message);
+            return;
+        }
+        if (savedFormat === 'folder' || savedFormat === 'cbz' || savedFormat === 'zip') {
+            this.downloadFormat = savedFormat;
+        }
+        if (typeof savedAuto === 'boolean') {
+            this.autoContinueBatches = savedAuto;
+        }
+        if (!process.env.DOWNLOAD_DIR && typeof savedDir === 'string' && savedDir.trim()) {
+            try {
+                await this.setDownloadDir(savedDir, { persist: false });
+                if (!fs.existsSync(this.baseDownloadDir)) {
+                    this.markDownloadDirUnavailable('Download folder unavailable');
+                }
+            } catch (e) {
+                console.error('Failed to apply saved downloadDir:', e.message);
+            }
         }
     }
 

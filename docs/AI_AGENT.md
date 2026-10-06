@@ -60,7 +60,7 @@ If the backup fails, the migration is aborted and SQLite is left untouched. Tell
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | HTTP port |
-| `DOWNLOAD_DIR` | `./Download` (Docker image: `/downloads`) | Download folder read at startup. A folder picked in *Settings* applies immediately and is saved to the `settings` table, but the engine only reads `DOWNLOAD_DIR` (or the default) on startup, so keep `DOWNLOAD_DIR` set in Docker |
+| `DOWNLOAD_DIR` | `./Download` (Docker image: `/downloads`) | Download folder. Precedence at startup: `DOWNLOAD_DIR` > folder saved from *Settings* (`settings.downloadDir`) > `./Download`. A folder picked in *Settings* applies immediately and is restored after a restart unless `DOWNLOAD_DIR` is set (then the variable wins; keep it set in Docker). The saved format and auto-continue setting are restored on startup too |
 | `DATABASE_URL` | empty → SQLite | PostgreSQL connection string |
 | `NHDL_DB_PATH` | `data/nhdl.db` | SQLite file |
 | `NHDL_BACKUP_DIR` | `data/backups` | JSON backup folder |

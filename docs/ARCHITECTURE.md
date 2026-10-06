@@ -99,7 +99,7 @@ Migrasi: v1 skema awal, v2 kolom `queue.format` dan `library.meta`, v3 `gallery_
 - **`.nhdl-id`** (di dalam folder galeri) dan **`<Arsip>.cbz.nhdl-id`** (di samping arsip): berisi kunci kanonik galeri (angka polos untuk site A, `<prefix>:...` untuk sumber lain). Dipakai `rescanLibrary()` (`MAX_DEPTH = 6`) untuk melacak folder/arsip yang dipindah manual oleh user dan untuk mem-prune entri yang sudah dihapus dari disk.
 - **`.env`**: `NHDL_PASSWORD`, `NHENTAI_API_KEY`, `DATABASE_URL`, `PORT`, dst. Tidak pernah disimpan di DB atau dikirim ke UI.
 - **`config.json` lama** (root project): hanya dibaca satu kali oleh `migrateLegacyConfigJson` bila tabel `settings` kosong (dimatikan dengan `NHDL_LEGACY_CONFIG=`). File state teks lama (`list_status.txt`, `library.json`, `progress.json`, `activity.log`, `error.log`) tidak dipakai lagi; `list.txt` hanya format import/export (`# BATCH N FORMAT=cbz`).
-- **Folder unduhan**: `DOWNLOAD_DIR` bila di-set, kalau tidak `./Download` (Docker: `/downloads`). Pilihan folder di Settings diterapkan langsung dan disimpan ke `settings.downloadDir`, tetapi saat startup engine hanya membaca `DOWNLOAD_DIR`/default (konstruktor `DownloaderEngine`; tidak ada pembacaan balik dari `settings`).
+- **Folder unduhan**: `DOWNLOAD_DIR` bila di-set, kalau tidak `./Download` (Docker: `/downloads`). Pilihan folder di Settings diterapkan langsung dan disimpan ke `settings.downloadDir`. Saat startup, `engine.applySavedSettings()` (dipanggil di `server/index.js` setelah DB siap dan sebelum rescan/backup/auto-proses antrian) membaca `downloadDir`, `downloadFormat`, dan `autoContinueBatches` dari `settings`; prioritas folder: `DOWNLOAD_DIR` > `settings.downloadDir` > `./Download`. Nilai tersimpan yang tidak valid diabaikan, dan pengaman folder tetap berlaku (folder tidak dibuat bila library punya entri; status `Download folder unavailable`).
 
 ### 2a. Kunci Galeri (`gallery_id`), Provider, dan `source`
 
@@ -121,7 +121,7 @@ Migrasi: v1 skema awal, v2 kolom `queue.format` dan `library.meta`, v3 `gallery_
 Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
 
 ### Properti Utama
-- `baseDownloadDir`: Folder output (site A: `<base>/<Language>/<Author>/<Title>`; sumber berprefix: `<base>/<Tipe>/<Language>/<Author>/<Title>`). Diisi dari opsi konstruktor, `DOWNLOAD_DIR`, atau `<repo>/Download`.
+- `baseDownloadDir`: Folder output (site A: `<base>/<Language>/<Author>/<Title>`; sumber berprefix: `<base>/<Tipe>/<Language>/<Author>/<Title>`). Diisi dari opsi konstruktor, `DOWNLOAD_DIR`, atau `<repo>/Download`, lalu ditimpa `settings.downloadDir` oleh `applySavedSettings()` saat startup (kecuali `DOWNLOAD_DIR` di-set).
 - `downloadFormat`: `'cbz'` (default) | `'zip'` | `'folder'`.
 - `autoContinueBatches`: `boolean` (default `true`).
 - `batchSize`: `50` galeri sebelum istirahat batch (`batchRestMinutes`: `5` menit).

@@ -8,6 +8,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Perbaikan: pengaturan tersimpan diterapkan saat startup
+- Bug: `downloadDir`, `downloadFormat`, dan `autoContinueBatches` yang disimpan lewat `POST /api/config` ke tabel `settings` tidak pernah dibaca saat server start, sehingga setelah restart kembali ke `DOWNLOAD_DIR`/`./Download`, `cbz`, dan `true`.
+- `core/engine.js`: method baru `applySavedSettings()` membaca ketiga pengaturan setelah DB siap. Prioritas folder: `DOWNLOAD_DIR` > `settings.downloadDir` > `./Download`. Nilai tidak valid (tipe salah, format tak dikenal) diabaikan. Memakai jalur `setDownloadDir` yang sama (`setStateDir`/`setLogDir`, folder tidak dibuat bila library punya entri, status `Download folder unavailable`); `setDownloadDir` mendapat opsi `{ persist: false }`.
+- `server/index.js`: `applySavedSettings()` dipanggil saat server mulai listen, sebelum rescan library, backup otomatis, dan auto-proses antrian.
+- Test baru `test/engineSettings.test.js` (5 test: terapkan, env menang, nilai tidak valid, folder hilang + library berisi, tanpa pengaturan). Cek boot nyata (port sementara, DB dan folder sementara): pengaturan bertahan setelah restart, dan `DOWNLOAD_DIR` menang atas pengaturan tersimpan.
+- Dokumentasi: baris `DOWNLOAD_DIR` di `README.md` dan `docs/AI_AGENT.md`, serta `docs/ARCHITECTURE.md`, dikoreksi ke perilaku baru.
+
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Penyegaran dokumentasi
 - Seluruh dokumentasi (`README.md` dan `docs/*.md`, kecuali `docs/superpowers/`) diaudit terhadap kode terkini dan diperbarui; tidak ada perubahan kode, test, atau konfigurasi.
 - `README.md`: fitur multi-source (site B1/B2/C dalam satu antrian), folder bertipe (comic/manga/other), filter Status/Source/Type, chip hitung mundur cooldown, kolom "Ditambahkan", batch compress; format input (URL tanpa skema, kunci berprefix, `ignored`); tabel env var (`DOWNLOAD_DIR` hanya dibaca saat startup, `NHDL_LEGACY_CONFIG`); bagian Troubleshooting baru (folder unduhan tidak tersedia, error sertifikat = DNS ISP, 429); peta proyek menambah `core/providers/`.
