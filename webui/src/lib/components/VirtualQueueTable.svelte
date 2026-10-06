@@ -3,6 +3,7 @@
   import { appStore, getItemRawStatus, parseItemUrl } from '../stores/app.svelte.js';
   import ContextMenu from './ContextMenu.svelte';
   import { itemSource, sourceLabel } from '../sources.js';
+  import { itemType, typeLabel, typeBadgeClass } from '../contentType.js';
   import { formatAddedAt, formatAddedAtFull, formatCooldown } from '../queueView.js';
 
   let { onRequestDelete } = $props();
@@ -388,6 +389,7 @@
           {#each visibleRows as item (item.galleryId)}
             {@const gid = String(item.galleryId)}
             {@const src = itemSource(item)}
+            {@const ctype = itemType(item)}
             {@const isSelected = appStore.selectedIds.has(gid)}
             {@const isFocused = String(appStore.focusedId) === gid}
             {@const raw = getItemRawStatus(item)}
@@ -429,7 +431,7 @@
                 <!-- Mobile (< 768px): Judul, Status, Progress -->
                 <div class="px-2 truncate font-sans text-xs" title={formatRowTitle(item)}>
                   <span class="text-[var(--text-muted)] font-mono mr-1">#{gid}</span>
-                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>
+                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{#if ctype}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase mr-1 {typeBadgeClass(ctype)}" title="Type: {typeLabel(ctype)}">{typeLabel(ctype)}</span>{/if}
                   <span>{formatRowTitle(item)}</span>
                 </div>
                 <div class="px-1.5 flex items-center">
@@ -460,7 +462,7 @@
                   {rank}
                 </div>
                 <div class="px-2 truncate font-sans text-xs" title={formatRowTitle(item)}>
-                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{formatRowTitle(item)}
+                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{#if ctype}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase mr-1 {typeBadgeClass(ctype)}" title="Type: {typeLabel(ctype)}">{typeLabel(ctype)}</span>{/if}{formatRowTitle(item)}
                 </div>
                 <div class="px-2 text-[11px] text-[var(--text-secondary)] truncate">
                   {gid}

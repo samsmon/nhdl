@@ -1,6 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import * as api from '../api.js';
 import { urlKey, matchesSourceFilter, countBySource } from '../sources.js';
+import { TYPE_ORDER, matchesTypeFilter, countByType } from '../contentType.js';
 import { isQueuedStatus, parseAddedAt, cooldownInfo } from '../queueView.js';
 
 // Reactive item map keyed by galleryId string so SSE `item` updates mutate
@@ -104,6 +105,7 @@ class AppStore {
   statusFilter = $state('all'); // 'all' | 'downloading' | 'queued' | 'completed' | 'stopped' | 'failed'
   batchFilter = $state(null); // null | number
   sourceFilter = $state('all'); // 'all' | provider id
+  typeFilter = $state('all'); // 'all' | 'comic' | 'manga' | 'other'
   sources = $state([]); // [{ id, label }] from GET /api/config
   searchQuery = $state('');
 
@@ -156,6 +158,7 @@ class AppStore {
     let failed = 0;
     const batchMap = new Map();
     const sourceCounts = countBySource(this.items);
+    const typeCounts = countByType(this.items);
 
     for (const item of this.items) {
       all++;
@@ -189,7 +192,8 @@ class AppStore {
       stopped,
       failed,
       batches,
-      sources: Array.from(sourceCounts.entries()).map(([id, count]) => ({ id, count }))
+      sources: Array.from(sourceCounts.entries()).map(([id, count]) => ({ id, count })),
+      types: TYPE_ORDER.filter((id) => typeCounts.has(id)).map((id) => ({ id, count: typeCounts.get(id) }))
     };
   });
 
@@ -232,6 +236,7 @@ class AppStore {
     const sf = this.statusFilter;
     const bf = this.batchFilter;
     const srcf = this.sourceFilter;
+    const tf = this.typeFilter;
     const q = this.searchQuery.trim().toLowerCase();
     const col = this.sortColumn;
     const dir = this.sortDirection === 'desc' ? -1 : 1;
@@ -243,6 +248,7 @@ class AppStore {
       if (sf !== 'all' && !matchesSidebarFilter(item, sf)) continue;
       if (bf !== null && (item.batch || 1) !== bf) continue;
       if (!matchesSourceFilter(item, srcf)) continue;
+      if (!matchesTypeFilter(item, tf)) continue;
       if (q) {
         const gidStr = String(item.galleryId || '');
         const titleStr = String(item.title || '').toLowerCase();
@@ -447,6 +453,10 @@ class AppStore {
   setStatusFilter(filter) {
     this.statusFilter = filter;
     this.mobileSidebarOpen = false;
+  }
+
+  setTypeFilter(id) {
+    this.typeFilter = this.typeFilter === id ? 'all' : id;
   }
 
   setSourceFilter(id) {

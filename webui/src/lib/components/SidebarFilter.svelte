@@ -12,8 +12,11 @@
   } from 'lucide-svelte';
   import { appStore } from '../stores/app.svelte.js';
   import { sourceLabel } from '../sources.js';
+  import { typeLabel } from '../contentType.js';
 
   const counts = $derived(appStore.filterCounts);
+
+  const typeItems = $derived(counts.types.map((t) => ({ ...t, label: typeLabel(t.id) })));
 
   const sourceItems = $derived(
     counts.sources.map((s) => ({ ...s, label: sourceLabel(s.id, appStore.sources) }))
@@ -104,6 +107,27 @@
             <span class="truncate">{s.label}</span>
           </div>
           <span class="text-[11px] px-1.5 rounded font-mono {active ? 'bg-[var(--accent)] text-black font-bold' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}">{s.count}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if typeItems.length > 0}
+    <div class="p-2 pt-0 flex flex-col gap-0.5">
+      <div class="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)] font-semibold">
+        Type
+      </div>
+      {#each typeItems as t (t.id)}
+        {@const active = appStore.typeFilter === t.id}
+        <button
+          type="button"
+          onclick={() => appStore.setTypeFilter(t.id)}
+          class="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer {active
+            ? 'bg-[var(--bg-selected-focus)] text-white font-semibold border border-[var(--accent)]/40'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white border border-transparent'}"
+        >
+          <span class="truncate">{t.label}</span>
+          <span class="text-[11px] px-1.5 rounded font-mono {active ? 'bg-[var(--accent)] text-black font-bold' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}">{t.count}</span>
         </button>
       {/each}
     </div>
