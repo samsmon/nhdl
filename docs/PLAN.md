@@ -18,7 +18,7 @@ Backend: `/api/status` membaca dan mem-parse `list_status.txt` dari disk tiap re
 lalu mengirim seluruh list walaupun tidak ada perubahan.
 
 ## Fase 0 — Persiapan
-- [x] Hapus CLI (`cli/`, `nhentai-dl.js`); entry point menjadi `server/index.js`
+- [x] Hapus CLI (`cli/` dan router lama di root); entry point menjadi `server/index.js`
 - [x] Buat dokumen plan ini + `docs/CHANGELOG.md` + `AGENTS.md` (aturan logging untuk semua agent)
 - [x] `core/utils.js`: karakter kontrol mentah di regex `sanitizeName` diganti escape (git sebelumnya menganggap file ini binary)
 - [x] Hapus `webui/src/lib/Counter.svelte` (sisa template Vite)
@@ -118,7 +118,7 @@ Task:
 
 ## Fase 3 — Fondasi frontend
 - [x] Migrasi ke Svelte 5 (runes `$state`, `$derived`, `$props`, `$effect` tanpa `$:` atau `export let`)
-- [x] Pecah `App.svelte` menjadi komponen (`webui/src/lib/components/*.svelte`, `App.svelte` 94 baris) + store (`webui/src/lib/stores/app.svelte.js`, `webui/src/lib/api.js`)
+- [x] Pecah `App.svelte` menjadi komponen (`webui/src/lib/components/*.svelte`, `App.svelte` sekitar 90 baris) + store (`webui/src/lib/stores/app.svelte.js`, `webui/src/lib/api.js`)
 - [x] Ganti polling dengan klien SSE (`EventSource('/api/events')` + backoff reconnect + fallback polling 3s)
 - [x] **B3 (Optimasi daftar & Verifikasi Fase 3)**: hapus `animate:flip` pada item/batch antrian, hitung `filteredItems` satu kali per batch di `$derived`, cegah render DOM pada batch `collapsed`, terapkan `content-visibility: auto`, dan verifikasi 1.000 item + sinkronisasi 2 tab real-time via SSE (`import=86.6ms`, `2-tab snapshot=10.7ms`, `2-tab delta sync=19.9ms`, payload update `250B` vs `245KB` pada `/api/status` di `main`)
 
@@ -194,7 +194,7 @@ Task:
 - [x] Site C: API gambar menjawab 403 (tantangan Cloudflare) untuk klien Node; diselesaikan dengan transport `curl` sistem (`transport: 'curl'` di provider), tes langsung 17/17 gambar lulus
 - [x] Perbaikan review akhir: resolusi URL tanpa skema, 429/503 provider ke backoff, cek signature gambar, tampilan `ignored`, URL fallback per sumber, validasi nilai remote, API kosong = SKIPPED
 - [x] UI antrian: filter "Queue" (PENDING + ON_PROGRESS), penanda baris aktif, chip cooldown, kolom "Ditambahkan"
-- [ ] Putuskan apakah `samples/` (sampel manual user) masuk `.gitignore`
+- [x] `samples/` (sampel manual user) masuk `.gitignore`; tidak pernah di-commit
 
 ## Content type (comic/manga/other)
 - [x] Pemetaan kategori -> tipe (`core/providers/contentType.js`) dan ekstraksi kategori di provider B1/B2/C
@@ -249,3 +249,4 @@ Task:
 | 2026-10-06 | Multi-source | Perbaikan review akhir (URL tanpa skema, 429/503 provider ke cooldown, signature gambar, `ignored` di log/toast, URL fallback per sumber, validasi nilai remote, API kosong = SKIPPED). 96 lulus, 1 skip, 0 gagal |
 | 2026-10-06 | Multi-source | Pembaruan tampilan antrian (filter Queue = PENDING + ON_PROGRESS, penanda baris aktif, chip cooldown, kolom Ditambahkan; hanya UI). 101 lulus, 1 skip, 0 gagal |
 | 2026-10-06 | Content type | Tipe konten comic/manga/other: pemetaan kategori, skema v4, folder bertipe, badge/filter UI. Cek langsung ke situs tidak bisa dijalankan (DNS diblokir); diganti cek offline parser pada markup asli tersimpan. 122 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Docs | Penyegaran seluruh dokumentasi (README, API, ARCHITECTURE, AI_AGENT, PLAN, CHANGELOG) terhadap kode terkini. 123 lulus, 1 skip, 0 gagal (124 test) |

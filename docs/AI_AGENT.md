@@ -60,7 +60,7 @@ If the backup fails, the migration is aborted and SQLite is left untouched. Tell
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | HTTP port |
-| `DOWNLOAD_DIR` | saved `downloadDir` setting, else `./Download` (Docker image: `/downloads`) | Download folder. The env var wins over the saved setting |
+| `DOWNLOAD_DIR` | `./Download` (Docker image: `/downloads`) | Download folder read at startup. A folder picked in *Settings* applies immediately and is saved to the `settings` table, but the engine only reads `DOWNLOAD_DIR` (or the default) on startup, so keep `DOWNLOAD_DIR` set in Docker |
 | `DATABASE_URL` | empty → SQLite | PostgreSQL connection string |
 | `NHDL_DB_PATH` | `data/nhdl.db` | SQLite file |
 | `NHDL_BACKUP_DIR` | `data/backups` | JSON backup folder |
@@ -112,6 +112,8 @@ Gallery keys: site A is a plain number (`468614`); other sources (site B1, B2, C
 
 `POST /api/queue` (without `/import`) **replaces** the whole queue with the given text. Prefer `/api/queue/import`.
 
+Files from the non-default sources are saved under a content-type folder: `<DOWNLOAD_DIR>/<Comic|Manga|Other>/<Language>/<Author>/<Title>` (the type comes from the site's category and is also stored in `queue.category` / `LibraryItem.category`). The default site keeps `<DOWNLOAD_DIR>/<Language>/<Author>/<Title>`. In the UI, items show a source badge and a type badge, and the sidebar filters by status, **Source** and **Type**; the **Queue** filter means `PENDING` + `ON_PROGRESS`.
+
 Item statuses: `PENDING`, `ON_PROGRESS`, `DONE`, `SKIPPED` (already present, or permanently unavailable, e.g. 404), `ERROR` (retried automatically up to 5 times), `COOLDOWN` (rate-limited), `PAUSED` (paused by the circuit breaker; re-queued automatically on resume), and `STOPPED` (paused by the user; only resumes when asked).
 
 ### Logs
@@ -149,7 +151,8 @@ In Docker: `docker exec nhdl node scripts/find-bad-archives.js`.
 ### Map
 | Path | What |
 |---|---|
-| `core/providers/` | Source registry and per-source providers (URL recognition, prefixed gallery keys, metadata, page URLs); see ARCHITECTURE section 2a |
+| `core/providers/` | Source registry and per-source providers (URL recognition, prefixed gallery keys, metadata, page URLs, content-type mapping in `contentType.js`, Node/`curl` transports in `http.js`); see ARCHITECTURE section 2a |
+| `core/db/listParser.js` | `list.txt` / pasted text parser shared by import and export (uses the provider registry, counts `ignored` lines) |
 | `core/engine.js` | Download engine: queue loop, rate limiting, circuit breaker, per-gallery stop, download-folder health watch |
 | `core/nhentaiApi.js` | Official API client (metadata, archive download URL, archive download with zip validation) |
 | `core/tracker.js` | Library: disk rescan via `.nhdl-id` markers, rename, compress, download-folder health check |
@@ -159,6 +162,7 @@ In Docker: `docker exec nhdl node scripts/find-bad-archives.js`.
 | `server/index.js` | HTTP server: REST API, SSE `/api/events`, auth, static UI |
 | `webui/src/lib/stores/app.svelte.js` | Frontend state: SSE client, queue Map, filters, selection |
 | `webui/src/lib/api.js` | The only place the frontend calls `fetch` |
+| `webui/src/lib/{sources,queueView,contentType}.js` | Pure UI helpers (source badge/filter, Queue filter + cooldown chip, content type), tested by `test/webui*.test.js` |
 | `webui/src/lib/components/` | Svelte 5 components (runes only) |
 
 Deeper detail: [ARCHITECTURE.md](ARCHITECTURE.md).
@@ -191,11 +195,13 @@ Schema migrations run automatically at startup. Take a backup first (`POST /api/
 | Symptom | Likely cause | What to do |
 |---|---|---|
 | Container exits with `Cannot find module 'pg'` | Image built without backend deps | Rebuild with the current `Dockerfile` (it runs `npm ci --omit=dev`) |
-| Engine status `Download folder unavailable` / *"Download folder is empty while library has entries"* / *"More than 50% of library entries missing"* | Disk or share not mounted, or the wrong `DOWNLOAD_DIR` | Fix the mount or path. NHDL re-checks every 60s and resumes by itself. **Don't** create the folder manually over an unmounted mount point |
+| Engine status `Download folder unavailable` / *"Download folder is empty while library has entries"* / *"More than 50% of library entries missing"* | Disk or share not mounted, or the wrong `DOWNLOAD_DIR` | Fix the mount or path. NHDL re-checks every 60s and resumes by itself; you can also run *Library -> Rescan* (`POST /api/library/rescan`), which clears the state once the folder is healthy. Until then the engine does not start and the library is left untouched. **Don't** create the folder manually over an unmounted mount point |
 | Items in `COOLDOWN`, logs show 429 | Rate limited by the site | Wait. Backoff doubles from 5 min up to 60 min |
-| Engine paused, items `PAUSED - Circuit breaker` | 3 consecutive 429s | Wait, then resume (`POST /api/control {"action":"resume"}`). Don't loop resumes |
+| Engine paused, items `PAUSED - Circuit breaker` | The 4th consecutive 429 (after cooldowns of 5, 10 and 20 min). 429/503 from the other sources count too | Wait, then resume (`POST /api/control {"action":"resume"}`). Don't loop resumes |
 | Archive downloads are tiny HTML files / `check:archives` finds bad files | Cloudflare challenge page saved as `.cbz` (fixed in current code) | Run `check:archives`, delete with approval, re-add the printed IDs |
-| Timeouts / can't reach the site from a homelab | ISP DNS hijack | The code pins known Cloudflare IPs via `curl --resolve`. Check that `curl` exists in the container and outbound 443 works |
+| Timeouts / can't reach the default site from a homelab | ISP DNS hijack | The code pins known Cloudflare IPs via `curl --resolve` for that site. Check that `curl` exists in the container and outbound 443 works |
+| Items from site B1/B2/C fail with certificate errors (e.g. `self-signed certificate`) or non-image responses | The ISP DNS blocks or redirects that site (those sources use normal DNS; there is no IP pinning). A block page is rejected by the image signature check instead of being saved as a page | Change the DNS resolver or network (VPN); NHDL does not work around it. Retry the items afterwards (`POST /api/retry {"galleryId":"<key>"}`) |
+| Pasted lines are skipped; the toast or log says N `ignored` | Not a recognised URL/ID/prefixed key (unknown host, unknown prefix) | Use a URL of a supported source, a plain ID (default site), or a prefixed key from `GET /api/config` -> `sources` |
 | Item stuck `ON_PROGRESS` after a crash | Unclean shutdown | Reset automatically on startup, or `POST /api/control {"action":"restart"}` |
 | Item `ERROR` with retries ≥ 5 | Persistent failure | Read `GET /api/logs?galleryId=<id>`, then `POST /api/retry {"galleryId":<id>}` (resets retries) |
 | `Failed to connect to PostgreSQL ... after 60s` | Wrong `DATABASE_URL`, network, or grants | Check host/network (compose `networks:`), credentials, and the PG15+ schema grants in [POSTGRES.md](POSTGRES.md) |

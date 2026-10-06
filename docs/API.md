@@ -37,33 +37,49 @@ Representasi item antrian yang dikirim melalui REST (`/api/status`) maupun SSE (
 - Nilai `status`: sama dengan `rawStatus`, atau `"${rawStatus} - ${error}"` apabila kolom `error` terisi.
 - `galleryId`: `number` untuk galeri site A (kunci angka polos, kompatibel dengan versi sebelumnya), `string` berprefix (`"<prefix>:<isi>"`) untuk site B1/B2/C. Contoh: `123456`, `"b1:539224"`, `"c1:some-slug"`. Nilai ini dipakai apa adanya pada `ids`/`galleryId` di endpoint lain.
 - `source`: id sumber hasil turunan dari prefix `galleryId` (`"default"` bila tanpa prefix). Tidak disimpan di DB. Daftar sumber ada di `GET /api/config` → `sources`.
+- `createdAt` / `updatedAt`: string waktu. SQLite: UTC tanpa zona (`"2026-09-28 08:00:00"`); PostgreSQL: ISO 8601 (`"2026-09-28T08:00:00.000Z"`). UI mengurai keduanya.
 - `category`: tipe konten `"comic" | "manga" | "other" | null`. Dipetakan dari kategori di situs asal (site B1/B2/C); `null` untuk site A, item lama, dan item yang metadatanya belum diambil. Disimpan di tabel `queue` (kolom `category`) dan ikut di event SSE `item`.
 
 ### `LiveProgress`
-Representasi progress unduhan aktif (`engine.currentProgress`), atau `null` jika sedang tidak mengunduh:
+Representasi progress aktif (`engine.currentProgress`), atau `null` jika tidak ada. Ada dua bentuk.
+
+Unduhan galeri (`live: true`):
 ```json
 {
-  "galleryId": "123456",
-  "currentTaskNum": 1,
-  "totalTasks": 10,
-  "batchIndex": 1,
-  "totalBatches": 2,
+  "galleryId": 123456,
   "title": "[Artist] Title",
-  "artist": "Artist",
-  "language": "English",
-  "totalPages": 24,
-  "downloadedPages": 12,
-  "pagePercentage": 50,
-  "speedBps": 1548200,
-  "etaSeconds": 8,
-  "status": "Downloading",
-  "cooldownRemain": 0,
-  "errorDetails": null
+  "percent": 50,
+  "completed": 12,
+  "total": 24,
+  "taskNum": 1,
+  "totalTasks": 10,
+  "activePages": [
+    { "page": 13, "url": "...", "bytesReceived": 51200, "totalBytes": 204800, "percent": 25, "attempt": 1, "lastError": null }
+  ],
+  "speedKBps": 1512,
+  "stalled": false,
+  "stalledSeconds": 0,
+  "live": true
 }
 ```
 
+Masa tunggu (`type`: `"COOLDOWN"` jeda anti-ban antar galeri, `"BATCH_REST"` istirahat antar batch, `"RATE_LIMIT"` cooldown 429; `remaining` dan `total` dalam detik):
+```json
+{
+  "type": "COOLDOWN",
+  "title": "Smart Delay Cooldown (Anti-Ban)",
+  "message": "Next in queue in: 12s",
+  "percent": 40,
+  "remaining": 12,
+  "total": 20,
+  "taskNum": 3,
+  "totalTasks": 10
+}
+```
+UI memakai bentuk kedua untuk chip hitung mundur di tabel antrian (lihat ARCHITECTURE bagian 2a).
+
 ### `EngineStatus`
-String status mesin pengunduh: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'STOPPING'` | `'Download folder unavailable'`.
+String status mesin pengunduh: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'COOLDOWN'` (jeda anti-ban / istirahat batch) | `'COOLDOWN_429'` (rate limit) | teks alasan saat folder unduhan tidak sehat (default `'Download folder unavailable'`; alasan lain mis. `Download folder is empty while library has entries`).
 
 ---
 
@@ -83,7 +99,7 @@ Dikirim setiap kali ada perubahan pada tabel `queue` di basis data (`core/db.js`
 - **Penambahan atau pembaruan baris (`inserted` / `updated`)**:
   ```
   event: item
-  data: {"type":"inserted","item":{"id":1,"galleryId":123456,"status":"PENDING","rawStatus":"PENDING","url":"https://certain.site/g/123456/","title":null,"batch":1,"priority":0,"pagesDone":0,"pagesTotal":0,"error":null,"retries":0,"format":null,"source":"default"},"batchCount":1}
+  data: {"type":"inserted","item":{"id":1,"galleryId":123456,"status":"PENDING","rawStatus":"PENDING","url":"https://certain.site/g/123456/","title":null,"batch":1,"priority":0,"pagesDone":0,"pagesTotal":0,"error":null,"retries":0,"format":null,"source":"default","category":null},"batchCount":1}
   ```
 - **Penghapusan satu baris (`deleted`)**:
   ```
@@ -115,10 +131,10 @@ data: {"liveProgress":{...},"engineStatus":"RUNNING"}
 ```
 
 ### 2.4. `event: engine`
-Dikirim saat status mesin pengunduh atau konfigurasi berubah (`paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`, `download_dir_unavailable`):
+Dikirim saat status mesin pengunduh atau konfigurasi berubah; `detail` berisi payload event engine (atau `null`) (`paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`, `download_dir_unavailable`):
 ```
 event: engine
-data: {"type":"paused","engineStatus":"PAUSED","liveProgress":null,"autoContinueBatches":true}
+data: {"type":"paused","engineStatus":"PAUSED","liveProgress":null,"autoContinueBatches":true,"detail":null}
 ```
 
 ### 2.5. Heartbeat
@@ -154,7 +170,7 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 
 | Method | Path | Body | Response (`200 OK`) | Keterangan |
 |---|---|---|---|---|
-| `POST` | `/api/control` | `{"action": "pause" \| "resume" \| "start" \| "stop" \| "restart"}` | `{"success":true, "engineStatus": EngineStatus}` | Mengendalikan siklus mesin pengunduh (`restart` juga mengembalikan baris `ON_PROGRESS` ke `PENDING`). |
+| `POST` | `/api/control` | `{"action": "pause" \| "resume" \| "start" \| "stop" \| "restart"}` | `{"success":true, "engineStatus": EngineStatus}` | Mengendalikan siklus mesin pengunduh. `stop` setara `pause` dan `start` setara `resume`. `resume`/`start` mengantrikan ulang item gagal yang masih punya jatah retry; `restart` juga mengembalikan baris `ON_PROGRESS` ke `PENDING`. |
 | `POST` | `/api/retry` | `{"galleryId"?: number\|string}` | `{"success":true, "message":"Force retry triggered"}` | Melewati cooldown aktif; jika `galleryId` disertakan, mengubah status item tersebut kembali ke `PENDING` dan memicu antrian. |
 
 ### 3.4. Konfigurasi (`settings` & `.env`)
@@ -170,15 +186,19 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 | Method | Path | Body | Response (`200 OK`) | Keterangan |
 |---|---|---|---|---|
 | `GET` | `/api/library` | — | `{"items": LibraryItem[], "total": number}` | Mengambil daftar galeri di tabel `library` yang tidak berstatus `skipped`. |
-| `POST` | `/api/library/rescan` | — | `{"success":true, "scanned": number, "relocated": number, "pruned": number, "unchanged": number, "aborted"?: boolean, "reason"?: string}` | Memindai ulang folder unduhan berdasarkan file marker `.nhdl-id` dan `.cbz.nhdl-id` (dibatalkan dengan `aborted: true` jika folder tidak sehat/tidak ter-mount). |
+| `POST` | `/api/library/rescan` | — | `{"success":true, "scanned": number, "relocated": number, "pruned": number, "unchanged": number, "aborted"?: boolean, "reason"?: string}` | Memindai ulang folder unduhan berdasarkan file marker `.nhdl-id` dan `.cbz.nhdl-id` (dibatalkan dengan `aborted: true` dan `success: false` jika folder tidak sehat/tidak ter-mount; rescan yang berhasil menghapus status `Download folder unavailable`). |
 | `POST` | `/api/library/rename` | `{"id": string\|number, "newName": string}` | `{"success":true, "oldPath": string, "newPath": string, "newTitle": string}` | Mengubah nama folder/arsip di disk, memperbarui `ComicInfo.xml`, serta memperbarui tabel `library` dan `queue`. |
 | `POST` | `/api/library/compress` | `{"id": string\|number, "ext"?: "cbz"\|"zip"}` | `{"success":true, "archivePath": string, "archiveExt": string, "skipped"?: boolean}` | Mengompres folder galeri menjadi arsip `.cbz`/`.zip` (`STORE` level 0) dan menghapus folder aslinya. |
 | `POST` | `/api/library/batch-compress` | `{"ids": (string\|number)[], "ext"?: "cbz"\|"zip"}` | `{"success":true, "started":true, "total": number}` | Memulai job kompresi massal di latar belakang (`409 Conflict` jika job masih berjalan). |
 | `GET` | `/api/library/compress-status` | — | `{"job": CompressJob\|null}` | Membaca progres job kompresi massal yang sedang/terakhir berjalan. |
 
-`LibraryItem` memiliki field tambahan `source` (sama seperti `QueueItem.source`).
-
-`LibraryItem` juga memiliki field `category` (nilai yang sama seperti `QueueItem.category`, dibaca dari `meta` library; `null` bila tidak ada).
+`LibraryItem`:
+```json
+{ "id": "123456", "source": "default", "category": null, "title": "Title", "author": "Artist", "lang": "English", "pages": 24, "folder": "/downloads/English/Artist/Title.cbz", "downloadedAt": "2026-09-28 08:00:00", "legacy": false, "archived": true, "archiveExt": "cbz" }
+```
+- `id`: kunci kanonik sebagai string (`"123456"`, `"b1:539224"`).
+- `source`: sama seperti `QueueItem.source`.
+- `category`: nilai yang sama seperti `QueueItem.category` (dibaca dari `meta.contentType` library; `null` bila tidak ada).
 
 ### 3.6. Log & Penjelajah Direktori
 
