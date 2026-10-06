@@ -63,7 +63,7 @@ On the first start with an empty PostgreSQL database, NHDL writes a backup of th
 | Variable | Default | Purpose |
 |---|---|---|
 | `PORT` | `8080` | HTTP port of the web daemon |
-| `DOWNLOAD_DIR` | `./Download` (Docker image: `/downloads`) | Where galleries are downloaded (read at startup; a folder picked in *Settings* applies immediately but startup only reads this variable) |
+| `DOWNLOAD_DIR` | `./Download` (Docker image: `/downloads`) | Where galleries are downloaded. Precedence at startup: `DOWNLOAD_DIR` > folder saved in *Settings* > `./Download`; the saved folder, format and auto-continue are restored after a restart |
 | `DATABASE_URL` | *(empty → SQLite)* | PostgreSQL connection string |
 | `NHDL_DB_PATH` | `data/nhdl.db` | SQLite database file |
 | `NHDL_BACKUP_DIR` | `data/backups` | Where JSON backups are written |
