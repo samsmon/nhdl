@@ -4,7 +4,8 @@ pg.types.setTypeParser(20, v => parseInt(v, 10)); // int8/bigint -> number
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { normalizeGalleryId, toPublicId, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { parseListText } = require('./listParser');
 
 let activePool = null;
 let activeUrl = null;
@@ -418,7 +419,7 @@ async function deleteQueueItem(galleryId, db = null) {
     const changes = res.rowCount || 0;
     if (changes > 0) {
         const batchCount = Math.max(1, await getMaxBatch(active));
-        dbEvents.emit('item', { type: 'deleted', galleryId: id, batchCount });
+        dbEvents.emit('item', { type: 'deleted', galleryId: toPublicId(id), batchCount });
     }
     return changes;
 }
@@ -552,7 +553,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
 
     let selectedCount = 0;
     for (let i = 0; i < rows.length; i++) {
-        if (targetSet.has(Number(rows[i].gallery_id))) selectedCount++;
+        if (targetSet.has(String(rows[i].gallery_id))) selectedCount++;
     }
     if (selectedCount === 0) return { updated: 0 };
 
@@ -565,7 +566,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
 
         if (action === 'top') {
             const maxP = rows.reduce((m, r) => Math.max(m, Number(r.priority) || 0), 0);
-            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = maxP + (selectedRows.length - i);
                 const gid = Number(selectedRows[i].gallery_id);
@@ -576,7 +577,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             }
         } else if (action === 'bottom') {
             const minP = rows.reduce((m, r) => Math.min(m, Number(r.priority) || 0), 0);
-            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = minP - (i + 1);
                 const gid = Number(selectedRows[i].gallery_id);
@@ -589,7 +590,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             const reordered = [...rows];
             if (action === 'up') {
                 for (let i = 1; i < reordered.length; i++) {
-                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i - 1].gallery_id))) {
+                    if (targetSet.has(String(reordered[i].gallery_id)) && !targetSet.has(String(reordered[i - 1].gallery_id))) {
                         const tmp = reordered[i - 1];
                         reordered[i - 1] = reordered[i];
                         reordered[i] = tmp;
@@ -597,7 +598,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                 }
             } else {
                 for (let i = reordered.length - 2; i >= 0; i--) {
-                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i + 1].gallery_id))) {
+                    if (targetSet.has(String(reordered[i].gallery_id)) && !targetSet.has(String(reordered[i + 1].gallery_id))) {
                         const tmp = reordered[i + 1];
                         reordered[i + 1] = reordered[i];
                         reordered[i] = tmp;
@@ -691,53 +692,6 @@ async function getMaxBatch(db = null) {
     return res.rows[0] ? Number(res.rows[0].max_batch) : 0;
 }
 
-function parseListText(text, defaultFormat = null) {
-    const lines = String(text || '').split(/\r?\n/);
-    let currentBatch = 1;
-    let currentFormat = defaultFormat;
-    const parsedItems = [];
-    const seen = new Set();
-
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
-
-        const batchMatch = line.match(/^#\s*BATCH\s+(\d+)(?:\s+FORMAT=(\w+))?/i);
-        if (batchMatch) {
-            currentBatch = parseInt(batchMatch[1], 10);
-            currentFormat = batchMatch[2] ? batchMatch[2].toLowerCase() : defaultFormat;
-            continue;
-        }
-        if (line.startsWith('#')) continue;
-
-        const idMatch = line.match(/(?:(?:nhentai\.net|certain\.site)\/g\/|^)\s*(\d+)\b/i)
-            || line.match(/\b(\d{5,7})\b/);
-        if (!idMatch) continue;
-
-        const galleryId = parseInt(idMatch[1], 10);
-        if (!Number.isFinite(galleryId) || seen.has(galleryId)) continue;
-        seen.add(galleryId);
-
-        let title = null;
-        const pipeIdx = line.indexOf('|');
-        if (pipeIdx !== -1) {
-            const afterPipe = line.slice(pipeIdx + 1).trim();
-            if (afterPipe) title = afterPipe;
-        }
-
-        const url = `https://nhentai.net/g/${galleryId}/`;
-        parsedItems.push({
-            galleryId,
-            url,
-            title,
-            batch: currentBatch,
-            format: currentFormat
-        });
-    }
-
-    return parsedItems;
-}
-
 async function importListText(text, options = {}, db = null) {
     const active = db || await getDb();
     const { replace = false, defaultFormat = null } = options;
@@ -754,10 +708,10 @@ async function importListText(text, options = {}, db = null) {
     try {
         await client.query('BEGIN');
         if (replace) {
-            const keepSet = new Set(galleryIds);
+            const keepSet = new Set(galleryIds.map(g => String(g)));
             const res = await client.query(`SELECT gallery_id FROM queue`);
             for (const r of res.rows) {
-                if (!keepSet.has(Number(r.gallery_id))) {
+                if (!keepSet.has(String(r.gallery_id))) {
                     await deleteQueueItem(r.gallery_id, client);
                 }
             }
@@ -1142,7 +1096,7 @@ async function importData(payload, options = {}, db = null) {
         }
 
         for (const r of queueRows) {
-            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
+            const gid = toPublicId(normalizeGalleryId(r.gallery_id || r.galleryId));
             const url = r.url || `https://nhentai.net/g/${gid}/`;
             const title = r.title || null;
             const status = r.status || 'PENDING';
@@ -1178,7 +1132,7 @@ async function importData(payload, options = {}, db = null) {
         }
 
         for (const r of libraryRows) {
-            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
+            const gid = toPublicId(normalizeGalleryId(r.gallery_id || r.galleryId));
             const title = r.title || 'Unknown';
             const p = r.path || r.folder || '';
             const pages = Number.isFinite(r.pages) ? r.pages : null;
@@ -1217,7 +1171,7 @@ async function importData(payload, options = {}, db = null) {
         for (const r of eventsRows) {
             const ts = r.ts || new Date().toISOString();
             const level = r.level || 'info';
-            const gid = r.gallery_id ? normalizeGalleryId(r.gallery_id) : null;
+            const gid = r.gallery_id ? toPublicId(normalizeGalleryId(r.gallery_id)) : null;
             const msg = String(r.message || '');
             const res = await client.query(`
                 INSERT INTO events (ts, level, gallery_id, message)

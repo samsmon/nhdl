@@ -2,7 +2,8 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { normalizeGalleryId, toPublicId, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { parseListText } = require('./listParser');
 
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
 const DEFAULT_DB_PATH = process.env.NHDL_DB_PATH || path.join(ROOT_DIR, 'data', 'nhdl.db');
@@ -376,7 +377,7 @@ async function deleteQueueItem(galleryId, db = null) {
     const res = active.prepare(`DELETE FROM queue WHERE gallery_id = ?`).run(id);
     if (res.changes > 0) {
         const batchCount = Math.max(1, await getMaxBatch(active));
-        dbEvents.emit('item', { type: 'deleted', galleryId: id, batchCount });
+        dbEvents.emit('item', { type: 'deleted', galleryId: toPublicId(id), batchCount });
     }
     return Number(res.changes || 0);
 }
@@ -494,7 +495,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
 
     let selectedCount = 0;
     for (let i = 0; i < rows.length; i++) {
-        if (targetSet.has(Number(rows[i].gallery_id))) selectedCount++;
+        if (targetSet.has(String(rows[i].gallery_id))) selectedCount++;
     }
     if (selectedCount === 0) return { updated: 0 };
 
@@ -510,7 +511,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
     try {
         if (action === 'top') {
             const maxP = rows.reduce((m, r) => Math.max(m, Number(r.priority) || 0), 0);
-            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = maxP + (selectedRows.length - i);
                 const gid = Number(selectedRows[i].gallery_id);
@@ -521,7 +522,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             }
         } else if (action === 'bottom') {
             const minP = rows.reduce((m, r) => Math.min(m, Number(r.priority) || 0), 0);
-            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = minP - (i + 1);
                 const gid = Number(selectedRows[i].gallery_id);
@@ -534,7 +535,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             const reordered = [...rows];
             if (action === 'up') {
                 for (let i = 1; i < reordered.length; i++) {
-                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i - 1].gallery_id))) {
+                    if (targetSet.has(String(reordered[i].gallery_id)) && !targetSet.has(String(reordered[i - 1].gallery_id))) {
                         const tmp = reordered[i - 1];
                         reordered[i - 1] = reordered[i];
                         reordered[i] = tmp;
@@ -542,7 +543,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                 }
             } else {
                 for (let i = reordered.length - 2; i >= 0; i--) {
-                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i + 1].gallery_id))) {
+                    if (targetSet.has(String(reordered[i].gallery_id)) && !targetSet.has(String(reordered[i + 1].gallery_id))) {
                         const tmp = reordered[i + 1];
                         reordered[i + 1] = reordered[i];
                         reordered[i] = tmp;
@@ -634,53 +635,6 @@ async function getMaxBatch(db = null) {
     return row ? Number(row.max_batch) : 0;
 }
 
-function parseListText(text, defaultFormat = null) {
-    const lines = String(text || '').split(/\r?\n/);
-    let currentBatch = 1;
-    let currentFormat = defaultFormat;
-    const parsedItems = [];
-    const seen = new Set();
-
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
-
-        const batchMatch = line.match(/^#\s*BATCH\s+(\d+)(?:\s+FORMAT=(\w+))?/i);
-        if (batchMatch) {
-            currentBatch = parseInt(batchMatch[1], 10);
-            currentFormat = batchMatch[2] ? batchMatch[2].toLowerCase() : defaultFormat;
-            continue;
-        }
-        if (line.startsWith('#')) continue;
-
-        const idMatch = line.match(/(?:(?:nhentai\.net|certain\.site)\/g\/|^)\s*(\d+)\b/i)
-            || line.match(/\b(\d{5,7})\b/);
-        if (!idMatch) continue;
-
-        const galleryId = parseInt(idMatch[1], 10);
-        if (!Number.isFinite(galleryId) || seen.has(galleryId)) continue;
-        seen.add(galleryId);
-
-        let title = null;
-        const pipeIdx = line.indexOf('|');
-        if (pipeIdx !== -1) {
-            const afterPipe = line.slice(pipeIdx + 1).trim();
-            if (afterPipe) title = afterPipe;
-        }
-
-        const url = `https://nhentai.net/g/${galleryId}/`;
-        parsedItems.push({
-            galleryId,
-            url,
-            title,
-            batch: currentBatch,
-            format: currentFormat
-        });
-    }
-
-    return parsedItems;
-}
-
 async function importListText(text, options = {}, db = null) {
     const active = db || await getDb();
     const { replace = false, defaultFormat = null } = options;
@@ -694,10 +648,10 @@ async function importListText(text, options = {}, db = null) {
     active.exec('BEGIN');
     try {
         if (replace) {
-            const keepSet = new Set(galleryIds);
+            const keepSet = new Set(galleryIds.map(g => String(g)));
             const existingRows = active.prepare(`SELECT gallery_id FROM queue`).all();
             for (const r of existingRows) {
-                if (!keepSet.has(Number(r.gallery_id))) {
+                if (!keepSet.has(String(r.gallery_id))) {
                     await deleteQueueItem(r.gallery_id, active);
                 }
             }
