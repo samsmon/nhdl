@@ -57,6 +57,7 @@ const CURL_BIN = resolveCurlBinary();
 class DownloaderEngine extends EventEmitter {
     constructor(options = {}) {
         super();
+        this.pageRetryBaseMs = Number.isFinite(options.pageRetryBaseMs) && options.pageRetryBaseMs > 0 ? options.pageRetryBaseMs : 1000;
         const defaultDownloadDir = path.join(__dirname, '..', 'Download');
         this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || defaultDownloadDir;
         const hasLibrary = hasActiveLibraryEntries();
@@ -784,6 +785,7 @@ class DownloaderEngine extends EventEmitter {
                     }
                 }
                 if (verifyImage(checkPath)) {
+                    if (!provider.isDefault) pageExts[j] = path.extname(checkPath).slice(1);
                     completed++;
                 } else {
                     if (fs.existsSync(checkPath)) fs.unlinkSync(checkPath);
@@ -917,7 +919,7 @@ class DownloaderEngine extends EventEmitter {
                             ? `https://${dynamicHost}/galleries/${mediaId}/${currentPage}.${pageExt}`
                             : (candidates[0] ? candidates[0].url : `${provider.origin}/page/${currentPage}`);
                         const retryCount = pageRetryCounts.get(currentPage) || 0;
-                        const startDelay = retryCount > 0 ? Math.min(1000 * 2 ** retryCount, 15000) : Math.floor(Math.random() * 400);
+                        const startDelay = retryCount > 0 ? Math.min(this.pageRetryBaseMs * 2 ** retryCount, 15000) : Math.floor(Math.random() * 400);
 
                         const pageEntry = {
                             page: currentPage,
@@ -944,7 +946,6 @@ class DownloaderEngine extends EventEmitter {
                                     .then((saved) => {
                                         destPath = saved.path;
                                         pageExts[currentPage] = saved.ext;
-                                        if (currentPage === 1) ext = saved.ext;
                                     });
                             })
                             .then(async () => {
@@ -996,8 +997,37 @@ class DownloaderEngine extends EventEmitter {
                                     this.emit('progress', this.currentProgress);
                                 }
                             })
-                            .catch((err) => {
+                            .catch(async (err) => {
                                 const attempt = retryCount + 1;
+                                if (!provider.isDefault && err && err.statusCode === 404 && attempt >= PLACEHOLDER_RETRY_THRESHOLD) {
+                                    // Every candidate extension 404'd repeatedly: the page does not exist on the
+                                    // source. Substitute a blank page rather than retrying forever.
+                                    try {
+                                        const phPath = path.join(folderPath, `${currentPage}.png`);
+                                        const phSize = writeBlankPlaceholderImage(phPath);
+                                        pageExts[currentPage] = 'png';
+                                        await logPlaceholderPage(galleryId, currentPage, title);
+                                        await logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: source returned 404 for every candidate ${attempt}x in a row - substituted a blank page instead of retrying forever`);
+                                        pageRetryCounts.delete(currentPage);
+                                        pageErrors.delete(currentPage);
+                                        completedBytes += phSize;
+                                        completed++;
+                                        if (!this.isGalleryDeleting(gid)) {
+                                            await updateQueueItem(galleryId, {
+                                                status: this.isGalleryStopping(gid) ? 'STOPPED' : 'ON_PROGRESS',
+                                                pagesDone: completed,
+                                                pagesTotal: numPages
+                                            });
+                                        }
+                                        const phPercent = Math.round((completed / numPages) * 100);
+                                        this.currentProgress = buildProgress();
+                                        this.currentProgress.percent = phPercent;
+                                        this.emit('progress', this.currentProgress);
+                                        return;
+                                    } catch (phErr) {
+                                        err = phErr;
+                                    }
+                                }
                                 pageRetryCounts.set(currentPage, attempt);
                                 pageErrors.set(currentPage, err.message);
                                 pendingPages.unshift(currentPage);
