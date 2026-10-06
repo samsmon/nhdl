@@ -8,6 +8,17 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Penyegaran dokumentasi
+- Seluruh dokumentasi (`README.md` dan `docs/*.md`, kecuali `docs/superpowers/`) diaudit terhadap kode terkini dan diperbarui; tidak ada perubahan kode, test, atau konfigurasi.
+- `README.md`: fitur multi-source (site B1/B2/C dalam satu antrian), folder bertipe (comic/manga/other), filter Status/Source/Type, chip hitung mundur cooldown, kolom "Ditambahkan", batch compress; format input (URL tanpa skema, kunci berprefix, `ignored`); tabel env var (`DOWNLOAD_DIR` hanya dibaca saat startup, `NHDL_LEGACY_CONFIG`); bagian Troubleshooting baru (folder unduhan tidak tersedia, error sertifikat = DNS ISP, 429); peta proyek menambah `core/providers/`.
+- `docs/ARCHITECTURE.md`: struktur direktori dan jumlah baris diukur ulang (semua modul, 14 file test, komponen webui); bagian "File State" lama (`list.txt`/`library.json`/`config.json`) diganti penjelasan tabel DB skema v4 dan marker file; properti dan event engine dilengkapi (`gallery_stopped`, `download_dir_unavailable`, pengaman folder, nilai `getStatus()`, batas circuit breaker); tabel endpoint dilengkapi; peta frontend ditulis ulang untuk Svelte 5 + SSE (bukan `App.svelte` 1766 baris dengan polling); catatan rework diganti ringkasan prinsip arsitektur.
+- `docs/API.md`: bentuk `LiveProgress` dikoreksi sesuai engine (dua bentuk: unduhan dan masa tunggu), `EngineStatus` dikoreksi (tidak ada `STOPPING`; ada `COOLDOWN`/`COOLDOWN_429`/teks alasan), field `detail` event `engine`, `category` di contoh event `item`, format `createdAt` per database, alias `stop`/`start` di `/api/control`, perilaku `success` di rescan, dan bentuk `LibraryItem`.
+- `docs/AI_AGENT.md`: baris `DOWNLOAD_DIR` dikoreksi (pengaturan tersimpan tidak dibaca ulang saat startup), peta modul (`listParser.js`, helper UI), layout folder bertipe, serta baris troubleshooting baru (error sertifikat/DNS ISP untuk sumber lain, baris `ignored`, batas circuit breaker yang benar, pemulihan "Download folder unavailable" lewat Library Rescan).
+- `docs/PLAN.md`: item `samples/` ditandai selesai (sudah masuk `.gitignore`), jumlah baris `App.svelte` dikoreksi, baris Log baru; item cek langsung ke situs asli tetap belum dicentang.
+- `docs/CHANGELOG.md` dan `docs/PLAN.md`: nama berkas lama router CLI diganti redaksi generik (nama asli hanya boleh ada di kode).
+- `docs/POSTGRES.md`: dicek terhadap adapter (pool 10, retry 2 detik/60 detik, migrasi v1–v4); tidak ada perubahan.
+- Test suite: 123 lulus, 1 di-skip (live PostgreSQL), 0 gagal (124 test).
+
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Tipe konten (comic/manga/other)
 - Modul baru `core/providers/contentType.js`: slug kategori situs dipetakan ke tipe (`western`/`porn-comic`/`comic` -> `comic`; `manga`/`doujinshi` -> `manga`; lainnya -> `other`). Provider site B1/B2/C mengekstrak kategori; kegagalan ekstraksi dicatat di `categoryError` tanpa menggagalkan unduhan.
 - Skema v4: kolom `queue.category` (SQLite dan PostgreSQL), ikut export/import. Library menyimpan `meta.contentType`.
@@ -303,7 +314,7 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 - Memutuskan semua data (link, status, progress, library, config, log) disimpan di SQLite, bukan file teks. Data lama tidak dimigrasi.
 
 ## 2026-09-27 · AI (Claude Code, Opus 5.5) · Fase 0
-- Hapus CLI: `cli/index.js` dan router `nhentai-dl.js`.
+- Hapus CLI: `cli/index.js` dan router lama di root project.
 - `package.json`: `main` dan `npm start` diarahkan ke `server/index.js`; bin `nhdl` dan script `cli` dihapus.
 - `start.bat` menjalankan `node server/index.js`.
 - README: bagian CLI dihapus.
