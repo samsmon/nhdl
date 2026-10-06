@@ -67,7 +67,7 @@
   <!-- Center: Counters (Active / Queued / Done / Stopped / Failed) -->
   <div class="hidden sm:flex items-center gap-3 shrink-0">
     <span>Active: <strong class="text-[#38bdf8]">{counts.downloading}</strong></span>
-    <span>Queued: <strong class="text-white">{counts.queued}</strong></span>
+    <span>Queued: <strong class="text-white">{counts.pending}</strong></span>
     <span>Done: <strong class="text-[#a3e635]">{counts.completed}</strong></span>
     {#if counts.stopped > 0}
       <span>Stopped: <strong class="text-[#f59e0b]">{counts.stopped}</strong></span>

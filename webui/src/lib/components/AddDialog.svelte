@@ -56,7 +56,7 @@
       }
       textInput = '';
       appStore.showToast(
-        `Added ${res.added} item(s) (${res.duplicates || 0} existing)`,
+        `Added ${res.added} item(s) (${res.duplicates || 0} existing${res.ignored > 0 ? `, ${res.ignored} ignored` : ''})`,
         'success'
       );
       onClose();

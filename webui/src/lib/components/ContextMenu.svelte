@@ -21,6 +21,12 @@
 
   const caps = $derived(appStore.selectionCapabilities);
   const selectedItem = $derived(appStore.selectedItem);
+  const galleryHref = $derived.by(() => {
+    if (!selectedItem) return null;
+    const rawUrl = String(selectedItem.url || '').split(' | ')[0].trim();
+    if (/^https?:\/\//i.test(rawUrl)) return rawUrl;
+    return /^\d+$/.test(String(selectedItem.galleryId)) ? `https://nhentai.net/g/${selectedItem.galleryId}/` : null;
+  });
 
   $effect(() => {
     if (open) {
@@ -156,9 +162,9 @@
         <span>Delete from Queue</span>
       </button>
 
-      {#if selectedItem}
+      {#if selectedItem && galleryHref}
         <a
-          href="https://nhentai.net/g/{selectedItem.galleryId}/"
+          href={galleryHref}
           target="_blank"
           rel="noopener noreferrer"
           onclick={onClose}

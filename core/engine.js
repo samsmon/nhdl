@@ -11,6 +11,16 @@ const { sanitizeName, toTitleCase, getDynamicDelay, verifyImage, writeBlankPlace
 const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery, isDownloadDirHealthy, rescanLibrary, hasActiveLibraryEntries } = require('./tracker');
 const { logActivity, setLogDir } = require('./logger');
 const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');
+const providers = require('./providers');
+const { toPublicId } = providers;
+const { fetchText, downloadToFile, curlFetchText, curlDownloadToFile } = require('./providers/http');
+const { PAGE_EXTS } = require('./providers/boards');
+const { typeFolderName, isContentType, TYPE_LABELS } = require('./providers/contentType');
+
+// Gallery keys can contain ":" (invalid in Windows paths); never use them raw as folder names.
+function safeKeyName(key) {
+    return String(key).replace(/[^A-Za-z0-9._-]+/g, '_');
+}
 const {
     getSetting,
     setSetting,
@@ -48,6 +58,7 @@ const CURL_BIN = resolveCurlBinary();
 class DownloaderEngine extends EventEmitter {
     constructor(options = {}) {
         super();
+        this.pageRetryBaseMs = Number.isFinite(options.pageRetryBaseMs) && options.pageRetryBaseMs > 0 ? options.pageRetryBaseMs : 1000;
         const defaultDownloadDir = path.join(__dirname, '..', 'Download');
         this.baseDownloadDir = options.baseDownloadDir || process.env.DOWNLOAD_DIR || defaultDownloadDir;
         const hasLibrary = hasActiveLibraryEntries();
@@ -86,8 +97,7 @@ class DownloaderEngine extends EventEmitter {
     }
 
     stopGallery(galleryId, options = {}) {
-        const gid = parseInt(String(galleryId), 10);
-        if (!Number.isFinite(gid)) return;
+        const gid = String(galleryId);
         this.stoppingGalleries.add(gid);
         if (options.deleteAfter) {
             this.deletingGalleries.add(gid);
@@ -95,24 +105,21 @@ class DownloaderEngine extends EventEmitter {
     }
 
     cancelStopGallery(galleryId) {
-        const gid = parseInt(String(galleryId), 10);
-        if (!Number.isFinite(gid)) return;
+        const gid = String(galleryId);
         this.stoppingGalleries.delete(gid);
         this.deletingGalleries.delete(gid);
     }
 
     isGalleryStopping(galleryId) {
-        const gid = parseInt(String(galleryId), 10);
-        return this.stoppingGalleries.has(gid);
+        return this.stoppingGalleries.has(String(galleryId));
     }
 
     isGalleryDeleting(galleryId) {
-        const gid = parseInt(String(galleryId), 10);
-        return this.deletingGalleries.has(gid);
+        return this.deletingGalleries.has(String(galleryId));
     }
 
     clearGalleryStopFlags(galleryId) {
-        const gid = parseInt(String(galleryId), 10);
+        const gid = String(galleryId);
         this.stoppingGalleries.delete(gid);
         this.deletingGalleries.delete(gid);
     }
@@ -364,14 +371,21 @@ class DownloaderEngine extends EventEmitter {
         if (!sanitizedTitle) return null;
         const sanitizedAuthor = cachedAuthor ? sanitizeName(cachedAuthor) : null;
 
+        const roots = [this.baseDownloadDir];
+        for (const label of Object.values(TYPE_LABELS)) {
+            const p = path.join(this.baseDownloadDir, label);
+            try { if (fs.statSync(p).isDirectory()) roots.push(p); } catch (e) {}
+        }
+
+        for (const root of roots) {
         let langDirs;
         try {
-            langDirs = fs.readdirSync(this.baseDownloadDir, { withFileTypes: true }).filter(d => d.isDirectory());
-        } catch (e) { return null; }
+            langDirs = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory());
+        } catch (e) { continue; }
 
         for (const langDir of langDirs) {
             let authorDirs;
-            const langPath = path.join(this.baseDownloadDir, langDir.name);
+            const langPath = path.join(root, langDir.name);
             try {
                 authorDirs = fs.readdirSync(langPath, { withFileTypes: true }).filter(d => d.isDirectory());
             } catch (e) { continue; }
@@ -417,6 +431,7 @@ class DownloaderEngine extends EventEmitter {
                     return { archived: false, path: folderPath, title: cachedTitle, pages: maxPage, ext, pageExts };
                 }
             }
+        }
         }
         return null;
     }
@@ -557,6 +572,35 @@ class DownloaderEngine extends EventEmitter {
     // one by one. Returns a processGallery() result object on success, or null to signal
     // "fall back to the normal per-page CDN flow" (bad key, feature disabled, rate limited,
     // network error — anything that isn't a clean success is treated as non-fatal here).
+    async fetchProviderMetadata(provider, galleryId) {
+        try {
+            return await provider.fetchMeta(String(galleryId), { fetchText: provider.transport === 'curl' ? curlFetchText : fetchText });
+        } catch (err) {
+            // 429/503 from a provider feeds the same cooldown/circuit-breaker path as site A.
+            if (err && (err.statusCode === 429 || err.statusCode === 503)) return { status: "RATE_LIMIT" };
+            throw err;
+        }
+    }
+
+    // Tries each candidate URL for a page in order. A 404 means "wrong extension" and moves on to
+    // the next candidate; any other failure is a real error and bubbles up so the normal per-page
+    // retry/backoff handles it. When every candidate 404s, the last 404 is thrown.
+    async downloadProviderPage(provider, candidates, folderPath, page, onProgress) {
+        let lastErr = null;
+        const download = provider.transport === 'curl' ? curlDownloadToFile : downloadToFile;
+        for (const candidate of candidates) {
+            const dest = path.join(folderPath, `${page}.${candidate.ext}`);
+            try {
+                await download(candidate.url, dest, provider.imageHeaders(), onProgress);
+                return { path: dest, ext: candidate.ext };
+            } catch (err) {
+                if (err.statusCode === 404) { lastErr = err; continue; }
+                throw err;
+            }
+        }
+        throw lastErr || new Error(`No candidate URL for page ${page}`);
+    }
+
     async tryApiArchiveDownload(galleryId, format, apiKey, ctx) {
         const { sanitizedTitle, title, folderPath, numPages, authorStr, langStr, extraMeta, currentTaskNum, totalTasks, trackerFile } = ctx;
 
@@ -600,7 +644,7 @@ class DownloaderEngine extends EventEmitter {
     }
 
     async processGallery(galleryId, currentTaskNum = 1, totalTasks = 1, _trackerFile = null) {
-        const gid = parseInt(String(galleryId), 10);
+        const gid = String(galleryId);
         this.activeGalleryId = gid;
 
         try {
@@ -639,7 +683,10 @@ class DownloaderEngine extends EventEmitter {
                 }
             }
 
-            const meta = await this.fetchMetadata(galleryId);
+            const provider = providers.providerForKey(galleryId);
+            const meta = provider.isDefault
+                ? await this.fetchMetadata(galleryId)
+                : await this.fetchProviderMetadata(provider, galleryId);
             if (this.isGalleryStopping(gid)) {
                 if (!this.isGalleryDeleting(gid)) {
                     await updateQueueItem(galleryId, { status: 'STOPPED' });
@@ -672,18 +719,31 @@ class DownloaderEngine extends EventEmitter {
                 return { status: "RATE_LIMIT" };
             }
 
-            const { title, mediaId, numPages, ext, pageExts, langStr, authorStr, extraMeta } = meta;
+            const { title, mediaId, numPages, pageExts, langStr, authorStr } = meta;
+            const contentType = (!provider.isDefault && isContentType(meta.contentType)) ? meta.contentType : null;
+            const extraMeta = {
+                ...(meta.extraMeta || {}),
+                ...(contentType ? { contentType, category: meta.category || null } : {})
+            };
+            if (meta.categoryError) {
+                await logActivity(`[CATEGORY] ID ${galleryId}: ${meta.categoryError} — continuing without a content type`);
+            }
+            let ext = meta.ext;
             const extFor = (page) => pageExts[page] || ext;
             const sanitizedLang = sanitizeName(langStr);
             const sanitizedAuthor = sanitizeName(authorStr);
-            const sanitizedTitle = sanitizeName(title) || galleryId;
+            const sanitizedTitle = sanitizeName(title) || safeKeyName(galleryId);
 
             if (!this.isGalleryDeleting(gid)) {
                 await updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
                 await updateQueueItem(galleryId, { pagesTotal: numPages });
+                if (contentType) await updateQueueItem(galleryId, { category: contentType });
             }
 
-            const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
+            const typeDir = typeFolderName(contentType);
+            const parentDir = typeDir
+                ? path.join(this.baseDownloadDir, typeDir, sanitizedLang, sanitizedAuthor)
+                : path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
             let folderPath = path.join(parentDir, sanitizedTitle);
 
             if (fs.existsSync(parentDir)) {
@@ -698,7 +758,7 @@ class DownloaderEngine extends EventEmitter {
                     if (archiveMatch) {
                         const archiveExt = archiveMatch.name.match(/\.(cbz|zip)$/i)[1].toLowerCase();
                         const archivePath = path.join(parentDir, archiveMatch.name);
-                        await saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages });
+                        await saveArchivedToLibrary(galleryId, sanitizedTitle, archivePath, archiveExt, { author: authorStr, lang: langStr, pages: numPages, extraMeta });
                         await updateListStatus(null, galleryId, "SKIPPED - Already in Library");
                         await updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
                         await updateQueueItem(galleryId, { pagesDone: numPages, pagesTotal: numPages });
@@ -713,7 +773,7 @@ class DownloaderEngine extends EventEmitter {
 
             const apiKey = process.env.NHENTAI_API_KEY;
             const targetFormat = (await getBatchFormatForGallery(null, galleryId)) || this.downloadFormat;
-            if (apiKey && (targetFormat === 'cbz' || targetFormat === 'zip') && !this.isGalleryStopping(gid)) {
+            if (provider.isDefault && apiKey && (targetFormat === 'cbz' || targetFormat === 'zip') && !this.isGalleryStopping(gid)) {
                 const apiResult = await this.tryApiArchiveDownload(galleryId, targetFormat, apiKey, {
                     sanitizedTitle, title, folderPath, numPages, authorStr, langStr, extraMeta,
                     currentTaskNum, totalTasks, trackerFile: null
@@ -730,7 +790,7 @@ class DownloaderEngine extends EventEmitter {
                     });
                 } catch (e) {
                     if (e.code === 'ENOENT' || e.code === 'ENAMETOOLONG' || e.code === 'EINVAL') {
-                        folderPath = path.join(parentDir, galleryId.toString());
+                        folderPath = path.join(parentDir, safeKeyName(galleryId));
                         logError(galleryId, `Folder name rejected by filesystem (${e.code}), falling back to gallery ID as folder name`);
                         fs.mkdirSync(folderPath, { recursive: true });
                     } else {
@@ -743,8 +803,16 @@ class DownloaderEngine extends EventEmitter {
             let pendingPages = [];
 
             for (let j = 1; j <= numPages; j++) {
-                const checkPath = path.join(folderPath, `${j}.${extFor(j)}`);
+                let checkPath = path.join(folderPath, `${j}.${extFor(j)}`);
+                if (!provider.isDefault && !verifyImage(checkPath)) {
+                    const hit = PAGE_EXTS.find(e => verifyImage(path.join(folderPath, `${j}.${e}`)));
+                    if (hit) {
+                        pageExts[j] = hit;
+                        checkPath = path.join(folderPath, `${j}.${hit}`);
+                    }
+                }
                 if (verifyImage(checkPath)) {
+                    if (!provider.isDefault) pageExts[j] = path.extname(checkPath).slice(1);
                     completed++;
                 } else {
                     if (fs.existsSync(checkPath)) fs.unlinkSync(checkPath);
@@ -847,7 +915,7 @@ class DownloaderEngine extends EventEmitter {
                             }
                             this.clearGalleryStopFlags(gid);
                             galleryStopped = true;
-                            this.emit('gallery_stopped', { galleryId: gid, pagesDone: completed, pagesTotal: numPages, deleted: wasDeleted });
+                            this.emit('gallery_stopped', { galleryId: toPublicId(gid), pagesDone: completed, pagesTotal: numPages, deleted: wasDeleted });
                             return resolve();
                         }
                         return;
@@ -871,11 +939,14 @@ class DownloaderEngine extends EventEmitter {
                     while (active < this.concurrency && pendingPages.length > 0 && !this.isStopped && !this.isGalleryStopping(gid)) {
                         const currentPage = pendingPages.shift();
                         const pageExt = extFor(currentPage);
-                        const destPath = path.join(folderPath, `${currentPage}.${pageExt}`);
+                        let destPath = path.join(folderPath, `${currentPage}.${pageExt}`);
                         const dynamicHost = this.getRandomImageHost();
-                        const imageUrl = `https://${dynamicHost}/galleries/${mediaId}/${currentPage}.${pageExt}`;
+                        const candidates = provider.isDefault ? null : meta.pageUrls(currentPage);
+                        const imageUrl = provider.isDefault
+                            ? `https://${dynamicHost}/galleries/${mediaId}/${currentPage}.${pageExt}`
+                            : (candidates[0] ? candidates[0].url : `${provider.origin}/page/${currentPage}`);
                         const retryCount = pageRetryCounts.get(currentPage) || 0;
-                        const startDelay = retryCount > 0 ? Math.min(1000 * 2 ** retryCount, 15000) : Math.floor(Math.random() * 400);
+                        const startDelay = retryCount > 0 ? Math.min(this.pageRetryBaseMs * 2 ** retryCount, 15000) : Math.floor(Math.random() * 400);
 
                         const pageEntry = {
                             page: currentPage,
@@ -888,12 +959,22 @@ class DownloaderEngine extends EventEmitter {
                         activePages.set(currentPage, pageEntry);
 
                         active++;
+                        const onPageProgress = (received, total) => {
+                            pageEntry.bytesReceived = received;
+                            pageEntry.totalBytes = total;
+                            lastByteAt = Date.now();
+                        };
                         sleep(startDelay)
-                            .then(() => this.downloadImage(imageUrl, destPath, dynamicHost, (received, total) => {
-                                pageEntry.bytesReceived = received;
-                                pageEntry.totalBytes = total;
-                                lastByteAt = Date.now();
-                            }))
+                            .then(() => {
+                                if (provider.isDefault) {
+                                    return this.downloadImage(imageUrl, destPath, dynamicHost, onPageProgress);
+                                }
+                                return this.downloadProviderPage(provider, candidates, folderPath, currentPage, onPageProgress)
+                                    .then((saved) => {
+                                        destPath = saved.path;
+                                        pageExts[currentPage] = saved.ext;
+                                    });
+                            })
                             .then(async () => {
                                 if (!verifyImage(destPath)) {
                                     const attempt = retryCount + 1;
@@ -943,8 +1024,37 @@ class DownloaderEngine extends EventEmitter {
                                     this.emit('progress', this.currentProgress);
                                 }
                             })
-                            .catch((err) => {
+                            .catch(async (err) => {
                                 const attempt = retryCount + 1;
+                                if (!provider.isDefault && err && err.statusCode === 404 && attempt >= PLACEHOLDER_RETRY_THRESHOLD) {
+                                    // Every candidate extension 404'd repeatedly: the page does not exist on the
+                                    // source. Substitute a blank page rather than retrying forever.
+                                    try {
+                                        const phPath = path.join(folderPath, `${currentPage}.png`);
+                                        const phSize = writeBlankPlaceholderImage(phPath);
+                                        pageExts[currentPage] = 'png';
+                                        await logPlaceholderPage(galleryId, currentPage, title);
+                                        await logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: source returned 404 for every candidate ${attempt}x in a row - substituted a blank page instead of retrying forever`);
+                                        pageRetryCounts.delete(currentPage);
+                                        pageErrors.delete(currentPage);
+                                        completedBytes += phSize;
+                                        completed++;
+                                        if (!this.isGalleryDeleting(gid)) {
+                                            await updateQueueItem(galleryId, {
+                                                status: this.isGalleryStopping(gid) ? 'STOPPED' : 'ON_PROGRESS',
+                                                pagesDone: completed,
+                                                pagesTotal: numPages
+                                            });
+                                        }
+                                        const phPercent = Math.round((completed / numPages) * 100);
+                                        this.currentProgress = buildProgress();
+                                        this.currentProgress.percent = phPercent;
+                                        this.emit('progress', this.currentProgress);
+                                        return;
+                                    } catch (phErr) {
+                                        err = phErr;
+                                    }
+                                }
                                 pageRetryCounts.set(currentPage, attempt);
                                 pageErrors.set(currentPage, err.message);
                                 pendingPages.unshift(currentPage);

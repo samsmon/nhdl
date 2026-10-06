@@ -2,7 +2,10 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { urlForKey, normalizeGalleryId, toPublicId, publicRow, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { parseListText, parseListTextDetailed } = require('./listParser');
+const { canonicalKey } = require('../providers');
+const { isContentType } = require('../providers/contentType');
 
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
 const DEFAULT_DB_PATH = process.env.NHDL_DB_PATH || path.join(ROOT_DIR, 'data', 'nhdl.db');
@@ -72,6 +75,76 @@ const MIGRATIONS = [
             const libCols = db.prepare(`PRAGMA table_info(library)`).all().map(c => c.name);
             if (!libCols.includes('meta')) {
                 db.exec(`ALTER TABLE library ADD COLUMN meta TEXT`);
+            }
+        }
+    }
+    // NOTE: gallery_id must always be bound as the canonical string from normalizeGalleryId;
+    // node:sqlite binds JS numbers as REAL, which would store '202.0' in a TEXT column.
+    ,{
+        version: 3,
+        up(db) {
+            const queueType = db.prepare(`PRAGMA table_info(queue)`).all().find(c => c.name === 'gallery_id');
+            if (queueType && String(queueType.type).toUpperCase() !== 'TEXT') {
+                db.exec(`
+                    ALTER TABLE queue RENAME TO queue_v2;
+                    DROP INDEX IF EXISTS idx_queue_status;
+                    DROP INDEX IF EXISTS idx_queue_batch;
+                    CREATE TABLE queue (
+                      id           INTEGER PRIMARY KEY,
+                      gallery_id   TEXT    NOT NULL UNIQUE,
+                      url          TEXT    NOT NULL,
+                      title        TEXT,
+                      status       TEXT    NOT NULL DEFAULT 'PENDING',
+                      batch        INTEGER NOT NULL DEFAULT 1,
+                      priority     INTEGER NOT NULL DEFAULT 0,
+                      pages_done   INTEGER NOT NULL DEFAULT 0,
+                      pages_total  INTEGER NOT NULL DEFAULT 0,
+                      error        TEXT,
+                      retries      INTEGER NOT NULL DEFAULT 0,
+                      created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+                      updated_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+                      format       TEXT
+                    );
+                    INSERT INTO queue (id, gallery_id, url, title, status, batch, priority, pages_done, pages_total, error, retries, created_at, updated_at, format)
+                      SELECT id, CAST(gallery_id AS TEXT), url, title, status, batch, priority, pages_done, pages_total, error, retries, created_at, updated_at, format
+                      FROM queue_v2;
+                    DROP TABLE queue_v2;
+                    CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
+                    CREATE INDEX IF NOT EXISTS idx_queue_batch  ON queue(batch);
+                `);
+            }
+
+            const libType = db.prepare(`PRAGMA table_info(library)`).all().find(c => c.name === 'gallery_id');
+            if (libType && String(libType.type).toUpperCase() !== 'TEXT') {
+                db.exec(`
+                    ALTER TABLE library RENAME TO library_v2;
+                    CREATE TABLE library (
+                      gallery_id   TEXT PRIMARY KEY,
+                      title        TEXT NOT NULL,
+                      path         TEXT NOT NULL,
+                      pages        INTEGER,
+                      format       TEXT,
+                      language     TEXT,
+                      artist       TEXT,
+                      added_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                      meta         TEXT
+                    );
+                    INSERT INTO library (gallery_id, title, path, pages, format, language, artist, added_at, meta)
+                      SELECT CAST(gallery_id AS TEXT), title, path, pages, format, language, artist, added_at, meta
+                      FROM library_v2;
+                    DROP TABLE library_v2;
+                `);
+            }
+            // events.gallery_id keeps INTEGER affinity on purpose: SQLite stores non-numeric
+            // text (prefixed keys) as TEXT in such a column, and numeric keys stay INTEGER.
+        }
+    }
+    ,{
+        version: 4,
+        up(db) {
+            const cols = db.prepare(`PRAGMA table_info(queue)`).all().map(c => c.name);
+            if (!cols.includes('category')) {
+                db.exec(`ALTER TABLE queue ADD COLUMN category TEXT`);
             }
         }
     }
@@ -230,7 +303,7 @@ async function requeueFailedItems(options = {}, db = null) {
 async function enqueueGallery(item, db = null) {
     const active = db || await getDb();
     const galleryId = normalizeGalleryId(item.galleryId ?? item.gallery_id);
-    const url = item.url || `https://nhentai.net/g/${galleryId}/`;
+    const url = item.url || urlForKey(galleryId);
     const title = item.title ?? null;
     const status = item.status || 'PENDING';
     const batch = Number.isFinite(item.batch) ? item.batch : 1;
@@ -266,17 +339,17 @@ async function enqueueGallery(item, db = null) {
 async function getQueueItem(galleryId, db = null) {
     const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
-    return active.prepare(`SELECT * FROM queue WHERE gallery_id = ?`).get(id) || null;
+    return publicRow(active.prepare(`SELECT * FROM queue WHERE gallery_id = ?`).get(id) || null);
 }
 
 async function getNextPendingItem(db = null) {
     const active = db || await getDb();
-    return active.prepare(`
+    return publicRow(active.prepare(`
         SELECT * FROM queue
         WHERE status = 'PENDING'
         ORDER BY priority DESC, id ASC
         LIMIT 1
-    `).get() || null;
+    `).get() || null);
 }
 
 async function getQueueItems(options = {}, db = null) {
@@ -310,7 +383,7 @@ async function getQueueItems(options = {}, db = null) {
         }
     }
 
-    return active.prepare(sql).all(...params);
+    return active.prepare(sql).all(...params).map(publicRow);
 }
 
 async function updateQueueItem(galleryId, fields = {}, db = null) {
@@ -331,7 +404,8 @@ async function updateQueueItem(galleryId, fields = {}, db = null) {
         pages_total: 'pages_total',
         error: 'error',
         retries: 'retries',
-        format: 'format'
+        format: 'format',
+        category: 'category'
     };
 
     const seenCols = new Set();
@@ -376,7 +450,7 @@ async function deleteQueueItem(galleryId, db = null) {
     const res = active.prepare(`DELETE FROM queue WHERE gallery_id = ?`).run(id);
     if (res.changes > 0) {
         const batchCount = Math.max(1, await getMaxBatch(active));
-        dbEvents.emit('item', { type: 'deleted', galleryId: id, batchCount });
+        dbEvents.emit('item', { type: 'deleted', galleryId: toPublicId(id), batchCount });
     }
     return Number(res.changes || 0);
 }
@@ -400,7 +474,7 @@ async function pauseQueueItems(ids = [], db = null) {
             if (!isPausable) continue;
 
             if (st === 'ON_PROGRESS') {
-                stoppingIds.push(gid);
+                stoppingIds.push(toPublicId(gid));
             }
             await updateQueueItem(gid, { status: 'STOPPED' }, active);
             paused++;
@@ -434,7 +508,7 @@ async function resumeQueueItems(ids = [], db = null) {
 
             await updateQueueItem(gid, { status: 'PENDING', error: null }, active);
             resumed++;
-            resumedIds.push(gid);
+            resumedIds.push(toPublicId(gid));
         }
         active.exec('COMMIT');
     } catch (err) {
@@ -459,7 +533,7 @@ async function deleteQueueItems(ids = [], db = null) {
             const row = await getQueueItem(gid, active);
             if (!row) continue;
             if (row.status === 'ON_PROGRESS') {
-                stoppingIds.push(gid);
+                stoppingIds.push(toPublicId(gid));
             }
             deleted += await deleteQueueItem(gid, active);
         }
@@ -494,7 +568,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
 
     let selectedCount = 0;
     for (let i = 0; i < rows.length; i++) {
-        if (targetSet.has(Number(rows[i].gallery_id))) selectedCount++;
+        if (targetSet.has(String(rows[i].gallery_id))) selectedCount++;
     }
     if (selectedCount === 0) return { updated: 0 };
 
@@ -510,31 +584,31 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
     try {
         if (action === 'top') {
             const maxP = rows.reduce((m, r) => Math.max(m, Number(r.priority) || 0), 0);
-            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = maxP + (selectedRows.length - i);
-                const gid = Number(selectedRows[i].gallery_id);
+                const gid = String(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
                     stmt.run(newP, nowSql, gid);
-                    changedItems.push({ galleryId: gid, priority: newP });
+                    changedItems.push({ galleryId: toPublicId(gid), priority: newP });
                 }
             }
         } else if (action === 'bottom') {
             const minP = rows.reduce((m, r) => Math.min(m, Number(r.priority) || 0), 0);
-            const selectedRows = rows.filter(r => targetSet.has(Number(r.gallery_id)));
+            const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = minP - (i + 1);
-                const gid = Number(selectedRows[i].gallery_id);
+                const gid = String(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
                     stmt.run(newP, nowSql, gid);
-                    changedItems.push({ galleryId: gid, priority: newP });
+                    changedItems.push({ galleryId: toPublicId(gid), priority: newP });
                 }
             }
         } else if (action === 'up' || action === 'down') {
             const reordered = [...rows];
             if (action === 'up') {
                 for (let i = 1; i < reordered.length; i++) {
-                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i - 1].gallery_id))) {
+                    if (targetSet.has(String(reordered[i].gallery_id)) && !targetSet.has(String(reordered[i - 1].gallery_id))) {
                         const tmp = reordered[i - 1];
                         reordered[i - 1] = reordered[i];
                         reordered[i] = tmp;
@@ -542,7 +616,7 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                 }
             } else {
                 for (let i = reordered.length - 2; i >= 0; i--) {
-                    if (targetSet.has(Number(reordered[i].gallery_id)) && !targetSet.has(Number(reordered[i + 1].gallery_id))) {
+                    if (targetSet.has(String(reordered[i].gallery_id)) && !targetSet.has(String(reordered[i + 1].gallery_id))) {
                         const tmp = reordered[i + 1];
                         reordered[i + 1] = reordered[i];
                         reordered[i] = tmp;
@@ -564,9 +638,9 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                     const r = reordered[idx];
                     const slotPriority = Number(rows[idx].priority);
                     if (Number(r.priority) !== slotPriority) {
-                        const gid = Number(r.gallery_id);
+                        const gid = String(r.gallery_id);
                         stmt.run(slotPriority, nowSql, gid);
-                        changedItems.push({ galleryId: gid, priority: slotPriority });
+                        changedItems.push({ galleryId: toPublicId(gid), priority: slotPriority });
                     }
                 }
             } else {
@@ -574,9 +648,9 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                     const r = reordered[idx];
                     const desiredPriority = total - idx;
                     if (Number(r.priority) !== desiredPriority) {
-                        const gid = Number(r.gallery_id);
+                        const gid = String(r.gallery_id);
                         stmt.run(desiredPriority, nowSql, gid);
-                        changedItems.push({ galleryId: gid, priority: desiredPriority });
+                        changedItems.push({ galleryId: toPublicId(gid), priority: desiredPriority });
                     }
                 }
             }
@@ -622,7 +696,7 @@ async function clearCompletedQueue(db = null) {
     `).run();
     if (res.changes > 0) {
         const batchCount = Math.max(1, await getMaxBatch(active));
-        const removedIds = rows.map(r => Number(r.gallery_id));
+        const removedIds = rows.map(r => toPublicId(r.gallery_id));
         dbEvents.emit('item', { type: 'cleared', removedIds, batchCount });
     }
     return Number(res.changes || 0);
@@ -634,57 +708,10 @@ async function getMaxBatch(db = null) {
     return row ? Number(row.max_batch) : 0;
 }
 
-function parseListText(text, defaultFormat = null) {
-    const lines = String(text || '').split(/\r?\n/);
-    let currentBatch = 1;
-    let currentFormat = defaultFormat;
-    const parsedItems = [];
-    const seen = new Set();
-
-    for (const rawLine of lines) {
-        const line = rawLine.trim();
-        if (!line) continue;
-
-        const batchMatch = line.match(/^#\s*BATCH\s+(\d+)(?:\s+FORMAT=(\w+))?/i);
-        if (batchMatch) {
-            currentBatch = parseInt(batchMatch[1], 10);
-            currentFormat = batchMatch[2] ? batchMatch[2].toLowerCase() : defaultFormat;
-            continue;
-        }
-        if (line.startsWith('#')) continue;
-
-        const idMatch = line.match(/(?:(?:nhentai\.net|certain\.site)\/g\/|^)\s*(\d+)\b/i)
-            || line.match(/\b(\d{5,7})\b/);
-        if (!idMatch) continue;
-
-        const galleryId = parseInt(idMatch[1], 10);
-        if (!Number.isFinite(galleryId) || seen.has(galleryId)) continue;
-        seen.add(galleryId);
-
-        let title = null;
-        const pipeIdx = line.indexOf('|');
-        if (pipeIdx !== -1) {
-            const afterPipe = line.slice(pipeIdx + 1).trim();
-            if (afterPipe) title = afterPipe;
-        }
-
-        const url = `https://nhentai.net/g/${galleryId}/`;
-        parsedItems.push({
-            galleryId,
-            url,
-            title,
-            batch: currentBatch,
-            format: currentFormat
-        });
-    }
-
-    return parsedItems;
-}
-
 async function importListText(text, options = {}, db = null) {
     const active = db || await getDb();
     const { replace = false, defaultFormat = null } = options;
-    const parsedItems = parseListText(text, defaultFormat);
+    const { items: parsedItems, ignored } = parseListTextDetailed(text, defaultFormat);
     const galleryIds = parsedItems.map(i => i.galleryId);
 
     let added = 0;
@@ -694,10 +721,10 @@ async function importListText(text, options = {}, db = null) {
     active.exec('BEGIN');
     try {
         if (replace) {
-            const keepSet = new Set(galleryIds);
+            const keepSet = new Set(galleryIds.map(g => String(g)));
             const existingRows = active.prepare(`SELECT gallery_id FROM queue`).all();
             for (const r of existingRows) {
-                if (!keepSet.has(Number(r.gallery_id))) {
+                if (!keepSet.has(String(r.gallery_id))) {
                     await deleteQueueItem(r.gallery_id, active);
                 }
             }
@@ -772,7 +799,7 @@ async function importListText(text, options = {}, db = null) {
         throw err;
     }
 
-    return { added, updated, duplicates, galleryIds, total: parsedItems.length };
+    return { added, updated, duplicates, ignored, galleryIds, total: parsedItems.length };
 }
 
 async function exportListText(db = null) {
@@ -789,7 +816,7 @@ async function exportListText(db = null) {
             const fmtSuffix = row.format ? ` FORMAT=${row.format}` : '';
             lines.push(`# BATCH ${currentBatch}${fmtSuffix}`);
         }
-        const baseUrl = row.url || `https://nhentai.net/g/${row.gallery_id}/`;
+        const baseUrl = row.url || urlForKey(row.gallery_id);
         if (row.title) {
             lines.push(`${baseUrl} | ${row.title}`);
         } else {
@@ -849,7 +876,7 @@ function parseLibraryRow(row) {
     const isArchived = row.format === 'cbz' || row.format === 'zip';
     const isSkipped = row.format === 'skipped' || !!(parsedMeta && parsedMeta.skipped);
     return {
-        gallery_id: row.gallery_id,
+        gallery_id: toPublicId(row.gallery_id),
         id: String(row.gallery_id),
         title: row.title,
         path: row.path,
@@ -991,7 +1018,7 @@ async function migrateLegacyConfigJson(configPath = path.join(ROOT_DIR, 'config.
 async function logEvent({ level = 'info', galleryId = null, message = '', maxRows = 10000 }, db = null) {
     const active = db || await getDb();
     const gid = galleryId !== null && galleryId !== undefined && String(galleryId).trim() !== ''
-        ? parseInt(String(galleryId), 10) || null
+        ? (canonicalKey(galleryId) || null)
         : null;
     const nowIso = new Date().toISOString();
 
@@ -1039,8 +1066,8 @@ async function getEvents(options = {}, db = null) {
 async function exportData(db = null) {
     const active = db || await getDb();
     const schemaVersion = await getSchemaVersion(active);
-    const queue = active.prepare(`SELECT * FROM queue ORDER BY batch ASC, id ASC`).all();
-    const library = active.prepare(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`).all();
+    const queue = active.prepare(`SELECT * FROM queue ORDER BY batch ASC, id ASC`).all().map(publicRow);
+    const library = active.prepare(`SELECT * FROM library ORDER BY added_at DESC, gallery_id DESC`).all().map(publicRow);
     const settings = active.prepare(`SELECT * FROM settings ORDER BY key ASC`).all();
     const events = active.prepare(`SELECT * FROM events ORDER BY id ASC`).all();
 
@@ -1082,12 +1109,12 @@ async function importData(payload, options = {}, db = null) {
         const queueStmt = active.prepare(`
             INSERT ${mode === 'merge' ? 'OR IGNORE' : 'OR REPLACE'} INTO queue (
                 gallery_id, url, title, status, batch, priority,
-                pages_done, pages_total, error, retries, created_at, updated_at, format
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                pages_done, pages_total, error, retries, created_at, updated_at, format, category
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         `);
         for (const r of queueRows) {
             const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
-            const url = r.url || `https://nhentai.net/g/${gid}/`;
+            const url = r.url || urlForKey(gid);
             const title = r.title || null;
             const status = r.status || 'PENDING';
             const batch = Number(r.batch || 1);
@@ -1099,10 +1126,11 @@ async function importData(payload, options = {}, db = null) {
             const createdAt = r.created_at || r.createdAt || new Date().toISOString();
             const updatedAt = r.updated_at || r.updatedAt || new Date().toISOString();
             const format = r.format || null;
+            const category = isContentType(r.category) ? r.category : null;
 
             const res = queueStmt.run(
                 gid, url, title, status, batch, priority,
-                pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format
+                pagesDone, pagesTotal, error, retries, createdAt, updatedAt, format, category
             );
             if (res.changes > 0) imported.queue++;
         }

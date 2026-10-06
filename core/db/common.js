@@ -1,9 +1,16 @@
+const { canonicalKey, toPublicId, sourceOf, providerForKey } = require('../providers');
+
+// Site URL for a canonical key (used when a row has no url): each source builds its own.
+function urlForKey(key) {
+    return providerForKey(String(key)).buildUrl(String(key));
+}
+
 function normalizeGalleryId(galleryId) {
-    const num = typeof galleryId === 'number' ? galleryId : parseInt(String(galleryId).trim(), 10);
-    if (!Number.isFinite(num) || num <= 0) {
+    const key = canonicalKey(galleryId);
+    if (!key) {
         throw new Error(`Invalid gallery_id: ${galleryId}`);
     }
-    return num;
+    return key;
 }
 
 function formatQueueRow(r) {
@@ -12,7 +19,8 @@ function formatQueueRow(r) {
     const displayUrl = r.title ? `${r.url} | ${r.title}` : r.url;
     return {
         id: r.id,
-        galleryId: r.gallery_id,
+        galleryId: toPublicId(r.gallery_id),
+        source: sourceOf(r.gallery_id),
         status: displayStatus,
         rawStatus: r.status,
         url: displayUrl,
@@ -24,9 +32,14 @@ function formatQueueRow(r) {
         error: r.error || null,
         retries: r.retries || 0,
         format: r.format || null,
+        category: r.category || null,
         createdAt: r.created_at instanceof Date ? r.created_at.toISOString() : r.created_at,
         updatedAt: r.updated_at instanceof Date ? r.updated_at.toISOString() : r.updated_at
     };
+}
+
+function publicRow(row) {
+    return row ? { ...row, gallery_id: toPublicId(row.gallery_id) } : row;
 }
 
 function maskDatabaseUrl(url) {
@@ -42,12 +55,10 @@ function maskDatabaseUrl(url) {
     }
 }
 
-const CURRENT_APP_SCHEMA_VERSION = 2;
+const CURRENT_APP_SCHEMA_VERSION = 4;
 
 function isValidGalleryId(rawId) {
-    if (rawId === null || rawId === undefined) return false;
-    const num = typeof rawId === 'number' ? rawId : parseInt(String(rawId).trim(), 10);
-    return Number.isInteger(num) && num > 0;
+    return canonicalKey(rawId) !== null;
 }
 
 function validateImportPayload(payload, options = {}, appSchemaVersion = CURRENT_APP_SCHEMA_VERSION) {
@@ -110,8 +121,11 @@ function validateImportPayload(payload, options = {}, appSchemaVersion = CURRENT
 module.exports = {
     CURRENT_APP_SCHEMA_VERSION,
     normalizeGalleryId,
+    urlForKey,
     isValidGalleryId,
     formatQueueRow,
+    toPublicId,
+    publicRow,
     maskDatabaseUrl,
     validateImportPayload
 };

@@ -8,6 +8,44 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Tipe konten (comic/manga/other)
+- Modul baru `core/providers/contentType.js`: slug kategori situs dipetakan ke tipe (`western`/`porn-comic`/`comic` -> `comic`; `manga`/`doujinshi` -> `manga`; lainnya -> `other`). Provider site B1/B2/C mengekstrak kategori; kegagalan ekstraksi dicatat di `categoryError` tanpa menggagalkan unduhan.
+- Skema v4: kolom `queue.category` (SQLite dan PostgreSQL), ikut export/import. Library menyimpan `meta.contentType`.
+- Engine: galeri sumber berprefix disimpan di `<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`; site A tidak berubah. `findExistingOnDisk` memindai folder dasar dan semua folder tipe.
+- UI: badge tipe dan filter Type di antrian dan library; filter dengan tipe yang sudah tidak ada diabaikan, dan sidebar menutup saat tipe dipilih.
+- Pengecekan langsung ke situs asli TIDAK dapat dijalankan (DNS sedang diblokir, sertifikat yang diterima bukan milik situs). Diganti pengecekan offline: parser asli dijalankan terhadap markup/JSON asli yang tersimpan, satu galeri per sumber. Hasil: site B1 -> kategori `manga` -> tipe `manga` (240 halaman, bahasa Japanese); site B2 -> `western` -> `comic` (51 halaman, English); site C -> `porn-comic` -> `comic` (17 gambar, tanpa `categoryError`; respons detail site C disuplai stub). Pengecekan langsung masih terbuka.
+- Test suite: 122 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Pembaruan tampilan antrian
+- Filter sidebar "Queued" menjadi **Queue** dan kini mencakup `PENDING` dan `ON_PROGRESS` (item yang sedang diunduh tetap terlihat di antrian; "Downloading" hanya `ON_PROGRESS`, "Completed" tetap `DONE`/`SKIPPED`). Status bar tetap menghitung `PENDING` saja lewat `filterCounts.pending` supaya "Active" dan "Queued" tidak dihitung ganda.
+- Baris `ON_PROGRESS` diberi penanda aksen biru di tepi kiri dan latar tipis.
+- Chip hitung mundur kuning (mis. `⏱ 22s`) di sel Status: pada item `PENDING` pertama menurut urutan rank saat `COOLDOWN`/`BATCH_REST`, dan pada item berstatus `COOLDOWN` saat `RATE_LIMIT` 429 (format `m:ss`). Data dari `liveProgress` yang sudah ada lewat SSE; tidak ada perubahan server/API dan tidak ada polling.
+- Kolom desktop baru **Ditambahkan** (`createdAt`, terakhir setelah Format, bisa diurutkan, tanggal tidak valid selalu di akhir). Waktu lokal `06 Okt 13:31`, tooltip `2026-10-06 13:31:45`; format SQLite (UTC tanpa zona) dan ISO PostgreSQL sama-sama diurai. Lebar kolom tersimpan digabung dengan default sehingga kolom baru selalu punya lebar.
+- Helper murni baru `webui/src/lib/queueView.js` dengan tes `test/webuiQueueView.test.js` (ditulis lebih dulu).
+- Badge sumber kini tampil untuk semua item (termasuk sumber default, label fallback situs default bila daftar sumber server belum dimuat) di antrian dan library; bagian "Source" sidebar tampil selama ada minimal satu sumber. Hanya UI, tanpa perubahan server/API.
+- Test suite: 101 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Transport curl untuk site C
+- `core/providers/http.js`: `resolveCurlPath`, `curlFetchText`, dan `curlDownloadToFile` (system `curl` lewat `execFile` dengan array argumen; status HTTP dibaca lewat `-w`, unduhan ke `.part` lalu rename hanya untuk 200, error HTTP membawa `statusCode`). Ditambahkan tanpa mengubah ekspor lama.
+- Provider punya field `transport`: `'curl'` untuk site C, `'node'` untuk site B1/B2 dan default. `fetchProviderMetadata` dan `downloadProviderPage` di engine memilih helper sesuai `transport`; logika fallback 404 per kandidat, placeholder, dan retry tidak berubah.
+- Alasan: API gambar site C menjawab 403 (tantangan Cloudflare) untuk klien Node, sedangkan `curl` sistem dengan User-Agent/Referer yang sama mendapat 200. Tidak ada impersonasi, penyelesaian tantangan, atau trik DNS.
+- Tes baru untuk helper curl, pemilihan transport, dan unduhan engine lewat curl dari server lokal. Tes langsung site C (antrian lewat API, SQLite sementara): 17/17 file (16 `.webp` + 1 `.jpg`, total byte sama dengan salinan referensi), tanpa `.part`, tanpa file < 2 KB, `pageExts` di library sama dengan file di disk, marker `.nhdl-id` berisi kunci berprefix, field `source` berisi prefix sumber.
+- Test suite: 84 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Multi-source download
+- **Lapisan provider (`core/providers/`)**: registry sumber unduhan dengan pengenalan URL/ID/kunci berprefix (`resolveInput`), provider default (certain site ( ͡° ͜ʖ ͡°)) plus tiga sumber baru: site B1 dan B2 (halaman galeri HTML, ekstensi per halaman) dan site C (slug + JSON API gambar). `http.js` menyediakan `fetchText` dan `downloadToFile` bersama.
+- **Kunci galeri berprefix**: `gallery_id` kini kunci kanonik bertipe teks (`b1:...`, `b2:...`, `c1:...`; site A tetap angka polos). `toPublicId()` mengembalikan angka untuk site A dan string untuk sumber lain, sehingga API lama tetap kompatibel. `core/db/listParser.js` mengurai baris `list.txt` lewat registry; baris yang tidak dikenali dilewati dan dihitung di `ignored`.
+- **Migrasi skema v3** di SQLite dan PostgreSQL: kolom `gallery_id` menjadi `TEXT` di `queue` dan `library`; export/import tetap membawa ID publik.
+- **Engine**: galeri berprefix diunduh lewat provider (semua halaman yang diumumkan, tanpa filter), mendukung pause/resume per halaman, placeholder untuk halaman yang 404 di semua kandidat, ekstensi per halaman tercatat eksplisit saat resume, serta nama folder aman (tanpa `:`).
+- **Field `source`** ditambahkan di `/api/status`, `/api/library`, dan event SSE `item`; kontrak dicatat di `docs/API.md`.
+- **UI**: badge sumber di tabel antrian, sidebar, dan Library, plus filter sumber; seluruh webui memakai kunci string.
+- **Tes langsung** terhadap tiga situs sungguhan (antrian lewat API, SQLite sementara): site B1 240/240 halaman dan site B2 51/51 halaman selesai tanpa file `.part`, tanpa file < 2 KB, ekstensi di library sama dengan file di disk, marker `.nhdl-id` berisi kunci berprefix, pause (72/240) lalu resume berlanjut sampai 240/240. Site C **gagal**: API-nya menjawab 403 (tantangan Cloudflare) untuk klien Node (`fetch`/`https`) sementara `curl` dengan header yang sama lolos; tidak dipatch di entri ini dan dicatat sebagai pekerjaan lanjutan di `docs/PLAN.md`.
+- **Perbaikan hasil review akhir**: baris tanpa skema (`host/g/123/`) di-resolve ke provider yang benar dan host asing tidak lagi jatuh ke ID site A (dihitung `ignored`); 429/503 dari site B/C masuk ke cooldown/circuit breaker yang sama dengan site A; unduhan gambar memeriksa signature file (halaman blokir/tantangan HTML ditolak, bukan disimpan sebagai gambar); jumlah `ignored` tampil di log aktivitas dan toast; URL fallback per sumber saat `url` kosong (enqueue/import); nilai `load_server`/`load_dir`/`load_id` divalidasi sebelum membentuk URL; API site C tanpa gambar menjadi SKIPPED permanen; koreksi dokumen (`galleryId`, `stopping`, contoh `source`, catatan prefix asli di `docs/AI_AGENT.md`).
+- Test suite: 96 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
+## 2026-10-06 · Manual (Maja) · Multi-source download
+- Meminta dukungan unduhan dari beberapa sumber (tiga situs tambahan) dan menyediakan sampel manual untuk pembanding tes langsung.
+
 ## 2026-09-28 · AI (Claude Code, Opus 5.5) · Fase 8
 - Tambah `docs/AI_AGENT.md` (bahasa Inggris) untuk AI agent: larangan tanpa izin user, deploy (lokal, Docker, SQLite vs PostgreSQL, auto-migrasi), tabel env var yang dicek ke kode, health check dengan output yang diharapkan, manage lewat API (antrian, prioritas, log, API key, backup/export/import/restore), peta modul dan pola fitur DB → REST → SSE, serta tabel troubleshooting per gejala.
 - `README.md`: blok pemicu "If you are an AI agent" di paling atas.

@@ -39,7 +39,7 @@
   const libEntry = $derived(appStore.selectedLibraryEntry);
   const lp = $derived(appStore.liveProgress);
   const isItemLive = $derived(
-    Boolean(item && lp && Number(lp.galleryId) === Number(item.galleryId))
+    Boolean(item && lp && String(lp.galleryId) === String(item.galleryId))
   );
 
   // Fetch per-gallery logs when selected item or its updatedAt changes
@@ -59,11 +59,11 @@
     logsLoading = true;
     try {
       const rows = await api.fetchGalleryLogs(gid, 200);
-      if (Number(item?.galleryId) === Number(gid)) {
+      if (String(item?.galleryId) === String(gid)) {
         galleryLogs = rows;
       }
     } catch {
-      if (Number(item?.galleryId) === Number(gid)) {
+      if (String(item?.galleryId) === String(gid)) {
         galleryLogs = [];
       }
     } finally {
@@ -331,7 +331,7 @@
             {#if !isItemLive && lp?.galleryId}
               <button
                 type="button"
-                onclick={() => appStore.selectRow(Number(lp.galleryId))}
+                onclick={() => appStore.selectRow(String(lp.galleryId))}
                 class="text-[11px] text-[#38bdf8] hover:underline cursor-pointer"
               >
                 Jump to active #{lp.galleryId}

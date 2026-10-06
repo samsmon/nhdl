@@ -7,16 +7,25 @@
     OctagonPause,
     AlertCircle,
     FolderGit2,
+    Globe,
     X
   } from 'lucide-svelte';
   import { appStore } from '../stores/app.svelte.js';
+  import { sourceLabel } from '../sources.js';
+  import { typeLabel } from '../contentType.js';
 
   const counts = $derived(appStore.filterCounts);
+
+  const typeItems = $derived(counts.types.map((t) => ({ ...t, label: typeLabel(t.id) })));
+
+  const sourceItems = $derived(
+    counts.sources.map((s) => ({ ...s, label: sourceLabel(s.id, appStore.sources) }))
+  );
 
   const statusItems = $derived([
     { id: 'all', label: 'All', count: counts.all, icon: Layers, color: 'text-[#e5e5e5]' },
     { id: 'downloading', label: 'Downloading', count: counts.downloading, icon: Download, color: 'text-[#38bdf8]' },
-    { id: 'queued', label: 'Queued', count: counts.queued, icon: Clock, color: 'text-[#94a3b8]' },
+    { id: 'queued', label: 'Queue', count: counts.queued, icon: Clock, color: 'text-[#94a3b8]' },
     { id: 'completed', label: 'Completed', count: counts.completed, icon: CheckCircle2, color: 'text-[#a3e635]' },
     { id: 'stopped', label: 'Stopped', count: counts.stopped, icon: OctagonPause, color: 'text-[#f59e0b]' },
     { id: 'failed', label: 'Failed', count: counts.failed, icon: AlertCircle, color: 'text-[#f87171]' }
@@ -78,6 +87,51 @@
       </button>
     {/each}
   </div>
+
+  {#if sourceItems.length > 0}
+    <div class="p-2 pt-0 flex flex-col gap-0.5">
+      <div class="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)] font-semibold">
+        Source
+      </div>
+      {#each sourceItems as s (s.id)}
+        {@const active = appStore.sourceFilter === s.id}
+        <button
+          type="button"
+          onclick={() => appStore.setSourceFilter(s.id)}
+          class="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer {active
+            ? 'bg-[var(--bg-selected-focus)] text-white font-semibold border border-[var(--accent)]/40'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white border border-transparent'}"
+        >
+          <div class="flex items-center gap-2 truncate">
+            <Globe class="w-3.5 h-3.5 shrink-0 text-[#7dd3fc]" />
+            <span class="truncate">{s.label}</span>
+          </div>
+          <span class="text-[11px] px-1.5 rounded font-mono {active ? 'bg-[var(--accent)] text-black font-bold' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}">{s.count}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if typeItems.length > 0}
+    <div class="p-2 pt-0 flex flex-col gap-0.5">
+      <div class="px-2 py-1 text-[10px] font-mono uppercase tracking-wider text-[var(--text-muted)] font-semibold">
+        Type
+      </div>
+      {#each typeItems as t (t.id)}
+        {@const active = appStore.typeFilter === t.id}
+        <button
+          type="button"
+          onclick={() => appStore.setTypeFilter(t.id)}
+          class="w-full flex items-center justify-between px-2.5 py-1.5 rounded text-xs font-mono transition-colors cursor-pointer {active
+            ? 'bg-[var(--bg-selected-focus)] text-white font-semibold border border-[var(--accent)]/40'
+            : 'text-[var(--text-secondary)] hover:bg-[var(--bg-hover)] hover:text-white border border-transparent'}"
+        >
+          <span class="truncate">{t.label}</span>
+          <span class="text-[11px] px-1.5 rounded font-mono {active ? 'bg-[var(--accent)] text-black font-bold' : 'bg-[var(--bg-elevated)] text-[var(--text-secondary)]'}">{t.count}</span>
+        </button>
+      {/each}
+    </div>
+  {/if}
 
   <div class="h-px bg-[var(--border-subtle)] mx-2 my-1"></div>
 

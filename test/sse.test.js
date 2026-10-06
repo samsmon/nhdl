@@ -470,7 +470,7 @@ test('Fase 4 verification: 5000-item mixed status DB, virtual window & filter/so
             const gid = 800000 + i;
             const st = statuses[i % statuses.length];
             stmt.run(
-                gid,
+                String(gid),
                 `https://certain.site/g/${gid}/`,
                 `[Artist ${i % 50}] Gallery Title #${i}`,
                 st,

@@ -16,10 +16,14 @@
     extractGalleryId
   } from '../stores/app.svelte.js';
 
+  import { itemSource, sourceLabel, shortKey } from '../sources.js';
+
   let { item, confirmingDeleteKey, onRequestDelete } = $props();
 
   let parsed = $derived(parseItemUrl(item.url));
   let reason = $derived(getStatusReason(item.status));
+  let src = $derived(itemSource(item));
+  let srcLabel = $derived(sourceLabel(src, appStore.sources));
   let gid = $derived(item.galleryId ? String(item.galleryId) : extractGalleryId(parsed.rawUrl));
   let isCurrentlyDownloading = $derived(
     appStore.engineStatus === 'RUNNING' &&
@@ -98,7 +102,10 @@
 
     <div class="flex items-center gap-2 min-w-0 flex-1">
       {#if parsed.title}
-        <span class="text-[#888] text-[10px] shrink-0">#{parsed.id}</span>
+        {#if src !== 'default'}
+          <span class="px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] shrink-0" title={srcLabel}>{srcLabel}</span>
+        {/if}
+        <span class="text-[#888] text-[10px] shrink-0">#{shortKey(parsed.id)}</span>
         <span
           class="truncate {item.status === 'DONE'
             ? 'text-[#555] line-through'

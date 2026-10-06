@@ -13,10 +13,18 @@ nhdl/
 ├── core/
 │   ├── db.js                    (190 baris) — Database facade & dispatcher (SQLite / PostgreSQL via DATABASE_URL)
 │   ├── db/
-│   │   ├── common.js             (45 baris) — normalizeGalleryId, formatQueueRow, maskDatabaseUrl
+│   │   ├── common.js                        — normalizeGalleryId (kunci kanonik), formatQueueRow/publicRow (`toPublicId`), maskDatabaseUrl
+│   │   ├── listParser.js                    — parseListText / parseListTextDetailed: baris list.txt (URL, ID polos, kunci berprefix) -> kunci kanonik via provider registry
 │   │   ├── events.js             (10 baris) — Shared EventEmitter (dbEvents)
 │   │   ├── sqlite.js            (450 baris) — SQLite adapter (`node:sqlite`, `data/nhdl.db` WAL mode)
 │   │   └── postgres.js          (500 baris) — PostgreSQL adapter (`pg.Pool`, retry pool, BIGSERIAL, now())
+│   ├── providers/                           — Lapisan multi-source (satu file per jenis sumber)
+│   │   ├── index.js                         — Registry: `resolveInput`, `canonicalKey`, `toPublicId`, `sourceOf`, `byPrefix`, `registerProvider`
+│   │   ├── default.js                       — Provider site A (certain site ( ͡° ͜ʖ ͡°)): kunci angka polos, jalur API/CDN lama di engine
+│   │   ├── contentType.js                   — Tipe konten: `mapCategoryToType(slug)` (slug kategori situs -> `comic`/`manga`/`other`), `typeFolderName`, `isContentType`
+│   │   ├── boards.js                        — Pabrik provider site B1/B2 (halaman HTML galeri + daftar halaman ber-ekstensi per halaman)
+│   │   ├── slugapi.js                       — Pabrik provider site C (slug galeri + JSON API gambar)
+│   │   └── http.js                          — `fetchText` & `downloadToFile` bersama (User-Agent, redirect, file `.part` atomik; sebelum rename, `.part` harus diawali signature gambar webp/jpeg/png/gif, kalau tidak dianggap halaman blokir HTML dan ditolak tanpa `statusCode`) plus `curlFetchText` & `curlDownloadToFile` (system `curl` lewat `execFile`)
 │   ├── engine.js               (1010 baris) — DownloaderEngine (EventEmitter), ambil item `getNextPendingItem()`, metadata fetch, CDN/API download, 429 backoff
 │   ├── tracker.js               (380 baris) — Wrapper `queue` & `library` SQLite/Postgres, `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), rename, CBZ compress
 │   ├── utils.js                 (233 baris) — sanitizeName (escaped control chars), getDynamicDelay, verifyImage, blank PNG, atomicWriteFileSync
@@ -68,7 +76,7 @@ Semua file state diletakkan di dalam direktori download (`setStateDir(baseDownlo
      - `ERROR - <message>`
    - Baris `# BATCH <N> ...` ikut disalin ke `list_status.txt`.
 3. **`library.json`** (Persistent Index):
-   - Key: `<galleryId>` (string).
+   - Key: `<galleryId>` (string; kunci kanonik, lihat bagian 2a).
    - Value (normal/archive):
      ```json
      {
@@ -88,10 +96,23 @@ Semua file state diletakkan di dalam direktori download (`setStateDir(baseDownlo
    - Value (permanently skipped / 404):
      `{ "skipped": true, "reason": "404...", "skippedAt": "..." }`
 4. **`.nhdl-id` & `<Archive>.cbz.nhdl-id`** (Marker Files):
-   - Berisi string `galleryId`. Digunakan oleh `rescanLibrary()` (`MAX_DEPTH = 6`) untuk melacak folder/archive yang dipindah manual oleh user atau mem-prune entry yang sudah dihapus dari disk.
+   - Berisi kunci kanonik galeri (angka polos untuk site A, `b1:...` dst. untuk sumber lain). Digunakan oleh `rescanLibrary()` (`MAX_DEPTH = 6`) untuk melacak folder/archive yang dipindah manual oleh user atau mem-prune entry yang sudah dihapus dari disk.
 5. **`config.json`** (di root project):
    - Menyimpan `{ "downloadDir": "...", "downloadFormat": "cbz" | "folder", "autoContinueBatches": true }`.
 6. **`error.log`** (max 200 baris), **`placeholder_pages.log`**, **`activity.log`** (max 5000 baris).
+
+### 2a. Kunci Galeri (`gallery_id`), Provider, dan `source`
+
+- **Kunci kanonik** disimpan sebagai `TEXT` di tabel `queue` dan `library` (skema v3). Site A memakai angka polos sebagai teks (`"468614"`); sumber lain memakai `"<prefix>:<isi>"` (mis. `b1:539224`, `b2:817456`, `c1:some-slug`). Prefix nyata hanya ada di `core/providers/index.js`.
+- **`toPublicId(key)`** (`core/providers/index.js`): kunci angka polos dikembalikan sebagai `number` (kompatibel dengan klien/API lama), kunci berprefix tetap `string`. Dipakai oleh `formatQueueRow`/`publicRow` sehingga API, SSE, dan export JSON selalu memuat nilai publik; `canonicalKey()` membalikkannya untuk input.
+- **`source`**: field turunan (`sourceOf(key)`) berisi id provider (`"default"` untuk site A / kunci angka polos, prefix provider untuk sumber lain). Tidak ada kolom DB khusus; dihitung saat baris diformat. Diekspos di `/api/status`, `/api/library`, dan event SSE `item`. UI memakainya untuk badge dan filter sumber (`webui/src/lib/sources.js`).
+- **Tampilan antrian di webui** (`webui/src/lib/queueView.js`, helper murni): filter sidebar "Queue" (id `queued`) mencakup `PENDING` + `ON_PROGRESS`; `filterCounts.queued` memakai definisi yang sama, sedangkan `filterCounts.pending` (hanya `PENDING`) dipakai status bar. Store menurunkan `nextPendingId` (item `PENDING` pertama menurut urutan rank) dan `cooldown` (dari `liveProgress`: `COOLDOWN`/`BATCH_REST` menjadi chip di `nextPendingId`, `RATE_LIMIT` menjadi chip di item berstatus `COOLDOWN`). Kolom "Ditambahkan" membaca `createdAt` (SQLite: UTC tanpa zona; PostgreSQL: ISO). Semua perubahan lewat SSE yang sudah ada.
+- **Interface provider** (objek di registry): `id`, `label`, `prefix`, `isDefault`, `transport` (`'node'` atau `'curl'`), `origin`, `urlPatterns` (regex URL galeri, grup 1 = isi kunci), `makeKey(body)`, `buildUrl(key)`, `imageHeaders()`, `fetchMeta(key, { fetchText })` -> `{ title, numPages, ext, pageExts, langStr, authorStr, extraMeta, pageUrls(n) }` dengan `pageUrls(n)` mengembalikan kandidat `[{ ext, url }]` per halaman. Galeri berprefix diunduh engine lewat provider (halaman per halaman, tanpa filter: semua halaman yang diumumkan diunduh); site A tetap lewat jalur API/CDN lama. `transport: 'curl'` (site C) membuat engine memakai `curlFetchText`/`curlDownloadToFile` di `core/providers/http.js`: CDN site C menyajikan halaman tantangan ke stack HTTP Node tetapi tidak ke `curl` sistem (site A memakai `curl` karena alasan yang sama). Kontrak error sama dengan helper Node (HTTP non-200 -> `err.statusCode`; kegagalan jaringan/timeout -> Error tanpa `statusCode`), jadi fallback 404 per kandidat tetap berlaku. Hanya `curl` biasa: argumen array tanpa shell, DNS normal, tanpa impersonasi atau penyelesaian tantangan.
+- **Parsing input**: `core/db/listParser.js` memanggil `resolveInput()`; baris yang tidak dikenali dilewati dan dihitung di `ignored`.
+- **Migrasi skema v3**: kolom `gallery_id` berubah dari `INTEGER`/`BIGINT` ke `TEXT` di kedua adapter; baris lama dikonversi ke teks angka tanpa kehilangan data. Export/import tetap membawa `gallery_id` publik (angka untuk site A).
+- **Tipe konten (comic/manga/other)**: provider B1/B2/C mengambil slug kategori situs (`extraMeta`/`meta.category`; kategori yang tidak ditemukan dicatat di `categoryError`, hanya peringatan log `[CATEGORY]` tanpa menggagalkan unduhan) dan `core/providers/contentType.js` memetakannya: `western`, `porn-comic`, `comic` -> `comic`; `manga`, `doujinshi` -> `manga`; slug lain yang valid -> `other`; tidak ada/tidak valid -> `null`. Nama folder tipe hanya dari tabel tetap (`Comic`/`Manga`/`Other`), tidak pernah dari teks remote. Layout folder sumber berprefix: `<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`; site A tidak berubah (`<base>/<Bahasa>/<Author>/<Judul>`). Tipe disimpan di `queue.category` (kolom `TEXT` nullable; berisi tipe, bukan slug mentah) dan `library.meta.contentType`; keduanya ikut export/import. `findExistingOnDisk` (fallback 429 yang berjalan sebelum metadata ada, jadi tanpa input tipe) memindai folder dasar dan semua folder tipe (`Comic`/`Manga`/`Other`) yang ada. Salinan lengkap galeri provider yang tersimpan di layout LAMA tanpa baris library diunduh ulang ke layout bertipe (baris library yang cocok berdasarkan id tetap menghentikan unduhan). UI menampilkan badge tipe dan filter **Type** di antrian dan library (filter yang tipenya sudah tidak ada diabaikan).
+- **Migrasi skema v4**: menambah kolom `queue.category TEXT` di kedua adapter; baris lama bernilai `NULL`; export/import membawa `category`.
+- **Nama folder**: bila judul kosong, nama folder diturunkan dari kunci lewat `safeKeyName()` (`core/engine.js`) agar tanda `:` tidak pernah muncul di path (tidak valid di Windows).
 
 ---
 
@@ -100,7 +121,7 @@ Semua file state diletakkan di dalam direktori download (`setStateDir(baseDownlo
 Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
 
 ### Properti Utama
-- `baseDownloadDir`: Folder output (`<base>/<Language>/<Author>/<Title>`).
+- `baseDownloadDir`: Folder output (site A: `<base>/<Language>/<Author>/<Title>`; sumber berprefix: `<base>/<Tipe>/<Language>/<Author>/<Title>`).
 - `downloadFormat`: `'cbz'` (default) | `'folder'`.
 - `autoContinueBatches`: `boolean` (default `true`).
 - `batchSize`: `50` galeri sebelum istirahat batch (`batchRestMinutes`: `5` menit).
@@ -123,13 +144,13 @@ Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
 | `'batch_complete'` | `{ processed }` | Saat `runBatch()` selesai |
 | `'paused'` / `'resumed'` / `'stopped'` / `'restarted'` / `'retry_triggered'` / `'config_updated'` | Objek opsional | Perubahan state engine |
 
-### Alur `processGallery(galleryId)` (L505–L836)
+### Alur `processGallery(galleryId)` (L505–L836) — jalur site A; galeri berprefix memakai jalur provider (lihat 2a)
 1. Set status `ON_PROGRESS` di `list_status.txt`.
 2. Cek `library.json`: jika valid di disk (`verifyImage` >= 2KB untuk tiap halaman atau file `.cbz`/`.zip` ada), langsung return `SKIPPED - Already in Library` (0 request jaringan).
 3. Panggil `fetchMetadata(galleryId)`:
    - **API-first** (`core/nhentaiApi.js` -> `GET /api/v2/galleries/<id>` via `curl --resolve certain.site:443:104.26.4.188`). Menggunakan `title.pretty` untuk nama file.
    - **Fallback HTML scrape** (`fetchMetadataViaHtml`) jika API gagal.
-   - Jika `RATE_LIMIT` (429), cek dulu `getCachedDisplayName()` di `list.txt` + `findExistingOnDisk()` untuk menghindari cooldown 5 menit jika file sebenarnya sudah ada di disk.
+   - Jika `RATE_LIMIT` (429; untuk provider non-default, status 429/503 dari `fetchMeta` dipetakan ke `RATE_LIMIT` oleh `fetchProviderMetadata`), cek dulu `getCachedDisplayName()` di `list.txt` + `findExistingOnDisk()` untuk menghindari cooldown 5 menit jika file sebenarnya sudah ada di disk.
 4. Cek apakah sudah ada archive/folder di `parentDir` (`<base>/<Lang>/<Author>/`).
 5. **Fast-path API Archive Download** (`tryApiArchiveDownload` L464): jika `NHENTAI_API_KEY` diset dan format target `cbz`/`zip`, minta presigned download URL dari API v2. Jika gagal, fallback ke per-page CDN.
 6. **Per-page CDN Download** (L681–L833):

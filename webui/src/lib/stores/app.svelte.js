@@ -1,5 +1,8 @@
 import { SvelteMap } from 'svelte/reactivity';
 import * as api from '../api.js';
+import { urlKey, matchesSourceFilter, countBySource } from '../sources.js';
+import { TYPE_ORDER, matchesTypeFilter, countByType, effectiveTypeFilter } from '../contentType.js';
+import { isQueuedStatus, parseAddedAt, cooldownInfo } from '../queueView.js';
 
 // Reactive item map keyed by galleryId string so SSE `item` updates mutate
 // only the affected entry without replacing the entire collection.
@@ -18,7 +21,7 @@ function buildRawListFromMap(map) {
       const fmtSuffix = row.format ? ` FORMAT=${row.format}` : '';
       lines.push(`# BATCH ${b}${fmtSuffix}`);
     }
-    const rawUrl = String(row.url || '').split(' | ')[0].trim() || `https://nhentai.net/g/${row.galleryId}/`;
+    const rawUrl = String(row.url || '').split(' | ')[0].trim() || String(row.galleryId);
     const lineBody = row.title ? `${rawUrl} | ${row.title}` : rawUrl;
     lines.push(`[${row.status}] ${lineBody}`);
   }
@@ -27,20 +30,14 @@ function buildRawListFromMap(map) {
 
 export function extractGalleryId(str) {
   if (!str) return null;
-  const s = String(str).trim();
-  const urlMatch = s.match(/\/g\/(\d+)/);
-  if (urlMatch) return urlMatch[1];
-  const bareMatch = s.match(/^(\d+)$/);
-  if (bareMatch) return bareMatch[1];
-  return null;
+  return urlKey(str);
 }
 
 export function parseItemUrl(urlStr) {
   const parts = String(urlStr || '').split(' | ');
   const rawUrl = parts[0].trim();
   const title = parts.length > 1 ? parts.slice(1).join(' | ').trim() : null;
-  const idMatch = rawUrl.match(/\/g\/(\d+)/);
-  const id = idMatch ? idMatch[1] : rawUrl;
+  const id = urlKey(rawUrl) || rawUrl;
   return { rawUrl, id, title };
 }
 
@@ -72,7 +69,7 @@ export function matchesSidebarFilter(item, statusFilter) {
   if (!statusFilter || statusFilter === 'all') return true;
   const raw = getItemRawStatus(item);
   if (statusFilter === 'downloading') return raw === 'ON_PROGRESS';
-  if (statusFilter === 'queued') return raw === 'PENDING';
+  if (statusFilter === 'queued') return isQueuedStatus(raw);
   if (statusFilter === 'completed') return raw === 'DONE' || raw === 'SKIPPED';
   if (statusFilter === 'stopped') return raw === 'STOPPED';
   if (statusFilter === 'failed') return raw === 'ERROR' || raw === 'COOLDOWN' || raw === 'PAUSED';
@@ -107,6 +104,9 @@ class AppStore {
   // Filter & Search state (Fase 4 B2)
   statusFilter = $state('all'); // 'all' | 'downloading' | 'queued' | 'completed' | 'stopped' | 'failed'
   batchFilter = $state(null); // null | number
+  sourceFilter = $state('all'); // 'all' | provider id
+  typeFilter = $state('all'); // 'all' | 'comic' | 'manga' | 'other'
+  sources = $state([]); // [{ id, label }] from GET /api/config
   searchQuery = $state('');
 
   // Backward-compatible aliases
@@ -116,7 +116,7 @@ class AppStore {
   retryFeedback = $state('');
 
   // Table Sort state (Fase 4 B3)
-  sortColumn = $state('order'); // 'order' | 'title' | 'galleryId' | 'status' | 'progress' | 'pages' | 'speed' | 'eta' | 'batch' | 'format'
+  sortColumn = $state('order'); // 'order' | 'title' | 'galleryId' | 'status' | 'progress' | 'pages' | 'speed' | 'eta' | 'batch' | 'format' | 'createdAt'
   sortDirection = $state('asc'); // 'asc' | 'desc'
 
   // Multi-select & Focus state (Fase 4 B3 & B4)
@@ -151,17 +151,21 @@ class AppStore {
   filterCounts = $derived.by(() => {
     let all = 0;
     let downloading = 0;
-    let queued = 0;
+    let queued = 0; // Queue view: PENDING + ON_PROGRESS
+    let pending = 0; // PENDING only (status bar, so Active/Queued do not double count)
     let completed = 0;
     let stopped = 0;
     let failed = 0;
     const batchMap = new Map();
+    const sourceCounts = countBySource(this.items);
+    const typeCounts = countByType(this.items);
 
     for (const item of this.items) {
       all++;
       const raw = getItemRawStatus(item);
+      if (isQueuedStatus(raw)) queued++;
       if (raw === 'ON_PROGRESS') downloading++;
-      else if (raw === 'PENDING') queued++;
+      else if (raw === 'PENDING') pending++;
       else if (raw === 'DONE' || raw === 'SKIPPED') completed++;
       else if (raw === 'STOPPED') stopped++;
       else if (raw === 'ERROR' || raw === 'COOLDOWN' || raw === 'PAUSED') failed++;
@@ -183,17 +187,20 @@ class AppStore {
       all,
       downloading,
       queued,
+      pending,
       completed,
       stopped,
       failed,
-      batches
+      batches,
+      sources: Array.from(sourceCounts.entries()).map(([id, count]) => ({ id, count })),
+      types: TYPE_ORDER.filter((id) => typeCounts.has(id)).map((id) => ({ id, count: typeCounts.get(id) }))
     };
   });
 
   doneCount = $derived(this.filterCounts.completed);
 
   // Priority rank (# column): 1..N ordered by priority DESC, id ASC
-  rankById = $derived.by(() => {
+  rankedItems = $derived.by(() => {
     const copy = this.items.slice();
     copy.sort((a, b) => {
       const pa = Number(a.priority) || 0;
@@ -201,17 +208,35 @@ class AppStore {
       if (pb !== pa) return pb - pa;
       return (Number(a.id) || 0) - (Number(b.id) || 0);
     });
+    return copy;
+  });
+
+  rankById = $derived.by(() => {
     const map = new Map();
-    for (let i = 0; i < copy.length; i++) {
-      map.set(Number(copy[i].galleryId), i + 1);
+    const ranked = this.rankedItems;
+    for (let i = 0; i < ranked.length; i++) {
+      map.set(String(ranked[i].galleryId), i + 1);
     }
     return map;
   });
+
+  // Gallery key of the first PENDING item in rank order (the next one the engine will take).
+  nextPendingId = $derived.by(() => {
+    for (const item of this.rankedItems) {
+      if (getItemRawStatus(item) === 'PENDING') return String(item.galleryId);
+    }
+    return null;
+  });
+
+  // Cooldown countdown for the list chip: { kind, remaining, message } | null
+  cooldown = $derived(cooldownInfo(this.liveProgress, this.engineStatus));
 
   // Filtered and sorted array for VirtualQueueTable
   filteredAndSortedItems = $derived.by(() => {
     const sf = this.statusFilter;
     const bf = this.batchFilter;
+    const srcf = this.sourceFilter;
+    const tf = effectiveTypeFilter(this.typeFilter, this.filterCounts.types.map((t) => t.id));
     const q = this.searchQuery.trim().toLowerCase();
     const col = this.sortColumn;
     const dir = this.sortDirection === 'desc' ? -1 : 1;
@@ -222,6 +247,8 @@ class AppStore {
     for (const item of this.items) {
       if (sf !== 'all' && !matchesSidebarFilter(item, sf)) continue;
       if (bf !== null && (item.batch || 1) !== bf) continue;
+      if (!matchesSourceFilter(item, srcf)) continue;
+      if (!matchesTypeFilter(item, tf)) continue;
       if (q) {
         const gidStr = String(item.galleryId || '');
         const titleStr = String(item.title || '').toLowerCase();
@@ -240,14 +267,14 @@ class AppStore {
     }
 
     const activeGid =
-      col === 'speed' || col === 'eta' ? Number(this.liveProgress?.galleryId || 0) : 0;
+      col === 'speed' || col === 'eta' ? String(this.liveProgress?.galleryId ?? '') : '';
 
     filtered.sort((a, b) => {
       let cmp = 0;
       switch (col) {
         case 'order': {
-          const ra = ranks.get(Number(a.galleryId)) ?? 999999;
-          const rb = ranks.get(Number(b.galleryId)) ?? 999999;
+          const ra = ranks.get(String(a.galleryId)) ?? 999999;
+          const rb = ranks.get(String(b.galleryId)) ?? 999999;
           cmp = ra - rb;
           break;
         }
@@ -258,7 +285,7 @@ class AppStore {
           break;
         }
         case 'galleryId': {
-          cmp = (Number(a.galleryId) || 0) - (Number(b.galleryId) || 0);
+          cmp = String(a.galleryId).localeCompare(String(b.galleryId), undefined, { numeric: true });
           break;
         }
         case 'status': {
@@ -280,13 +307,27 @@ class AppStore {
         }
         case 'speed':
         case 'eta': {
-          const ia = Number(a.galleryId) === activeGid ? 1 : 0;
-          const ib = Number(b.galleryId) === activeGid ? 1 : 0;
+          const ia = activeGid && String(a.galleryId) === activeGid ? 1 : 0;
+          const ib = activeGid && String(b.galleryId) === activeGid ? 1 : 0;
           cmp = ib - ia;
           break;
         }
         case 'batch': {
           cmp = (Number(a.batch) || 1) - (Number(b.batch) || 1);
+          break;
+        }
+        case 'createdAt': {
+          const ta = parseAddedAt(a.createdAt)?.getTime();
+          const tb = parseAddedAt(b.createdAt)?.getTime();
+          // invalid/unknown dates always sort last, regardless of direction
+          if (ta === undefined || tb === undefined) {
+            if (ta === tb) {
+              cmp = 0;
+              break;
+            }
+            return ta === undefined ? 1 : -1;
+          }
+          cmp = ta - tb;
           break;
         }
         case 'format': {
@@ -381,7 +422,7 @@ class AppStore {
         total,
         percentage: pct,
         activePages: lp.activePages || [],
-        activeGalleryId: lp.galleryId ? Number(lp.galleryId) : null,
+        activeGalleryId: lp.galleryId ? String(lp.galleryId) : null,
         speedKBps: lp.speedKBps ?? (lp.speedBps ? Math.round(lp.speedBps / 1024) : 0)
       };
     }
@@ -414,6 +455,16 @@ class AppStore {
     this.mobileSidebarOpen = false;
   }
 
+  setTypeFilter(id) {
+    this.typeFilter = this.typeFilter === id ? 'all' : id;
+    this.mobileSidebarOpen = false;
+  }
+
+  setSourceFilter(id) {
+    this.sourceFilter = this.sourceFilter === id ? 'all' : id;
+    this.mobileSidebarOpen = false;
+  }
+
   setBatchFilter(batchNum) {
     this.batchFilter = this.batchFilter === batchNum ? null : batchNum;
     this.mobileSidebarOpen = false;
@@ -429,22 +480,22 @@ class AppStore {
   }
 
   selectRow(galleryId, event = {}) {
-    const gid = Number(galleryId);
-    if (!Number.isFinite(gid)) return;
+    if (galleryId === null || galleryId === undefined || galleryId === '') return;
+    const gid = String(galleryId);
 
     const isCtrl = !!(event.ctrlKey || event.metaKey);
     const isShift = !!event.shiftKey;
 
     if (isShift && this.anchorId !== null) {
       const list = this.filteredAndSortedItems;
-      const idxA = list.findIndex(i => Number(i.galleryId) === Number(this.anchorId));
-      const idxB = list.findIndex(i => Number(i.galleryId) === gid);
+      const idxA = list.findIndex(i => String(i.galleryId) === String(this.anchorId));
+      const idxB = list.findIndex(i => String(i.galleryId) === gid);
       if (idxA !== -1 && idxB !== -1) {
         const start = Math.min(idxA, idxB);
         const end = Math.max(idxA, idxB);
         const nextSet = isCtrl ? new Set(this.selectedIds) : new Set();
         for (let i = start; i <= end; i++) {
-          nextSet.add(Number(list[i].galleryId));
+          nextSet.add(String(list[i].galleryId));
         }
         this.selectedIds = nextSet;
         this.focusedId = gid;
@@ -471,8 +522,8 @@ class AppStore {
   }
 
   ensureContextSelection(galleryId) {
-    const gid = Number(galleryId);
-    if (!Number.isFinite(gid)) return;
+    if (galleryId === null || galleryId === undefined || galleryId === '') return;
+    const gid = String(galleryId);
     if (!this.selectedIds.has(gid)) {
       this.selectedIds = new Set([gid]);
       this.anchorId = gid;
@@ -483,11 +534,11 @@ class AppStore {
   selectAllVisible() {
     const nextSet = new Set();
     for (const item of this.filteredAndSortedItems) {
-      nextSet.add(Number(item.galleryId));
+      nextSet.add(String(item.galleryId));
     }
     this.selectedIds = nextSet;
     if (this.focusedId === null && this.filteredAndSortedItems.length > 0) {
-      this.focusedId = Number(this.filteredAndSortedItems[0].galleryId);
+      this.focusedId = String(this.filteredAndSortedItems[0].galleryId);
     }
   }
 
@@ -500,22 +551,22 @@ class AppStore {
     if (list.length === 0) return -1;
 
     let currentIndex = this.focusedId !== null
-      ? list.findIndex(i => Number(i.galleryId) === Number(this.focusedId))
+      ? list.findIndex(i => String(i.galleryId) === String(this.focusedId))
       : -1;
 
     let nextIndex = currentIndex === -1 ? 0 : Math.max(0, Math.min(list.length - 1, currentIndex + delta));
-    const nextGid = Number(list[nextIndex].galleryId);
+    const nextGid = String(list[nextIndex].galleryId);
 
     if (shiftKey) {
       if (this.anchorId === null) {
-        this.anchorId = currentIndex !== -1 ? Number(list[currentIndex].galleryId) : nextGid;
+        this.anchorId = currentIndex !== -1 ? String(list[currentIndex].galleryId) : nextGid;
       }
-      const anchorIdx = list.findIndex(i => Number(i.galleryId) === Number(this.anchorId));
+      const anchorIdx = list.findIndex(i => String(i.galleryId) === String(this.anchorId));
       const start = Math.min(anchorIdx !== -1 ? anchorIdx : nextIndex, nextIndex);
       const end = Math.max(anchorIdx !== -1 ? anchorIdx : nextIndex, nextIndex);
       const nextSet = new Set();
       for (let i = start; i <= end; i++) {
-        nextSet.add(Number(list[i].galleryId));
+        nextSet.add(String(list[i].galleryId));
       }
       this.selectedIds = nextSet;
     } else {
@@ -573,9 +624,9 @@ class AppStore {
       const res = await api.deleteQueueItems(ids);
       if (res.success) {
         const nextSet = new Set(this.selectedIds);
-        for (const id of ids) nextSet.delete(Number(id));
+        for (const id of ids) nextSet.delete(String(id));
         this.selectedIds = nextSet;
-        if (this.focusedId !== null && ids.map(Number).includes(Number(this.focusedId))) {
+        if (this.focusedId !== null && ids.map(String).includes(String(this.focusedId))) {
           this.focusedId = nextSet.size > 0 ? nextSet.values().next().value : null;
         }
         this.showToast(`Deleted ${res.deleted} item(s) from queue`, 'info');
@@ -641,9 +692,9 @@ class AppStore {
       itemsById.set(key, evt.item);
     } else if (action === 'deleted' && evt.galleryId !== undefined) {
       itemsById.delete(String(evt.galleryId));
-      if (this.selectedIds.has(Number(evt.galleryId))) {
+      if (this.selectedIds.has(String(evt.galleryId))) {
         const nextSet = new Set(this.selectedIds);
-        nextSet.delete(Number(evt.galleryId));
+        nextSet.delete(String(evt.galleryId));
         this.selectedIds = nextSet;
       }
     } else if (action === 'batch_deleted' && evt.batch !== undefined) {
@@ -836,6 +887,7 @@ class AppStore {
       this.hasApiKey = !!data.hasApiKey;
       this.maskedKey = data.maskedKey || '';
       this.authRequired = !!data.authRequired;
+      this.sources = Array.isArray(data.sources) ? data.sources : [];
       if (typeof data.autoContinueBatches === 'boolean') {
         this.autoContinueBatches = data.autoContinueBatches;
       }

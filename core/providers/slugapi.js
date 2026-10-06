@@ -1,0 +1,116 @@
+const SLUG = /^[a-z0-9][a-z0-9-]*$/;
+const { normalizeCategorySlug, mapCategoryToType } = require('./contentType');
+
+function extOf(url) {
+    const m = String(url).match(/\.(webp|jpe?g|png|gif)(?:\?|$)/i);
+    return m ? m[1].toLowerCase().replace('jpeg', 'jpg') : 'jpg';
+}
+
+// Category lives only on the detail endpoint. Any failure here is non-fatal: the gallery
+// still downloads, just without a content type.
+async function fetchCategory(origin, slug, fetchText, headers) {
+    try {
+        const res = await fetchText(`${origin}/api/comics/${slug}`, headers);
+        if (res.status !== 200) return { category: null, error: `category request returned status ${res.status}` };
+        let data;
+        try { data = JSON.parse(res.body); } catch (e) { return { category: null, error: 'category response is not JSON' }; }
+        const raw = data && ((data.comic && data.comic.category && data.comic.category.slug) || (data.category && data.category.slug));
+        const category = normalizeCategorySlug(raw);
+        return category ? { category, error: null } : { category: null, error: 'category missing or invalid in response' };
+    } catch (e) {
+        return { category: null, error: `category request failed: ${e.message}` };
+    }
+}
+
+function createSlugApiProvider(cfg) {
+    const { id, label, origin, hosts } = cfg;
+    const hostPattern = hosts.map(h => h.replace(/\./g, '\\.')).join('|');
+
+    function parseBody(body) {
+        const s = String(body ?? '').trim().toLowerCase();
+        return SLUG.test(s) ? s : null;
+    }
+
+    function imageHeaders() {
+        return { Referer: `${origin}/` };
+    }
+
+    return {
+        id,
+        label,
+        prefix: id,
+        isDefault: false,
+        transport: 'curl',
+        origin,
+        urlPatterns: [new RegExp(`^https?:\\/\\/(?:www\\.)?(?:${hostPattern})\\/(?:[a-z]{2}\\/)?comic\\/([A-Za-z0-9-]+)`, 'i')],
+        parseBody,
+        makeKey(body) {
+            const slug = parseBody(body);
+            return slug ? `${id}:${slug}` : null;
+        },
+        buildUrl(key) {
+            return `${origin}/en/comic/${key.slice(id.length + 1)}`;
+        },
+        imageHeaders,
+        async fetchMeta(key, { fetchText }) {
+            const slug = key.slice(id.length + 1);
+            const res = await fetchText(`${origin}/api/comics/${slug}/images`, imageHeaders());
+            if (res.status === 404) {
+                const e = new Error('404 - comic not found / already removed');
+                e.permanent = true;
+                throw e;
+            }
+            if (res.status !== 200) {
+                const e = new Error(`Comic API returned status ${res.status}`);
+                e.statusCode = res.status;
+                throw e;
+            }
+
+            let data;
+            try { data = JSON.parse(res.body); } catch (e) { data = null; }
+            if (data && data.comic && Array.isArray(data.images) && data.images.length === 0) {
+                const e = new Error('404 - comic has no images');
+                e.permanent = true;
+                throw e;
+            }
+            if (!data || !data.comic || !Array.isArray(data.images)
+                || !data.images.every(img => img && typeof img.source_url === 'string' && /^https?:\/\//i.test(img.source_url))) {
+                throw new Error('Unexpected response from comic API (blocked page or changed format)');
+            }
+
+            const images = [...data.images].sort((a, b) => a.page - b.page);
+            const pageExts = {};
+            const urlsByPage = new Map();
+            images.forEach((img, i) => {
+                const n = i + 1;
+                pageExts[n] = extOf(img.source_url);
+                urlsByPage.set(n, img.source_url);
+            });
+
+            const cat = await fetchCategory(origin, slug, fetchText, imageHeaders());
+            const rawTitle = String(data.comic.title || '').replace(/\s+porn comic$/i, '').trim();
+            const authorMatch = String(data.comic.description || '').match(/\bporn comic by ([^.]+?)\./i);
+            const tags = (data.comic.tags || []).map(t => ({ name: t.slug }));
+
+            return {
+                title: rawTitle || slug,
+                numPages: images.length,
+                ext: pageExts[1],
+                pageExts,
+                langStr: 'English',
+                authorStr: authorMatch ? authorMatch[1].trim() : 'Other',
+                extraMeta: { tags, source: id, uploadDate: data.comic.uploaded_at || null },
+                category: cat.category,
+                contentType: mapCategoryToType(cat.category),
+                categoryError: cat.error,
+                pageUrls(n) {
+                    const url = urlsByPage.get(n);
+                    return url ? [{ ext: pageExts[n], url }] : [];
+                }
+            };
+        },
+        cfg
+    };
+}
+
+module.exports = { createSlugApiProvider };

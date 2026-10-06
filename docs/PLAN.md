@@ -180,6 +180,30 @@ Task:
 - [x] Blok pemicu di `README.md` + tautan dari `AGENTS.md`
 - [x] Validasi: minta agent baru (sesi bersih) mendeploy dan mengoperasikan NHDL hanya berbekal `README.md`; catat bagian yang membuatnya bingung lalu perbaiki dokumennya — dijalankan dari clone bersih mengikuti `docs/AI_AGENT.md`: `npm install` + build UI 17 detik, server start, `/api/db/info` dan `/api/status` sesuai output yang didokumentasikan. Belum diuji oleh sesi agent baru
 
+## Multi-source download
+Tujuan: selain certain site ( ͡° ͜ʖ ͡°) (site A), NHDL bisa mengunduh dari site B1, B2, dan C lewat satu antrian. Spesifikasi: `docs/superpowers/specs/2026-10-06-multi-source-download-design.md`.
+
+Task:
+- [x] Kontrak API: format `galleryId` berprefix, field `source`, dan penanganan baris tidak dikenali dicatat di `docs/API.md`
+- [x] Registry provider (`core/providers/`) dan kunci kanonik berprefix
+- [x] Parser list bersama (`core/db/listParser.js`) dan migrasi skema v3 (`gallery_id` TEXT) di SQLite dan PostgreSQL
+- [x] Provider metadata dan URL halaman: site B1/B2 (HTML) dan site C (JSON API; unduhan nyata site C lewat transport curl, lihat task di bawah)
+- [x] Engine: unduh galeri berprefix lewat provider, pause/resume, rescan, dan hook server
+- [x] UI: badge sumber dan filter sumber di antrian, sidebar, dan Library
+- [x] Tes langsung: site B1 (240 halaman, pause/resume) dan site B2 (51 halaman) lulus
+- [x] Site C: API gambar menjawab 403 (tantangan Cloudflare) untuk klien Node; diselesaikan dengan transport `curl` sistem (`transport: 'curl'` di provider), tes langsung 17/17 gambar lulus
+- [x] Perbaikan review akhir: resolusi URL tanpa skema, 429/503 provider ke backoff, cek signature gambar, tampilan `ignored`, URL fallback per sumber, validasi nilai remote, API kosong = SKIPPED
+- [x] UI antrian: filter "Queue" (PENDING + ON_PROGRESS), penanda baris aktif, chip cooldown, kolom "Ditambahkan"
+- [ ] Putuskan apakah `samples/` (sampel manual user) masuk `.gitignore`
+
+## Content type (comic/manga/other)
+- [x] Pemetaan kategori -> tipe (`core/providers/contentType.js`) dan ekstraksi kategori di provider B1/B2/C
+- [x] Skema v4 `queue.category` + export/import
+- [x] Folder bertipe di engine dan `findExistingOnDisk` bertipe, `meta.contentType` di library
+- [x] UI: badge tipe dan filter Type
+- [x] Verifikasi offline parser terhadap markup asli tersimpan (B1 manga, B2 western -> comic, C porn-comic -> comic)
+- [ ] live metadata check against the real sites (needs working DNS)
+
 ## Log
 | Tanggal | Fase | Catatan |
 |---|---|---|
@@ -220,3 +244,8 @@ Task:
 | 2026-09-28 | 7 | pg driver type parser: daftarkan parser OID 20 (BIGINT/BIGSERIAL/COUNT(*)) agar menghasilkan number bukan string — 40/40 test lulus |
 | 2026-09-28 | 7 | Eksekusi live test suite PostgreSQL sungguhan (TEST_DATABASE_URL): uji migrasi skema, enqueue, done, library, export/import, proteksi format invalid, dan verifikasi tipe number — 41/41 test lulus (0 fail, 0 skip) |
 | 2026-09-28 | 8 | Fase 8 selesai: `docs/AI_AGENT.md` (deploy/manage/modify/maintain, env var dicek ke kode, troubleshooting, larangan untuk agent), blok pemicu di README, tautan di AGENTS.md; divalidasi dari clone bersih |
+| 2026-10-06 | Multi-source | Multi-source download: lapisan provider, kunci berprefix, skema v3, `source`, badge/filter UI. Tes langsung site B1 (240/240 + pause/resume) dan site B2 (51/51) lulus; site C 403 untuk klien Node (terbuka). 79 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Multi-source | Transport curl untuk site C (`curlFetchText`/`curlDownloadToFile`, field `transport` di provider). Tes langsung site C 17/17 lulus. 84 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Multi-source | Perbaikan review akhir (URL tanpa skema, 429/503 provider ke cooldown, signature gambar, `ignored` di log/toast, URL fallback per sumber, validasi nilai remote, API kosong = SKIPPED). 96 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Multi-source | Pembaruan tampilan antrian (filter Queue = PENDING + ON_PROGRESS, penanda baris aktif, chip cooldown, kolom Ditambahkan; hanya UI). 101 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Content type | Tipe konten comic/manga/other: pemetaan kategori, skema v4, folder bertipe, badge/filter UI. Cek langsung ke situs tidak bisa dijalankan (DNS diblokir); diganti cek offline parser pada markup asli tersimpan. 122 lulus, 1 skip, 0 gagal |

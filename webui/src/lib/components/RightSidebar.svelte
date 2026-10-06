@@ -41,6 +41,7 @@
       const parts = [`Added ${data.added} URL${data.added > 1 ? 's' : ''}`];
       if (data.alreadyDone > 0) parts.push(`${data.alreadyDone} already in library`);
       if (data.duplicates > 0) parts.push(`${data.duplicates} dup skipped`);
+      if (data.ignored > 0) parts.push(`${data.ignored} ignored`);
       showNotice(`${parts.join(' · ')} (Batch #${data.batch})`, 4000);
     } catch {
       showNotice('Network error while importing');

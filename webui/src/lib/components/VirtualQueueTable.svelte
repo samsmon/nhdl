@@ -2,6 +2,9 @@
   import { Search, X, ArrowUp, ArrowDown } from 'lucide-svelte';
   import { appStore, getItemRawStatus, parseItemUrl } from '../stores/app.svelte.js';
   import ContextMenu from './ContextMenu.svelte';
+  import { itemSource, sourceLabel } from '../sources.js';
+  import { itemType, typeLabel, typeBadgeClass } from '../contentType.js';
+  import { formatAddedAt, formatAddedAtFull, formatCooldown } from '../queueView.js';
 
   let { onRequestDelete } = $props();
 
@@ -19,7 +22,8 @@
     speed: 86,
     eta: 76,
     batch: 66,
-    format: 68
+    format: 68,
+    createdAt: 112
   };
 
   function loadWidths() {
@@ -28,7 +32,13 @@
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-          return { ...DEFAULT_WIDTHS, ...parsed };
+          // Merge saved widths over defaults (new columns get a default); drop non-numeric values.
+          const merged = { ...DEFAULT_WIDTHS };
+          for (const id of Object.keys(DEFAULT_WIDTHS)) {
+            const w = Number(parsed[id]);
+            if (Number.isFinite(w) && w > 0) merged[id] = w;
+          }
+          return merged;
         }
       }
     } catch {}
@@ -59,7 +69,8 @@
     { id: 'speed', label: 'Speed', minWidth: 72, align: 'text-right' },
     { id: 'eta', label: 'ETA', minWidth: 64, align: 'text-right' },
     { id: 'batch', label: 'Batch', minWidth: 56, align: 'text-right' },
-    { id: 'format', label: 'Format', minWidth: 60, align: 'text-center' }
+    { id: 'format', label: 'Format', minWidth: 60, align: 'text-center' },
+    { id: 'createdAt', label: 'Ditambahkan', minWidth: 96, align: 'text-left' }
   ];
 
   const mobileColumns = [
@@ -236,7 +247,7 @@
 
   function getRowProgress(item, lp) {
     const raw = getItemRawStatus(item);
-    const isLive = lp && Number(lp.galleryId) === Number(item.galleryId);
+    const isLive = lp && String(lp.galleryId) === String(item.galleryId);
     const done = isLive
       ? (lp.completed ?? lp.downloadedPages ?? item.pagesDone ?? 0)
       : (item.pagesDone ?? 0);
@@ -376,13 +387,26 @@
           style="position: absolute; top: 0; left: 0; right: 0; transform: translateY({offsetY}px); will-change: transform;"
         >
           {#each visibleRows as item (item.galleryId)}
-            {@const gid = Number(item.galleryId)}
+            {@const gid = String(item.galleryId)}
+            {@const src = itemSource(item)}
+            {@const ctype = itemType(item)}
             {@const isSelected = appStore.selectedIds.has(gid)}
-            {@const isFocused = Number(appStore.focusedId) === gid}
+            {@const isFocused = String(appStore.focusedId) === gid}
             {@const raw = getItemRawStatus(item)}
             {@const prog = getRowProgress(item, appStore.liveProgress)}
             {@const rank = appStore.rankById.get(gid) ?? item.id}
             {@const fmt = (item.format || appStore.downloadFormat || 'cbz').toUpperCase()}
+            {@const cd = appStore.cooldown}
+            {@const chip =
+              cd && !isMobile
+                ? cd.kind === 'next'
+                  ? gid === appStore.nextPendingId && raw === 'PENDING'
+                    ? cd
+                    : null
+                  : raw === 'COOLDOWN'
+                    ? cd
+                    : null
+                : null}
 
             <div
               style="height: {ROW_HEIGHT}px; grid-template-columns: {gridTemplate};"
@@ -393,7 +417,11 @@
                 ? isFocused
                   ? 'bg-[var(--bg-selected-focus)] text-white'
                   : 'bg-[var(--bg-selected)] text-white'
-                : 'hover:bg-[var(--bg-hover)] text-[var(--text-primary)]'}"
+                : raw === 'ON_PROGRESS'
+                  ? 'bg-[#38bdf8]/[0.06] hover:bg-[#38bdf8]/10 text-[var(--text-primary)]'
+                  : 'hover:bg-[var(--bg-hover)] text-[var(--text-primary)]'} {raw === 'ON_PROGRESS'
+                ? 'shadow-[inset_2px_0_0_#38bdf8]'
+                : ''}"
               role="row"
               tabindex="-1"
               aria-selected={isSelected}
@@ -403,6 +431,7 @@
                 <!-- Mobile (< 768px): Judul, Status, Progress -->
                 <div class="px-2 truncate font-sans text-xs" title={formatRowTitle(item)}>
                   <span class="text-[var(--text-muted)] font-mono mr-1">#{gid}</span>
+                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{#if ctype}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase mr-1 {typeBadgeClass(ctype)}" title="Type: {typeLabel(ctype)}">{typeLabel(ctype)}</span>{/if}
                   <span>{formatRowTitle(item)}</span>
                 </div>
                 <div class="px-1.5 flex items-center">
@@ -428,23 +457,30 @@
                   <span class="text-[10px] w-7 text-right">{prog.pct}%</span>
                 </div>
               {:else}
-                <!-- Desktop: #, Judul, ID, Status, Progress, Halaman, Speed, ETA, Batch, Format -->
+                <!-- Desktop: #, Judul, ID, Status, Progress, Halaman, Speed, ETA, Batch, Format, Ditambahkan -->
                 <div class="px-2 text-right text-[11px] text-[var(--text-muted)] truncate">
                   {rank}
                 </div>
                 <div class="px-2 truncate font-sans text-xs" title={formatRowTitle(item)}>
-                  {formatRowTitle(item)}
+                  <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{#if ctype}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase mr-1 {typeBadgeClass(ctype)}" title="Type: {typeLabel(ctype)}">{typeLabel(ctype)}</span>{/if}{formatRowTitle(item)}
                 </div>
                 <div class="px-2 text-[11px] text-[var(--text-secondary)] truncate">
                   {gid}
                 </div>
-                <div class="px-2 flex items-center overflow-hidden">
+                <div class="px-2 flex items-center gap-1 overflow-hidden">
                   <span
                     class="px-1.5 py-0.2 text-[10px] rounded border truncate {getStatusBadgeClass(raw)}"
                     title={item.status}
                   >
                     {raw}
                   </span>
+                  {#if chip}
+                    <span
+                      class="shrink-0 px-1 text-[10px] rounded border bg-[#fbbf24]/15 text-[#fbbf24] border-[#fbbf24]/40 whitespace-nowrap"
+                      title={chip.message || undefined}
+                      data-cooldown-chip={chip.kind}
+                    >⏱ {formatCooldown(chip.remaining)}</span>
+                  {/if}
                 </div>
                 <div class="px-2 flex items-center gap-1.5">
                   <div class="flex-1 h-1.5 bg-[#1e1e1e] rounded overflow-hidden">
@@ -477,6 +513,12 @@
                 </div>
                 <div class="px-2 text-center text-[10px] text-[var(--text-secondary)] truncate">
                   {fmt}
+                </div>
+                <div
+                  class="px-2 text-left text-[11px] text-[var(--text-secondary)] truncate"
+                  title={formatAddedAtFull(item.createdAt)}
+                >
+                  {formatAddedAt(item.createdAt)}
                 </div>
               {/if}
             </div>
