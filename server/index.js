@@ -371,6 +371,7 @@ function createRequestHandler() {
                 const items = entries.map(data => ({
                     id: String(data.gallery_id),
                     source: sourceOf(data.gallery_id),
+                    category: (data.meta && data.meta.contentType) || null,
                     title: data.title || 'Unknown',
                     author: data.artist || null,
                     lang: data.language || null,

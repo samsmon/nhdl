@@ -15,6 +15,7 @@ const providers = require('./providers');
 const { toPublicId } = providers;
 const { fetchText, downloadToFile, curlFetchText, curlDownloadToFile } = require('./providers/http');
 const { PAGE_EXTS } = require('./providers/boards');
+const { typeFolderName, isContentType, TYPE_LABELS } = require('./providers/contentType');
 
 // Gallery keys can contain ":" (invalid in Windows paths); never use them raw as folder names.
 function safeKeyName(key) {
@@ -370,14 +371,21 @@ class DownloaderEngine extends EventEmitter {
         if (!sanitizedTitle) return null;
         const sanitizedAuthor = cachedAuthor ? sanitizeName(cachedAuthor) : null;
 
+        const roots = [this.baseDownloadDir];
+        for (const label of Object.values(TYPE_LABELS)) {
+            const p = path.join(this.baseDownloadDir, label);
+            try { if (fs.statSync(p).isDirectory()) roots.push(p); } catch (e) {}
+        }
+
+        for (const root of roots) {
         let langDirs;
         try {
-            langDirs = fs.readdirSync(this.baseDownloadDir, { withFileTypes: true }).filter(d => d.isDirectory());
-        } catch (e) { return null; }
+            langDirs = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory());
+        } catch (e) { continue; }
 
         for (const langDir of langDirs) {
             let authorDirs;
-            const langPath = path.join(this.baseDownloadDir, langDir.name);
+            const langPath = path.join(root, langDir.name);
             try {
                 authorDirs = fs.readdirSync(langPath, { withFileTypes: true }).filter(d => d.isDirectory());
             } catch (e) { continue; }
@@ -423,6 +431,7 @@ class DownloaderEngine extends EventEmitter {
                     return { archived: false, path: folderPath, title: cachedTitle, pages: maxPage, ext, pageExts };
                 }
             }
+        }
         }
         return null;
     }
@@ -710,7 +719,15 @@ class DownloaderEngine extends EventEmitter {
                 return { status: "RATE_LIMIT" };
             }
 
-            const { title, mediaId, numPages, pageExts, langStr, authorStr, extraMeta } = meta;
+            const { title, mediaId, numPages, pageExts, langStr, authorStr } = meta;
+            const contentType = (!provider.isDefault && isContentType(meta.contentType)) ? meta.contentType : null;
+            const extraMeta = {
+                ...(meta.extraMeta || {}),
+                ...(contentType ? { contentType, category: meta.category || null } : {})
+            };
+            if (meta.categoryError) {
+                await logActivity(`[CATEGORY] ID ${galleryId}: ${meta.categoryError} — continuing without a content type`);
+            }
             let ext = meta.ext;
             const extFor = (page) => pageExts[page] || ext;
             const sanitizedLang = sanitizeName(langStr);
@@ -720,9 +737,13 @@ class DownloaderEngine extends EventEmitter {
             if (!this.isGalleryDeleting(gid)) {
                 await updateListDisplayName(null, galleryId, buildDisplayName(title, authorStr));
                 await updateQueueItem(galleryId, { pagesTotal: numPages });
+                if (contentType) await updateQueueItem(galleryId, { category: contentType });
             }
 
-            const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
+            const typeDir = typeFolderName(contentType);
+            const parentDir = typeDir
+                ? path.join(this.baseDownloadDir, typeDir, sanitizedLang, sanitizedAuthor)
+                : path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
             let folderPath = path.join(parentDir, sanitizedTitle);
 
             if (fs.existsSync(parentDir)) {
