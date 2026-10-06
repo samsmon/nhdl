@@ -68,7 +68,9 @@ Download per halaman: coba kandidat `urls` berurutan sampai ada yang berstatus 2
 - ID lama tanpa prefix berarti site A, jadi marker `.nhdl-id`, library, dan antrean lama tidak perlu ditulis ulang.
 - Nilai prefix saat ini diusulkan `xxx`, `rox`, `com` (konstanta di kode, mudah diganti).
 - `normalizeGalleryId` dan `isValidGalleryId` (`core/db/common.js`) menerima angka polos atau `prefix:isi` dan mengembalikan string kanonik. Angka polos tetap divalidasi sebagai bilangan bulat positif.
-- Pengurutan antrean di `core/tracker.js` (sort memakai `parseInt`) diganti perbandingan natural agar kunci berprefix tidak menghasilkan `NaN`.
+- Semua tempat yang membandingkan atau menyaring `Number(gallery_id)` / `parseInt(id)` diganti perbandingan string: `core/db/sqlite.js` dan `core/db/postgres.js` (reorder prioritas, import replace, bulk pause/resume/delete, `logEvent`), `core/engine.js` (flag stop/hapus galeri), `core/tracker.js` (baca marker di `rescanLibrary`), `server/index.js` (`activeGalleryId`), dan `webui` (`rankById`, parser URL).
+- Respons API memakai `toPublicId`: `galleryId` bertipe number untuk kunci angka polos (site A, kompatibel dengan klien lama) dan string untuk kunci berprefix. Baris mentah dari DB mengikuti aturan yang sama.
+- Nama folder tidak pernah memakai kunci mentah (karakter `:` tidak valid di Windows); fallback memakai `safeKeyName`.
 - Marker `.nhdl-id` dan `<archive>.nhdl-id` menyimpan string kunci apa adanya. `rescanLibrary` berhenti memakai `parseInt` untuk membaca isinya.
 - Nama file/folder keluaran tidak memuat kunci mentah, jadi tidak ada karakter `:` yang masuk ke path (Windows).
 
@@ -78,7 +80,8 @@ Download per halaman: coba kandidat `urls` berurutan sampai ada yang berstatus 2
 
 - **PostgreSQL** (`core/db/postgres.js`): `ALTER TABLE queue ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text` dan hal yang sama untuk `library`, dalam satu transaksi migrasi.
 - **SQLite** (`core/db/sqlite.js`): tipe kolom PK tidak bisa diubah, jadi bangun ulang tabel `queue` dan `library` (buat tabel baru, salin dengan `CAST(gallery_id AS TEXT)`, hapus lama, ganti nama, buat ulang indeks) dalam satu transaksi.
-- Driver `pg` mendaftarkan parser tipe 20 (int8) → number; untuk kolom TEXT hasil tetap string, jadi pemakai `gallery_id` yang mengharapkan number harus diaudit (`core/db.js`, `tracker.js`, `server/index.js`).
+- Tabel `events` ikut dimigrasi di PostgreSQL (`gallery_id` BIGINT → TEXT). Di SQLite kolom `events.gallery_id` tetap berafinitas INTEGER karena SQLite menyimpan teks non-numerik (kunci berprefix) apa adanya.
+- Driver `pg` mempertahankan parser tipe 20 (int8) → number untuk kolom BIGINT lain; kolom `gallery_id` yang kini TEXT dikembalikan sebagai string lalu dipetakan lewat `toPublicId`.
 - Export/import: format tetap `nhdl-export` v1; payload lama (ID angka) lolos validasi, payload baru boleh memuat ID berprefix.
 - Rollback: backup database (`data/nhdl.db` atau dump Postgres) sebelum migrasi. Migrasi satu arah, tidak ada downgrade otomatis.
 
