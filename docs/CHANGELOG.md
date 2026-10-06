@@ -8,6 +8,14 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Pembaruan tampilan antrian
+- Filter sidebar "Queued" menjadi **Queue** dan kini mencakup `PENDING` dan `ON_PROGRESS` (item yang sedang diunduh tetap terlihat di antrian; "Downloading" hanya `ON_PROGRESS`, "Completed" tetap `DONE`/`SKIPPED`). Status bar tetap menghitung `PENDING` saja lewat `filterCounts.pending` supaya "Active" dan "Queued" tidak dihitung ganda.
+- Baris `ON_PROGRESS` diberi penanda aksen biru di tepi kiri dan latar tipis.
+- Chip hitung mundur kuning (mis. `⏱ 22s`) di sel Status: pada item `PENDING` pertama menurut urutan rank saat `COOLDOWN`/`BATCH_REST`, dan pada item berstatus `COOLDOWN` saat `RATE_LIMIT` 429 (format `m:ss`). Data dari `liveProgress` yang sudah ada lewat SSE; tidak ada perubahan server/API dan tidak ada polling.
+- Kolom desktop baru **Ditambahkan** (`createdAt`, terakhir setelah Format, bisa diurutkan, tanggal tidak valid selalu di akhir). Waktu lokal `06 Okt 13:31`, tooltip `2026-10-06 13:31:45`; format SQLite (UTC tanpa zona) dan ISO PostgreSQL sama-sama diurai. Lebar kolom tersimpan digabung dengan default sehingga kolom baru selalu punya lebar.
+- Helper murni baru `webui/src/lib/queueView.js` dengan tes `test/webuiQueueView.test.js` (ditulis lebih dulu).
+- Test suite: 101 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Transport curl untuk site C
 - `core/providers/http.js`: `resolveCurlPath`, `curlFetchText`, dan `curlDownloadToFile` (system `curl` lewat `execFile` dengan array argumen; status HTTP dibaca lewat `-w`, unduhan ke `.part` lalu rename hanya untuk 200, error HTTP membawa `statusCode`). Ditambahkan tanpa mengubah ekspor lama.
 - Provider punya field `transport`: `'curl'` untuk site C, `'node'` untuk site B1/B2 dan default. `fetchProviderMetadata` dan `downloadProviderPage` di engine memilih helper sesuai `transport`; logika fallback 404 per kandidat, placeholder, dan retry tidak berubah.

@@ -3,6 +3,7 @@
   import { appStore, getItemRawStatus, parseItemUrl } from '../stores/app.svelte.js';
   import ContextMenu from './ContextMenu.svelte';
   import { itemSource, sourceLabel } from '../sources.js';
+  import { formatAddedAt, formatAddedAtFull, formatCooldown } from '../queueView.js';
 
   let { onRequestDelete } = $props();
 
@@ -20,7 +21,8 @@
     speed: 86,
     eta: 76,
     batch: 66,
-    format: 68
+    format: 68,
+    createdAt: 112
   };
 
   function loadWidths() {
@@ -29,7 +31,13 @@
       if (raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object') {
-          return { ...DEFAULT_WIDTHS, ...parsed };
+          // Merge saved widths over defaults (new columns get a default); drop non-numeric values.
+          const merged = { ...DEFAULT_WIDTHS };
+          for (const id of Object.keys(DEFAULT_WIDTHS)) {
+            const w = Number(parsed[id]);
+            if (Number.isFinite(w) && w > 0) merged[id] = w;
+          }
+          return merged;
         }
       }
     } catch {}
@@ -60,7 +68,8 @@
     { id: 'speed', label: 'Speed', minWidth: 72, align: 'text-right' },
     { id: 'eta', label: 'ETA', minWidth: 64, align: 'text-right' },
     { id: 'batch', label: 'Batch', minWidth: 56, align: 'text-right' },
-    { id: 'format', label: 'Format', minWidth: 60, align: 'text-center' }
+    { id: 'format', label: 'Format', minWidth: 60, align: 'text-center' },
+    { id: 'createdAt', label: 'Ditambahkan', minWidth: 96, align: 'text-left' }
   ];
 
   const mobileColumns = [
@@ -385,6 +394,17 @@
             {@const prog = getRowProgress(item, appStore.liveProgress)}
             {@const rank = appStore.rankById.get(gid) ?? item.id}
             {@const fmt = (item.format || appStore.downloadFormat || 'cbz').toUpperCase()}
+            {@const cd = appStore.cooldown}
+            {@const chip =
+              cd && !isMobile
+                ? cd.kind === 'next'
+                  ? gid === appStore.nextPendingId && raw === 'PENDING'
+                    ? cd
+                    : null
+                  : raw === 'COOLDOWN'
+                    ? cd
+                    : null
+                : null}
 
             <div
               style="height: {ROW_HEIGHT}px; grid-template-columns: {gridTemplate};"
@@ -395,7 +415,11 @@
                 ? isFocused
                   ? 'bg-[var(--bg-selected-focus)] text-white'
                   : 'bg-[var(--bg-selected)] text-white'
-                : 'hover:bg-[var(--bg-hover)] text-[var(--text-primary)]'}"
+                : raw === 'ON_PROGRESS'
+                  ? 'bg-[#38bdf8]/[0.06] hover:bg-[#38bdf8]/10 text-[var(--text-primary)]'
+                  : 'hover:bg-[var(--bg-hover)] text-[var(--text-primary)]'} {raw === 'ON_PROGRESS'
+                ? 'shadow-[inset_2px_0_0_#38bdf8]'
+                : ''}"
               role="row"
               tabindex="-1"
               aria-selected={isSelected}
@@ -431,7 +455,7 @@
                   <span class="text-[10px] w-7 text-right">{prog.pct}%</span>
                 </div>
               {:else}
-                <!-- Desktop: #, Judul, ID, Status, Progress, Halaman, Speed, ETA, Batch, Format -->
+                <!-- Desktop: #, Judul, ID, Status, Progress, Halaman, Speed, ETA, Batch, Format, Ditambahkan -->
                 <div class="px-2 text-right text-[11px] text-[var(--text-muted)] truncate">
                   {rank}
                 </div>
@@ -441,13 +465,20 @@
                 <div class="px-2 text-[11px] text-[var(--text-secondary)] truncate">
                   {gid}
                 </div>
-                <div class="px-2 flex items-center overflow-hidden">
+                <div class="px-2 flex items-center gap-1 overflow-hidden">
                   <span
                     class="px-1.5 py-0.2 text-[10px] rounded border truncate {getStatusBadgeClass(raw)}"
                     title={item.status}
                   >
                     {raw}
                   </span>
+                  {#if chip}
+                    <span
+                      class="shrink-0 px-1 text-[10px] rounded border bg-[#fbbf24]/15 text-[#fbbf24] border-[#fbbf24]/40 whitespace-nowrap"
+                      title={chip.message || undefined}
+                      data-cooldown-chip={chip.kind}
+                    >⏱ {formatCooldown(chip.remaining)}</span>
+                  {/if}
                 </div>
                 <div class="px-2 flex items-center gap-1.5">
                   <div class="flex-1 h-1.5 bg-[#1e1e1e] rounded overflow-hidden">
@@ -480,6 +511,12 @@
                 </div>
                 <div class="px-2 text-center text-[10px] text-[var(--text-secondary)] truncate">
                   {fmt}
+                </div>
+                <div
+                  class="px-2 text-left text-[11px] text-[var(--text-secondary)] truncate"
+                  title={formatAddedAtFull(item.createdAt)}
+                >
+                  {formatAddedAt(item.createdAt)}
                 </div>
               {/if}
             </div>

@@ -193,6 +193,7 @@ Task:
 - [x] Tes langsung: site B1 (240 halaman, pause/resume) dan site B2 (51 halaman) lulus
 - [x] Site C: API gambar menjawab 403 (tantangan Cloudflare) untuk klien Node; diselesaikan dengan transport `curl` sistem (`transport: 'curl'` di provider), tes langsung 17/17 gambar lulus
 - [x] Perbaikan review akhir: resolusi URL tanpa skema, 429/503 provider ke backoff, cek signature gambar, tampilan `ignored`, URL fallback per sumber, validasi nilai remote, API kosong = SKIPPED
+- [x] UI antrian: filter "Queue" (PENDING + ON_PROGRESS), penanda baris aktif, chip cooldown, kolom "Ditambahkan"
 - [ ] Putuskan apakah `samples/` (sampel manual user) masuk `.gitignore`
 
 ## Log
@@ -238,3 +239,4 @@ Task:
 | 2026-10-06 | Multi-source | Multi-source download: lapisan provider, kunci berprefix, skema v3, `source`, badge/filter UI. Tes langsung site B1 (240/240 + pause/resume) dan site B2 (51/51) lulus; site C 403 untuk klien Node (terbuka). 79 lulus, 1 skip, 0 gagal |
 | 2026-10-06 | Multi-source | Transport curl untuk site C (`curlFetchText`/`curlDownloadToFile`, field `transport` di provider). Tes langsung site C 17/17 lulus. 84 lulus, 1 skip, 0 gagal |
 | 2026-10-06 | Multi-source | Perbaikan review akhir (URL tanpa skema, 429/503 provider ke cooldown, signature gambar, `ignored` di log/toast, URL fallback per sumber, validasi nilai remote, API kosong = SKIPPED). 96 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Multi-source | Pembaruan tampilan antrian (filter Queue = PENDING + ON_PROGRESS, penanda baris aktif, chip cooldown, kolom Ditambahkan; hanya UI). 101 lulus, 1 skip, 0 gagal |

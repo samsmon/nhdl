@@ -1,6 +1,7 @@
 import { SvelteMap } from 'svelte/reactivity';
 import * as api from '../api.js';
 import { urlKey, matchesSourceFilter, countBySource } from '../sources.js';
+import { isQueuedStatus, parseAddedAt, cooldownInfo } from '../queueView.js';
 
 // Reactive item map keyed by galleryId string so SSE `item` updates mutate
 // only the affected entry without replacing the entire collection.
@@ -67,7 +68,7 @@ export function matchesSidebarFilter(item, statusFilter) {
   if (!statusFilter || statusFilter === 'all') return true;
   const raw = getItemRawStatus(item);
   if (statusFilter === 'downloading') return raw === 'ON_PROGRESS';
-  if (statusFilter === 'queued') return raw === 'PENDING';
+  if (statusFilter === 'queued') return isQueuedStatus(raw);
   if (statusFilter === 'completed') return raw === 'DONE' || raw === 'SKIPPED';
   if (statusFilter === 'stopped') return raw === 'STOPPED';
   if (statusFilter === 'failed') return raw === 'ERROR' || raw === 'COOLDOWN' || raw === 'PAUSED';
@@ -113,7 +114,7 @@ class AppStore {
   retryFeedback = $state('');
 
   // Table Sort state (Fase 4 B3)
-  sortColumn = $state('order'); // 'order' | 'title' | 'galleryId' | 'status' | 'progress' | 'pages' | 'speed' | 'eta' | 'batch' | 'format'
+  sortColumn = $state('order'); // 'order' | 'title' | 'galleryId' | 'status' | 'progress' | 'pages' | 'speed' | 'eta' | 'batch' | 'format' | 'createdAt'
   sortDirection = $state('asc'); // 'asc' | 'desc'
 
   // Multi-select & Focus state (Fase 4 B3 & B4)
@@ -148,7 +149,8 @@ class AppStore {
   filterCounts = $derived.by(() => {
     let all = 0;
     let downloading = 0;
-    let queued = 0;
+    let queued = 0; // Queue view: PENDING + ON_PROGRESS
+    let pending = 0; // PENDING only (status bar, so Active/Queued do not double count)
     let completed = 0;
     let stopped = 0;
     let failed = 0;
@@ -158,8 +160,9 @@ class AppStore {
     for (const item of this.items) {
       all++;
       const raw = getItemRawStatus(item);
+      if (isQueuedStatus(raw)) queued++;
       if (raw === 'ON_PROGRESS') downloading++;
-      else if (raw === 'PENDING') queued++;
+      else if (raw === 'PENDING') pending++;
       else if (raw === 'DONE' || raw === 'SKIPPED') completed++;
       else if (raw === 'STOPPED') stopped++;
       else if (raw === 'ERROR' || raw === 'COOLDOWN' || raw === 'PAUSED') failed++;
@@ -181,6 +184,7 @@ class AppStore {
       all,
       downloading,
       queued,
+      pending,
       completed,
       stopped,
       failed,
@@ -192,7 +196,7 @@ class AppStore {
   doneCount = $derived(this.filterCounts.completed);
 
   // Priority rank (# column): 1..N ordered by priority DESC, id ASC
-  rankById = $derived.by(() => {
+  rankedItems = $derived.by(() => {
     const copy = this.items.slice();
     copy.sort((a, b) => {
       const pa = Number(a.priority) || 0;
@@ -200,12 +204,28 @@ class AppStore {
       if (pb !== pa) return pb - pa;
       return (Number(a.id) || 0) - (Number(b.id) || 0);
     });
+    return copy;
+  });
+
+  rankById = $derived.by(() => {
     const map = new Map();
-    for (let i = 0; i < copy.length; i++) {
-      map.set(String(copy[i].galleryId), i + 1);
+    const ranked = this.rankedItems;
+    for (let i = 0; i < ranked.length; i++) {
+      map.set(String(ranked[i].galleryId), i + 1);
     }
     return map;
   });
+
+  // Gallery key of the first PENDING item in rank order (the next one the engine will take).
+  nextPendingId = $derived.by(() => {
+    for (const item of this.rankedItems) {
+      if (getItemRawStatus(item) === 'PENDING') return String(item.galleryId);
+    }
+    return null;
+  });
+
+  // Cooldown countdown for the list chip: { kind, remaining, message } | null
+  cooldown = $derived(cooldownInfo(this.liveProgress, this.engineStatus));
 
   // Filtered and sorted array for VirtualQueueTable
   filteredAndSortedItems = $derived.by(() => {
@@ -288,6 +308,20 @@ class AppStore {
         }
         case 'batch': {
           cmp = (Number(a.batch) || 1) - (Number(b.batch) || 1);
+          break;
+        }
+        case 'createdAt': {
+          const ta = parseAddedAt(a.createdAt)?.getTime();
+          const tb = parseAddedAt(b.createdAt)?.getTime();
+          // invalid/unknown dates always sort last, regardless of direction
+          if (ta === undefined || tb === undefined) {
+            if (ta === tb) {
+              cmp = 0;
+              break;
+            }
+            return ta === undefined ? 1 : -1;
+          }
+          cmp = ta - tb;
           break;
         }
         case 'format': {

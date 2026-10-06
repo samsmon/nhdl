@@ -22,7 +22,7 @@
   const statusItems = $derived([
     { id: 'all', label: 'All', count: counts.all, icon: Layers, color: 'text-[#e5e5e5]' },
     { id: 'downloading', label: 'Downloading', count: counts.downloading, icon: Download, color: 'text-[#38bdf8]' },
-    { id: 'queued', label: 'Queued', count: counts.queued, icon: Clock, color: 'text-[#94a3b8]' },
+    { id: 'queued', label: 'Queue', count: counts.queued, icon: Clock, color: 'text-[#94a3b8]' },
     { id: 'completed', label: 'Completed', count: counts.completed, icon: CheckCircle2, color: 'text-[#a3e635]' },
     { id: 'stopped', label: 'Stopped', count: counts.stopped, icon: OctagonPause, color: 'text-[#f59e0b]' },
     { id: 'failed', label: 'Failed', count: counts.failed, icon: AlertCircle, color: 'text-[#f87171]' }
