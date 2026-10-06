@@ -14,7 +14,7 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 - Chip hitung mundur kuning (mis. `⏱ 22s`) di sel Status: pada item `PENDING` pertama menurut urutan rank saat `COOLDOWN`/`BATCH_REST`, dan pada item berstatus `COOLDOWN` saat `RATE_LIMIT` 429 (format `m:ss`). Data dari `liveProgress` yang sudah ada lewat SSE; tidak ada perubahan server/API dan tidak ada polling.
 - Kolom desktop baru **Ditambahkan** (`createdAt`, terakhir setelah Format, bisa diurutkan, tanggal tidak valid selalu di akhir). Waktu lokal `06 Okt 13:31`, tooltip `2026-10-06 13:31:45`; format SQLite (UTC tanpa zona) dan ISO PostgreSQL sama-sama diurai. Lebar kolom tersimpan digabung dengan default sehingga kolom baru selalu punya lebar.
 - Helper murni baru `webui/src/lib/queueView.js` dengan tes `test/webuiQueueView.test.js` (ditulis lebih dulu).
-- Badge sumber kini tampil untuk semua item (termasuk sumber default, label fallback `nhentai.net` bila daftar sumber server belum dimuat) di antrian dan library; bagian "Source" sidebar tampil selama ada minimal satu sumber. Hanya UI, tanpa perubahan server/API.
+- Badge sumber kini tampil untuk semua item (termasuk sumber default, label fallback situs default bila daftar sumber server belum dimuat) di antrian dan library; bagian "Source" sidebar tampil selama ada minimal satu sumber. Hanya UI, tanpa perubahan server/API.
 - Test suite: 101 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
 
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Transport curl untuk site C
