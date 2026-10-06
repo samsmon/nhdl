@@ -49,7 +49,7 @@ function maskDatabaseUrl(url) {
     }
 }
 
-const CURRENT_APP_SCHEMA_VERSION = 2;
+const CURRENT_APP_SCHEMA_VERSION = 3;
 
 function isValidGalleryId(rawId) {
     return canonicalKey(rawId) !== null;

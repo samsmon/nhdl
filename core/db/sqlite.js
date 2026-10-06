@@ -2,8 +2,9 @@ const { DatabaseSync } = require('node:sqlite');
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, toPublicId, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
-const { parseListText } = require('./listParser');
+const { normalizeGalleryId, toPublicId, publicRow, formatQueueRow, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { parseListText, parseListTextDetailed } = require('./listParser');
+const { canonicalKey } = require('../providers');
 
 const ROOT_DIR = path.resolve(__dirname, '..', '..');
 const DEFAULT_DB_PATH = process.env.NHDL_DB_PATH || path.join(ROOT_DIR, 'data', 'nhdl.db');
@@ -74,6 +75,65 @@ const MIGRATIONS = [
             if (!libCols.includes('meta')) {
                 db.exec(`ALTER TABLE library ADD COLUMN meta TEXT`);
             }
+        }
+    }
+    ,{
+        version: 3,
+        up(db) {
+            const queueType = db.prepare(`PRAGMA table_info(queue)`).all().find(c => c.name === 'gallery_id');
+            if (queueType && String(queueType.type).toUpperCase() !== 'TEXT') {
+                db.exec(`
+                    ALTER TABLE queue RENAME TO queue_v2;
+                    DROP INDEX IF EXISTS idx_queue_status;
+                    DROP INDEX IF EXISTS idx_queue_batch;
+                    CREATE TABLE queue (
+                      id           INTEGER PRIMARY KEY,
+                      gallery_id   TEXT    NOT NULL UNIQUE,
+                      url          TEXT    NOT NULL,
+                      title        TEXT,
+                      status       TEXT    NOT NULL DEFAULT 'PENDING',
+                      batch        INTEGER NOT NULL DEFAULT 1,
+                      priority     INTEGER NOT NULL DEFAULT 0,
+                      pages_done   INTEGER NOT NULL DEFAULT 0,
+                      pages_total  INTEGER NOT NULL DEFAULT 0,
+                      error        TEXT,
+                      retries      INTEGER NOT NULL DEFAULT 0,
+                      created_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+                      updated_at   TEXT    NOT NULL DEFAULT (datetime('now')),
+                      format       TEXT
+                    );
+                    INSERT INTO queue (id, gallery_id, url, title, status, batch, priority, pages_done, pages_total, error, retries, created_at, updated_at, format)
+                      SELECT id, CAST(gallery_id AS TEXT), url, title, status, batch, priority, pages_done, pages_total, error, retries, created_at, updated_at, format
+                      FROM queue_v2;
+                    DROP TABLE queue_v2;
+                    CREATE INDEX IF NOT EXISTS idx_queue_status ON queue(status);
+                    CREATE INDEX IF NOT EXISTS idx_queue_batch  ON queue(batch);
+                `);
+            }
+
+            const libType = db.prepare(`PRAGMA table_info(library)`).all().find(c => c.name === 'gallery_id');
+            if (libType && String(libType.type).toUpperCase() !== 'TEXT') {
+                db.exec(`
+                    ALTER TABLE library RENAME TO library_v2;
+                    CREATE TABLE library (
+                      gallery_id   TEXT PRIMARY KEY,
+                      title        TEXT NOT NULL,
+                      path         TEXT NOT NULL,
+                      pages        INTEGER,
+                      format       TEXT,
+                      language     TEXT,
+                      artist       TEXT,
+                      added_at     TEXT NOT NULL DEFAULT (datetime('now')),
+                      meta         TEXT
+                    );
+                    INSERT INTO library (gallery_id, title, path, pages, format, language, artist, added_at, meta)
+                      SELECT CAST(gallery_id AS TEXT), title, path, pages, format, language, artist, added_at, meta
+                      FROM library_v2;
+                    DROP TABLE library_v2;
+                `);
+            }
+            // events.gallery_id keeps INTEGER affinity on purpose: SQLite stores non-numeric
+            // text (prefixed keys) as TEXT in such a column, and numeric keys stay INTEGER.
         }
     }
 ];
@@ -267,17 +327,17 @@ async function enqueueGallery(item, db = null) {
 async function getQueueItem(galleryId, db = null) {
     const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
-    return active.prepare(`SELECT * FROM queue WHERE gallery_id = ?`).get(id) || null;
+    return publicRow(active.prepare(`SELECT * FROM queue WHERE gallery_id = ?`).get(id) || null);
 }
 
 async function getNextPendingItem(db = null) {
     const active = db || await getDb();
-    return active.prepare(`
+    return publicRow(active.prepare(`
         SELECT * FROM queue
         WHERE status = 'PENDING'
         ORDER BY priority DESC, id ASC
         LIMIT 1
-    `).get() || null;
+    `).get() || null);
 }
 
 async function getQueueItems(options = {}, db = null) {
@@ -311,7 +371,7 @@ async function getQueueItems(options = {}, db = null) {
         }
     }
 
-    return active.prepare(sql).all(...params);
+    return active.prepare(sql).all(...params).map(publicRow);
 }
 
 async function updateQueueItem(galleryId, fields = {}, db = null) {
@@ -401,7 +461,7 @@ async function pauseQueueItems(ids = [], db = null) {
             if (!isPausable) continue;
 
             if (st === 'ON_PROGRESS') {
-                stoppingIds.push(gid);
+                stoppingIds.push(toPublicId(gid));
             }
             await updateQueueItem(gid, { status: 'STOPPED' }, active);
             paused++;
@@ -435,7 +495,7 @@ async function resumeQueueItems(ids = [], db = null) {
 
             await updateQueueItem(gid, { status: 'PENDING', error: null }, active);
             resumed++;
-            resumedIds.push(gid);
+            resumedIds.push(toPublicId(gid));
         }
         active.exec('COMMIT');
     } catch (err) {
@@ -460,7 +520,7 @@ async function deleteQueueItems(ids = [], db = null) {
             const row = await getQueueItem(gid, active);
             if (!row) continue;
             if (row.status === 'ON_PROGRESS') {
-                stoppingIds.push(gid);
+                stoppingIds.push(toPublicId(gid));
             }
             deleted += await deleteQueueItem(gid, active);
         }
@@ -514,10 +574,10 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = maxP + (selectedRows.length - i);
-                const gid = Number(selectedRows[i].gallery_id);
+                const gid = String(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
                     stmt.run(newP, nowSql, gid);
-                    changedItems.push({ galleryId: gid, priority: newP });
+                    changedItems.push({ galleryId: toPublicId(gid), priority: newP });
                 }
             }
         } else if (action === 'bottom') {
@@ -525,10 +585,10 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = minP - (i + 1);
-                const gid = Number(selectedRows[i].gallery_id);
+                const gid = String(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
                     stmt.run(newP, nowSql, gid);
-                    changedItems.push({ galleryId: gid, priority: newP });
+                    changedItems.push({ galleryId: toPublicId(gid), priority: newP });
                 }
             }
         } else if (action === 'up' || action === 'down') {
@@ -565,9 +625,9 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                     const r = reordered[idx];
                     const slotPriority = Number(rows[idx].priority);
                     if (Number(r.priority) !== slotPriority) {
-                        const gid = Number(r.gallery_id);
+                        const gid = String(r.gallery_id);
                         stmt.run(slotPriority, nowSql, gid);
-                        changedItems.push({ galleryId: gid, priority: slotPriority });
+                        changedItems.push({ galleryId: toPublicId(gid), priority: slotPriority });
                     }
                 }
             } else {
@@ -575,9 +635,9 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                     const r = reordered[idx];
                     const desiredPriority = total - idx;
                     if (Number(r.priority) !== desiredPriority) {
-                        const gid = Number(r.gallery_id);
+                        const gid = String(r.gallery_id);
                         stmt.run(desiredPriority, nowSql, gid);
-                        changedItems.push({ galleryId: gid, priority: desiredPriority });
+                        changedItems.push({ galleryId: toPublicId(gid), priority: desiredPriority });
                     }
                 }
             }
@@ -623,7 +683,7 @@ async function clearCompletedQueue(db = null) {
     `).run();
     if (res.changes > 0) {
         const batchCount = Math.max(1, await getMaxBatch(active));
-        const removedIds = rows.map(r => Number(r.gallery_id));
+        const removedIds = rows.map(r => toPublicId(r.gallery_id));
         dbEvents.emit('item', { type: 'cleared', removedIds, batchCount });
     }
     return Number(res.changes || 0);
@@ -638,7 +698,7 @@ async function getMaxBatch(db = null) {
 async function importListText(text, options = {}, db = null) {
     const active = db || await getDb();
     const { replace = false, defaultFormat = null } = options;
-    const parsedItems = parseListText(text, defaultFormat);
+    const { items: parsedItems, ignored } = parseListTextDetailed(text, defaultFormat);
     const galleryIds = parsedItems.map(i => i.galleryId);
 
     let added = 0;
@@ -726,7 +786,7 @@ async function importListText(text, options = {}, db = null) {
         throw err;
     }
 
-    return { added, updated, duplicates, galleryIds, total: parsedItems.length };
+    return { added, updated, duplicates, ignored, galleryIds, total: parsedItems.length };
 }
 
 async function exportListText(db = null) {
@@ -803,7 +863,7 @@ function parseLibraryRow(row) {
     const isArchived = row.format === 'cbz' || row.format === 'zip';
     const isSkipped = row.format === 'skipped' || !!(parsedMeta && parsedMeta.skipped);
     return {
-        gallery_id: row.gallery_id,
+        gallery_id: toPublicId(row.gallery_id),
         id: String(row.gallery_id),
         title: row.title,
         path: row.path,
@@ -945,7 +1005,7 @@ async function migrateLegacyConfigJson(configPath = path.join(ROOT_DIR, 'config.
 async function logEvent({ level = 'info', galleryId = null, message = '', maxRows = 10000 }, db = null) {
     const active = db || await getDb();
     const gid = galleryId !== null && galleryId !== undefined && String(galleryId).trim() !== ''
-        ? parseInt(String(galleryId), 10) || null
+        ? (canonicalKey(galleryId) || null)
         : null;
     const nowIso = new Date().toISOString();
 

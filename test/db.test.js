@@ -1023,7 +1023,7 @@ test('updateQueuePriority > 500 items: 1000-item #500 up/down/top/bottom, multi-
         );
         for (let i = 1; i <= 1000; i++) {
             const gid = 960000 + i;
-            ins1000.run(gid, `https://certain.site/g/${gid}/`);
+            ins1000.run(String(gid), `https://certain.site/g/${gid}/`);
         }
         ctx.db.exec('COMMIT');
 
@@ -1083,7 +1083,7 @@ test('updateQueuePriority > 500 items: 1000-item #500 up/down/top/bottom, multi-
         );
         for (let i = 1; i <= 5000; i++) {
             const gid = 970000 + i;
-            ins5000.run(gid, `https://certain.site/g/${gid}/`);
+            ins5000.run(String(gid), `https://certain.site/g/${gid}/`);
         }
         ctx.db.exec('COMMIT');
 
@@ -1405,7 +1405,7 @@ test('Fase 7.5: autoMigrateSqliteToPostgres transfers data when Postgres is empt
 test('Fase 7.7: PostgreSQL schema migrations version 1 to latest execute in order', async () => {
     const postgresAdapter = require('../core/db/postgres');
     assert.ok(Array.isArray(postgresAdapter.MIGRATIONS), 'MIGRATIONS array must exist');
-    assert.strictEqual(postgresAdapter.MIGRATIONS.length, 2, 'Must have 2 migrations defined');
+    assert.strictEqual(postgresAdapter.MIGRATIONS.length, 3, 'Must have 3 migrations defined');
 
     // Test migration v1 query execution
     const executedV1 = [];
@@ -1455,8 +1455,8 @@ test('Fase 7.7: PostgreSQL schema migrations version 1 to latest execute in orde
     };
 
     const finalVer = await postgresAdapter.runMigrations(mockDb);
-    assert.strictEqual(finalVer, 2, 'Final schema version must be 2');
-    assert.strictEqual(currentVersionInDb, 2, 'schema_version table must record version 2');
+    assert.strictEqual(finalVer, 3, 'Final schema version must be 3');
+    assert.strictEqual(currentVersionInDb, 3, 'schema_version table must record version 3');
 });
 
 test('Fase 7.7: Cross-database export SQLite -> import PostgreSQL verifies data integrity', async () => {
@@ -1485,7 +1485,7 @@ test('Fase 7.7: Cross-database export SQLite -> import PostgreSQL verifies data 
 
         // 2. Export SQLite database
         const exported = await sqliteAdapter.exportData(ctx.db);
-        assert.strictEqual(exported.schema_version, 2);
+        assert.strictEqual(exported.schema_version, 3);
         assert.strictEqual(exported.tables.queue.length, 2);
         assert.strictEqual(exported.tables.library.length, 1);
         assert.ok(exported.tables.settings.some(s => s.key === 'downloadDir'));
@@ -1521,14 +1521,14 @@ test('Fase 7.7: Cross-database export SQLite -> import PostgreSQL verifies data 
         // Verify values passed into PostgreSQL parameterized inserts
         const queueInserts = pgExecuted.filter(e => e.sql.includes('INSERT INTO queue'));
         assert.strictEqual(queueInserts.length, 2);
-        const item1 = queueInserts.find(q => q.params.includes(101));
+        const item1 = queueInserts.find(q => q.params.includes('101'));
         assert.ok(item1);
         assert.strictEqual(item1.params[1], 'https://certain.site/g/101/');
         assert.strictEqual(item1.params[2], 'Manga One');
 
         const libInserts = pgExecuted.filter(e => e.sql.includes('INSERT INTO library'));
         assert.strictEqual(libInserts.length, 1);
-        assert.strictEqual(libInserts[0].params[0], 101);
+        assert.strictEqual(libInserts[0].params[0], '101');
         assert.strictEqual(libInserts[0].params[6], 'Artist One');
     } finally {
         await ctx.cleanup();

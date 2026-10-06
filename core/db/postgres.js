@@ -4,8 +4,9 @@ pg.types.setTypeParser(20, v => parseInt(v, 10)); // int8/bigint -> number
 const fs = require('fs');
 const path = require('path');
 const { dbEvents } = require('./events');
-const { normalizeGalleryId, toPublicId, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
-const { parseListText } = require('./listParser');
+const { normalizeGalleryId, toPublicId, publicRow, formatQueueRow, maskDatabaseUrl, validateImportPayload, CURRENT_APP_SCHEMA_VERSION } = require('./common');
+const { parseListText, parseListTextDetailed } = require('./listParser');
+const { canonicalKey } = require('../providers');
 
 let activePool = null;
 let activeUrl = null;
@@ -73,6 +74,16 @@ const MIGRATIONS = [
                 ALTER TABLE queue ADD COLUMN IF NOT EXISTS format TEXT;
                 ALTER TABLE library ADD COLUMN IF NOT EXISTS meta TEXT;
                 CREATE INDEX IF NOT EXISTS idx_queue_priority ON queue(priority DESC, id ASC);
+            `);
+        }
+    },
+    {
+        version: 3,
+        async up(client) {
+            await client.query(`
+                ALTER TABLE queue   ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text;
+                ALTER TABLE library ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text;
+                ALTER TABLE events  ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text;
             `);
         }
     }
@@ -304,7 +315,7 @@ async function getQueueItem(galleryId, db = null) {
     const active = db || await getDb();
     const id = normalizeGalleryId(galleryId);
     const res = await active.query(`SELECT * FROM queue WHERE gallery_id = $1`, [id]);
-    return res.rows[0] || null;
+    return publicRow(res.rows[0] || null);
 }
 
 async function getNextPendingItem(db = null) {
@@ -315,7 +326,7 @@ async function getNextPendingItem(db = null) {
         ORDER BY priority DESC, id ASC
         LIMIT 1
     `);
-    return res.rows[0] || null;
+    return publicRow(res.rows[0] || null);
 }
 
 async function getQueueItems(options = {}, db = null) {
@@ -350,7 +361,7 @@ async function getQueueItems(options = {}, db = null) {
     }
 
     const res = await active.query(sql, params);
-    return res.rows;
+    return res.rows.map(publicRow);
 }
 
 async function updateQueueItem(galleryId, fields = {}, db = null) {
@@ -446,7 +457,7 @@ async function pauseQueueItems(ids = [], db = null) {
             if (!isPausable) continue;
 
             if (st === 'ON_PROGRESS') {
-                stoppingIds.push(gid);
+                stoppingIds.push(toPublicId(gid));
             }
             await updateQueueItem(gid, { status: 'STOPPED' }, client);
             paused++;
@@ -485,7 +496,7 @@ async function resumeQueueItems(ids = [], db = null) {
 
             await updateQueueItem(gid, { status: 'PENDING', error: null }, client);
             resumed++;
-            resumedIds.push(gid);
+            resumedIds.push(toPublicId(gid));
         }
         await client.query('COMMIT');
     } catch (err) {
@@ -515,7 +526,7 @@ async function deleteQueueItems(ids = [], db = null) {
             const row = await getQueueItem(gid, client);
             if (!row) continue;
             if (row.status === 'ON_PROGRESS') {
-                stoppingIds.push(gid);
+                stoppingIds.push(toPublicId(gid));
             }
             deleted += await deleteQueueItem(gid, client);
         }
@@ -569,10 +580,10 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = maxP + (selectedRows.length - i);
-                const gid = Number(selectedRows[i].gallery_id);
+                const gid = String(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
                     await client.query(`UPDATE queue SET priority = $1, updated_at = now() WHERE gallery_id = $2`, [newP, gid]);
-                    changedItems.push({ galleryId: gid, priority: newP });
+                    changedItems.push({ galleryId: toPublicId(gid), priority: newP });
                 }
             }
         } else if (action === 'bottom') {
@@ -580,10 +591,10 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
             const selectedRows = rows.filter(r => targetSet.has(String(r.gallery_id)));
             for (let i = 0; i < selectedRows.length; i++) {
                 const newP = minP - (i + 1);
-                const gid = Number(selectedRows[i].gallery_id);
+                const gid = String(selectedRows[i].gallery_id);
                 if (Number(selectedRows[i].priority) !== newP) {
                     await client.query(`UPDATE queue SET priority = $1, updated_at = now() WHERE gallery_id = $2`, [newP, gid]);
-                    changedItems.push({ galleryId: gid, priority: newP });
+                    changedItems.push({ galleryId: toPublicId(gid), priority: newP });
                 }
             }
         } else if (action === 'up' || action === 'down') {
@@ -620,9 +631,9 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                     const r = reordered[idx];
                     const slotPriority = Number(rows[idx].priority);
                     if (Number(r.priority) !== slotPriority) {
-                        const gid = Number(r.gallery_id);
+                        const gid = String(r.gallery_id);
                         await client.query(`UPDATE queue SET priority = $1, updated_at = now() WHERE gallery_id = $2`, [slotPriority, gid]);
-                        changedItems.push({ galleryId: gid, priority: slotPriority });
+                        changedItems.push({ galleryId: toPublicId(gid), priority: slotPriority });
                     }
                 }
             } else {
@@ -630,9 +641,9 @@ async function updateQueuePriority(ids = [], action = 'top', db = null) {
                     const r = reordered[idx];
                     const desiredPriority = total - idx;
                     if (Number(r.priority) !== desiredPriority) {
-                        const gid = Number(r.gallery_id);
+                        const gid = String(r.gallery_id);
                         await client.query(`UPDATE queue SET priority = $1, updated_at = now() WHERE gallery_id = $2`, [desiredPriority, gid]);
-                        changedItems.push({ galleryId: gid, priority: desiredPriority });
+                        changedItems.push({ galleryId: toPublicId(gid), priority: desiredPriority });
                     }
                 }
             }
@@ -680,7 +691,7 @@ async function clearCompletedQueue(db = null) {
     const changes = res.rows.length;
     if (changes > 0) {
         const batchCount = Math.max(1, await getMaxBatch(active));
-        const removedIds = res.rows.map(r => Number(r.gallery_id));
+        const removedIds = res.rows.map(r => toPublicId(r.gallery_id));
         dbEvents.emit('item', { type: 'cleared', removedIds, batchCount });
     }
     return changes;
@@ -695,7 +706,7 @@ async function getMaxBatch(db = null) {
 async function importListText(text, options = {}, db = null) {
     const active = db || await getDb();
     const { replace = false, defaultFormat = null } = options;
-    const parsedItems = parseListText(text, defaultFormat);
+    const { items: parsedItems, ignored } = parseListTextDetailed(text, defaultFormat);
     const galleryIds = parsedItems.map(i => i.galleryId);
 
     let added = 0;
@@ -788,7 +799,7 @@ async function importListText(text, options = {}, db = null) {
         if (needsRelease) client.release();
     }
 
-    return { added, updated, duplicates, galleryIds, total: parsedItems.length };
+    return { added, updated, duplicates, ignored, galleryIds, total: parsedItems.length };
 }
 
 async function exportListText(db = null) {
@@ -870,7 +881,7 @@ function parseLibraryRow(row) {
     const isSkipped = row.format === 'skipped' || !!(parsedMeta && parsedMeta.skipped);
     const addedAtStr = row.added_at instanceof Date ? row.added_at.toISOString() : String(row.added_at);
     return {
-        gallery_id: Number(row.gallery_id),
+        gallery_id: toPublicId(row.gallery_id),
         id: String(row.gallery_id),
         title: row.title,
         path: row.path,
@@ -971,7 +982,7 @@ async function migrateLegacyConfigJson(configPath, db = null) {
 async function logEvent({ level = 'info', galleryId = null, message = '', maxRows = 10000 }, db = null) {
     const active = db || await getDb();
     const gid = galleryId !== null && galleryId !== undefined && String(galleryId).trim() !== ''
-        ? parseInt(String(galleryId), 10) || null
+        ? (canonicalKey(galleryId) || null)
         : null;
 
     await active.query(`
@@ -1016,7 +1027,7 @@ async function getEvents(options = {}, db = null) {
     return res.rows.map(r => ({
         ...r,
         id: Number(r.id),
-        gallery_id: r.gallery_id ? Number(r.gallery_id) : null,
+        gallery_id: r.gallery_id ? toPublicId(r.gallery_id) : null,
         ts: r.ts instanceof Date ? r.ts.toISOString() : String(r.ts)
     }));
 }
@@ -1032,7 +1043,7 @@ async function exportData(db = null) {
     const queue = queueRes.rows.map(r => ({
         ...r,
         id: Number(r.id),
-        gallery_id: Number(r.gallery_id),
+        gallery_id: toPublicId(r.gallery_id),
         batch: Number(r.batch || 1),
         priority: Number(r.priority || 0),
         pages_done: Number(r.pages_done || 0),
@@ -1044,7 +1055,7 @@ async function exportData(db = null) {
 
     const library = libRes.rows.map(r => ({
         ...r,
-        gallery_id: Number(r.gallery_id),
+        gallery_id: toPublicId(r.gallery_id),
         pages: Number(r.pages || 0),
         added_at: r.added_at instanceof Date ? r.added_at.toISOString() : String(r.added_at)
     }));
@@ -1053,7 +1064,7 @@ async function exportData(db = null) {
     const events = evtRes.rows.map(r => ({
         ...r,
         id: Number(r.id),
-        gallery_id: r.gallery_id ? Number(r.gallery_id) : null,
+        gallery_id: r.gallery_id ? toPublicId(r.gallery_id) : null,
         ts: r.ts instanceof Date ? r.ts.toISOString() : String(r.ts)
     }));
 
@@ -1096,7 +1107,7 @@ async function importData(payload, options = {}, db = null) {
         }
 
         for (const r of queueRows) {
-            const gid = toPublicId(normalizeGalleryId(r.gallery_id || r.galleryId));
+            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
             const url = r.url || `https://nhentai.net/g/${gid}/`;
             const title = r.title || null;
             const status = r.status || 'PENDING';
@@ -1132,7 +1143,7 @@ async function importData(payload, options = {}, db = null) {
         }
 
         for (const r of libraryRows) {
-            const gid = toPublicId(normalizeGalleryId(r.gallery_id || r.galleryId));
+            const gid = normalizeGalleryId(r.gallery_id || r.galleryId);
             const title = r.title || 'Unknown';
             const p = r.path || r.folder || '';
             const pages = Number.isFinite(r.pages) ? r.pages : null;
@@ -1171,7 +1182,7 @@ async function importData(payload, options = {}, db = null) {
         for (const r of eventsRows) {
             const ts = r.ts || new Date().toISOString();
             const level = r.level || 'info';
-            const gid = r.gallery_id ? toPublicId(normalizeGalleryId(r.gallery_id)) : null;
+            const gid = r.gallery_id ? normalizeGalleryId(r.gallery_id) : null;
             const msg = String(r.message || '');
             const res = await client.query(`
                 INSERT INTO events (ts, level, gallery_id, message)
