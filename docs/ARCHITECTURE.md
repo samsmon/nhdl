@@ -13,10 +13,17 @@ nhdl/
 ├── core/
 │   ├── db.js                    (190 baris) — Database facade & dispatcher (SQLite / PostgreSQL via DATABASE_URL)
 │   ├── db/
-│   │   ├── common.js             (45 baris) — normalizeGalleryId, formatQueueRow, maskDatabaseUrl
+│   │   ├── common.js                        — normalizeGalleryId (kunci kanonik), formatQueueRow/publicRow (`toPublicId`), maskDatabaseUrl
+│   │   ├── listParser.js                    — parseListText / parseListTextDetailed: baris list.txt (URL, ID polos, kunci berprefix) -> kunci kanonik via provider registry
 │   │   ├── events.js             (10 baris) — Shared EventEmitter (dbEvents)
 │   │   ├── sqlite.js            (450 baris) — SQLite adapter (`node:sqlite`, `data/nhdl.db` WAL mode)
 │   │   └── postgres.js          (500 baris) — PostgreSQL adapter (`pg.Pool`, retry pool, BIGSERIAL, now())
+│   ├── providers/                           — Lapisan multi-source (satu file per jenis sumber)
+│   │   ├── index.js                         — Registry: `resolveInput`, `canonicalKey`, `toPublicId`, `sourceOf`, `byPrefix`, `registerProvider`
+│   │   ├── default.js                       — Provider site A (certain site ( ͡° ͜ʖ ͡°)): kunci angka polos, jalur API/CDN lama di engine
+│   │   ├── boards.js                        — Pabrik provider site B1/B2 (halaman HTML galeri + daftar halaman ber-ekstensi per halaman)
+│   │   ├── slugapi.js                       — Pabrik provider site C (slug galeri + JSON API gambar)
+│   │   └── http.js                          — `fetchText` & `downloadToFile` bersama (User-Agent, redirect, file `.part` atomik)
 │   ├── engine.js               (1010 baris) — DownloaderEngine (EventEmitter), ambil item `getNextPendingItem()`, metadata fetch, CDN/API download, 429 backoff
 │   ├── tracker.js               (380 baris) — Wrapper `queue` & `library` SQLite/Postgres, `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), rename, CBZ compress
 │   ├── utils.js                 (233 baris) — sanitizeName (escaped control chars), getDynamicDelay, verifyImage, blank PNG, atomicWriteFileSync
@@ -68,7 +75,7 @@ Semua file state diletakkan di dalam direktori download (`setStateDir(baseDownlo
      - `ERROR - <message>`
    - Baris `# BATCH <N> ...` ikut disalin ke `list_status.txt`.
 3. **`library.json`** (Persistent Index):
-   - Key: `<galleryId>` (string).
+   - Key: `<galleryId>` (string; kunci kanonik, lihat bagian 2a).
    - Value (normal/archive):
      ```json
      {
@@ -88,10 +95,20 @@ Semua file state diletakkan di dalam direktori download (`setStateDir(baseDownlo
    - Value (permanently skipped / 404):
      `{ "skipped": true, "reason": "404...", "skippedAt": "..." }`
 4. **`.nhdl-id` & `<Archive>.cbz.nhdl-id`** (Marker Files):
-   - Berisi string `galleryId`. Digunakan oleh `rescanLibrary()` (`MAX_DEPTH = 6`) untuk melacak folder/archive yang dipindah manual oleh user atau mem-prune entry yang sudah dihapus dari disk.
+   - Berisi kunci kanonik galeri (angka polos untuk site A, `b1:...` dst. untuk sumber lain). Digunakan oleh `rescanLibrary()` (`MAX_DEPTH = 6`) untuk melacak folder/archive yang dipindah manual oleh user atau mem-prune entry yang sudah dihapus dari disk.
 5. **`config.json`** (di root project):
    - Menyimpan `{ "downloadDir": "...", "downloadFormat": "cbz" | "folder", "autoContinueBatches": true }`.
 6. **`error.log`** (max 200 baris), **`placeholder_pages.log`**, **`activity.log`** (max 5000 baris).
+
+### 2a. Kunci Galeri (`gallery_id`), Provider, dan `source`
+
+- **Kunci kanonik** disimpan sebagai `TEXT` di tabel `queue` dan `library` (skema v3). Site A memakai angka polos sebagai teks (`"468614"`); sumber lain memakai `"<prefix>:<isi>"` (mis. `b1:539224`, `b2:817456`, `c1:some-slug`). Prefix nyata hanya ada di `core/providers/index.js`.
+- **`toPublicId(key)`** (`core/providers/index.js`): kunci angka polos dikembalikan sebagai `number` (kompatibel dengan klien/API lama), kunci berprefix tetap `string`. Dipakai oleh `formatQueueRow`/`publicRow` sehingga API, SSE, dan export JSON selalu memuat nilai publik; `canonicalKey()` membalikkannya untuk input.
+- **`source`**: field turunan (`sourceOf(key)`) berisi id provider (`"default"` untuk site A / kunci angka polos, prefix provider untuk sumber lain). Tidak ada kolom DB khusus; dihitung saat baris diformat. Diekspos di `/api/status`, `/api/library`, dan event SSE `item`. UI memakainya untuk badge dan filter sumber (`webui/src/lib/sources.js`).
+- **Interface provider** (objek di registry): `id`, `label`, `prefix`, `isDefault`, `origin`, `urlPatterns` (regex URL galeri, grup 1 = isi kunci), `makeKey(body)`, `buildUrl(key)`, `imageHeaders()`, `fetchMeta(key, { fetchText })` -> `{ title, numPages, ext, pageExts, langStr, authorStr, extraMeta, pageUrls(n) }` dengan `pageUrls(n)` mengembalikan kandidat `[{ ext, url }]` per halaman. Galeri berprefix diunduh engine lewat provider (halaman per halaman, tanpa filter: semua halaman yang diumumkan diunduh); site A tetap lewat jalur API/CDN lama.
+- **Parsing input**: `core/db/listParser.js` memanggil `resolveInput()`; baris yang tidak dikenali dilewati dan dihitung di `ignored`.
+- **Migrasi skema v3**: kolom `gallery_id` berubah dari `INTEGER`/`BIGINT` ke `TEXT` di kedua adapter; baris lama dikonversi ke teks angka tanpa kehilangan data. Export/import tetap membawa `gallery_id` publik (angka untuk site A).
+- **Nama folder**: bila judul kosong, nama folder diturunkan dari kunci lewat `safeKeyName()` (`core/engine.js`) agar tanda `:` tidak pernah muncul di path (tidak valid di Windows).
 
 ---
 
@@ -123,7 +140,7 @@ Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
 | `'batch_complete'` | `{ processed }` | Saat `runBatch()` selesai |
 | `'paused'` / `'resumed'` / `'stopped'` / `'restarted'` / `'retry_triggered'` / `'config_updated'` | Objek opsional | Perubahan state engine |
 
-### Alur `processGallery(galleryId)` (L505–L836)
+### Alur `processGallery(galleryId)` (L505–L836) — jalur site A; galeri berprefix memakai jalur provider (lihat 2a)
 1. Set status `ON_PROGRESS` di `list_status.txt`.
 2. Cek `library.json`: jika valid di disk (`verifyImage` >= 2KB untuk tiap halaman atau file `.cbz`/`.zip` ada), langsung return `SKIPPED - Already in Library` (0 request jaringan).
 3. Panggil `fetchMetadata(galleryId)`:

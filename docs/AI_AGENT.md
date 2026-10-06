@@ -102,11 +102,13 @@ Never guess or brute-force the password. Ask the user.
 |---|---|
 | Add galleries (keep existing queue) | `POST /api/queue/import` `{"text":"468614\nhttps://certain.site/g/123456/"}` |
 | Export queue as list.txt | `GET /api/queue/export` |
-| Pause / resume items | `POST /api/queue/pause` or `/resume` `{"ids":[468614]}` |
+| Pause / resume items | `POST /api/queue/pause` or `/resume` `{"ids":[468614,"b1:539224"]}` |
 | Remove from queue (files untouched) | `POST /api/queue/delete` `{"ids":[...]}` |
 | Priority | `POST /api/queue/priority` `{"ids":[...],"action":"top"\|"up"\|"down"\|"bottom"}` |
 | Engine | `POST /api/control` `{"action":"pause"\|"resume"\|"restart"}` |
 | Retry one item now | `POST /api/retry` `{"galleryId":468614}` |
+
+Gallery keys: site A is a plain number (`468614`); other sources (site B1, B2, C) use a prefixed string such as `b1:539224` or `c1:some-slug`, and every item/library entry carries a `source` field. Unrecognised lines are skipped and counted in `ignored`.
 
 `POST /api/queue` (without `/import`) **replaces** the whole queue with the given text. Prefer `/api/queue/import`.
 
@@ -147,6 +149,7 @@ In Docker: `docker exec nhdl node scripts/find-bad-archives.js`.
 ### Map
 | Path | What |
 |---|---|
+| `core/providers/` | Source registry and per-source providers (URL recognition, prefixed gallery keys, metadata, page URLs); see ARCHITECTURE section 2a |
 | `core/engine.js` | Download engine: queue loop, rate limiting, circuit breaker, per-gallery stop, download-folder health watch |
 | `core/nhentaiApi.js` | Official API client (metadata, archive download URL, archive download with zip validation) |
 | `core/tracker.js` | Library: disk rescan via `.nhdl-id` markers, rename, compress, download-folder health check |

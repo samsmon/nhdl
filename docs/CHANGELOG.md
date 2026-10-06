@@ -8,6 +8,19 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Multi-source download
+- **Lapisan provider (`core/providers/`)**: registry sumber unduhan dengan pengenalan URL/ID/kunci berprefix (`resolveInput`), provider default (certain site ( ͡° ͜ʖ ͡°)) plus tiga sumber baru: site B1 dan B2 (halaman galeri HTML, ekstensi per halaman) dan site C (slug + JSON API gambar). `http.js` menyediakan `fetchText` dan `downloadToFile` bersama.
+- **Kunci galeri berprefix**: `gallery_id` kini kunci kanonik bertipe teks (`b1:...`, `b2:...`, `c1:...`; site A tetap angka polos). `toPublicId()` mengembalikan angka untuk site A dan string untuk sumber lain, sehingga API lama tetap kompatibel. `core/db/listParser.js` mengurai baris `list.txt` lewat registry; baris yang tidak dikenali dilewati dan dihitung di `ignored`.
+- **Migrasi skema v3** di SQLite dan PostgreSQL: kolom `gallery_id` menjadi `TEXT` di `queue` dan `library`; export/import tetap membawa ID publik.
+- **Engine**: galeri berprefix diunduh lewat provider (semua halaman yang diumumkan, tanpa filter), mendukung pause/resume per halaman, placeholder untuk halaman yang 404 di semua kandidat, ekstensi per halaman tercatat eksplisit saat resume, serta nama folder aman (tanpa `:`).
+- **Field `source`** ditambahkan di `/api/status`, `/api/library`, dan event SSE `item`; kontrak dicatat di `docs/API.md`.
+- **UI**: badge sumber di tabel antrian, sidebar, dan Library, plus filter sumber; seluruh webui memakai kunci string.
+- **Tes langsung** terhadap tiga situs sungguhan (antrian lewat API, SQLite sementara): site B1 240/240 halaman dan site B2 51/51 halaman selesai tanpa file `.part`, tanpa file < 2 KB, ekstensi di library sama dengan file di disk, marker `.nhdl-id` berisi kunci berprefix, pause (72/240) lalu resume berlanjut sampai 240/240. Site C **gagal**: API-nya menjawab 403 (tantangan Cloudflare) untuk klien Node (`fetch`/`https`) sementara `curl` dengan header yang sama lolos; tidak dipatch di entri ini dan dicatat sebagai pekerjaan lanjutan di `docs/PLAN.md`.
+- Test suite: 79 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
+## 2026-10-06 · Manual (Maja) · Multi-source download
+- Meminta dukungan unduhan dari beberapa sumber (tiga situs tambahan) dan menyediakan sampel manual untuk pembanding tes langsung.
+
 ## 2026-09-28 · AI (Claude Code, Opus 5.5) · Fase 8
 - Tambah `docs/AI_AGENT.md` (bahasa Inggris) untuk AI agent: larangan tanpa izin user, deploy (lokal, Docker, SQLite vs PostgreSQL, auto-migrasi), tabel env var yang dicek ke kode, health check dengan output yang diharapkan, manage lewat API (antrian, prioritas, log, API key, backup/export/import/restore), peta modul dan pola fitur DB → REST → SSE, serta tabel troubleshooting per gejala.
 - `README.md`: blok pemicu "If you are an AI agent" di paling atas.
