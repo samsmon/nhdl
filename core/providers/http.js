@@ -55,10 +55,15 @@ async function downloadToFile(url, destPath, headers = {}, onProgress = null, ti
 
     await new Promise((resolve, reject) => {
         const out = fs.createWriteStream(partPath);
+        let rejected = false;
         const fail = (err) => {
+            if (rejected) return;
+            rejected = true;
             out.destroy();
-            try { fs.unlinkSync(partPath); } catch (e) {}
-            reject(err);
+            out.once('close', () => {
+                try { fs.unlinkSync(partPath); } catch (e) {}
+                reject(err);
+            });
         };
         res.on('data', chunk => {
             received += chunk.length;
@@ -67,11 +72,19 @@ async function downloadToFile(url, destPath, headers = {}, onProgress = null, ti
         res.on('error', fail);
         res.on('aborted', () => fail(new Error('Connection aborted')));
         out.on('error', fail);
-        out.on('finish', resolve);
+        out.on('finish', () => {
+            out.once('close', () => {
+                try {
+                    fs.renameSync(partPath, destPath);
+                    resolve();
+                } catch (err) {
+                    try { fs.unlinkSync(partPath); } catch (e) {}
+                    reject(err);
+                }
+            });
+        });
         res.pipe(out);
     });
-
-    fs.renameSync(partPath, destPath);
 }
 
 module.exports = { fetchText, downloadToFile, USER_AGENT };

@@ -142,3 +142,46 @@ test('downloadToFile writes the file, reports progress, rejects non-200 with sta
         assert.deepStrictEqual(fs.readdirSync(dir).sort(), ['a.webp']);
     } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
 });
+
+test('downloadToFile rejects and cleans up .part when body is truncated', async () => {
+    const server = await startServer((req, res) => {
+        res.writeHead(200, { 'Content-Length': 5000 });
+        res.write(Buffer.alloc(1000, 7));
+        res.destroy();
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-dl-test-'));
+    try {
+        await assert.rejects(
+            downloadToFile(`http://127.0.0.1:${server.address().port}/`, path.join(dir, 'f.webp')),
+            (e) => /aborted|hang up|destroyed/.test(e.message)
+        );
+        assert.deepStrictEqual(fs.readdirSync(dir), []);
+    } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('downloadToFile rejects with Timeout and leaves no files when server never responds', async () => {
+    const server = await startServer((req, res) => {
+        res.writeHead(200, { 'Content-Length': 1000 });
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-dl-test-'));
+    try {
+        await assert.rejects(
+            downloadToFile(`http://127.0.0.1:${server.address().port}/`, path.join(dir, 'g.webp'), {}, null, 150),
+            (e) => /Timeout/.test(e.message)
+        );
+        assert.deepStrictEqual(fs.readdirSync(dir), []);
+    } finally { server.close(); fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('fetchText rejects with Too many redirects when server redirects forever', async () => {
+    const server = await startServer((req, res) => {
+        res.writeHead(302, { Location: '/' });
+        res.end();
+    });
+    try {
+        await assert.rejects(
+            fetchText(`http://127.0.0.1:${server.address().port}/`),
+            /Too many redirects/
+        );
+    } finally { server.close(); }
+});
