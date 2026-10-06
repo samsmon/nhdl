@@ -15,5 +15,6 @@ module.exports = {
     urlPatterns: [/^https?:\/\/(?:www\.)?(?:nhentai\.net|certain\.site)\/g\/(\d+)/i],
     parseBody,
     makeKey: parseBody,
-    buildUrl: (key) => `https://nhentai.net/g/${key}/`
+    buildUrl: (key) => `https://nhentai.net/g/${key}/`,
+    imageHeaders: () => ({ Referer: 'https://nhentai.net/' })
 };

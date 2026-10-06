@@ -1,5 +1,45 @@
+const PAGE_EXTS = ['webp', 'jpg', 'png', 'gif'];
+const NON_LANGUAGE_FLAGS = new Set(['translated', 'rewritten', 'speechless', 'text-cleaned']);
+
+function decodeEntities(s) {
+    return s
+        .replace(/&amp;/g, '&')
+        .replace(/&lt;/g, '<')
+        .replace(/&gt;/g, '>')
+        .replace(/&quot;/g, '"')
+        .replace(/&#0?39;|&apos;/g, "'");
+}
+
+function cleanTitle(raw) {
+    const text = decodeEntities(raw.replace(/<[^>]+>/g, '')).replace(/\s+/g, ' ').trim();
+    const stripped = text
+        .replace(/^(?:\s*(?:\([^)]*\)|\[[^\]]*\]))+\s*/, '')
+        .replace(/(?:\s*\[[^\]]*\])+\s*$/, '')
+        .trim();
+    return stripped || text;
+}
+
+function titleCaseSlug(slug) {
+    return slug.replace(/-/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+function hiddenValue(html, name) {
+    const m = html.match(new RegExp(`id="${name}"\\s+value="([^"]*)"`));
+    return m ? m[1] : null;
+}
+
+function taxonomy(html, kind) {
+    const out = [];
+    const re = new RegExp(`href='/${kind}/([^'/]+)/'`, 'g');
+    let m;
+    while ((m = re.exec(html)) !== null) {
+        if (!out.includes(m[1])) out.push(m[1]);
+    }
+    return out;
+}
+
 function createBoardsProvider(cfg) {
-    const { id, label, origin, galleryPath, hosts } = cfg;
+    const { id, label, origin, galleryPath, hosts, imageHost } = cfg;
     const hostPattern = hosts.map(h => h.replace(/\./g, '\\.')).join('|');
 
     function parseBody(body) {
@@ -7,6 +47,43 @@ function createBoardsProvider(cfg) {
         if (!/^\d+$/.test(s)) return null;
         const n = Number(s);
         return Number.isSafeInteger(n) && n > 0 ? String(n) : null;
+    }
+
+    function imageHeaders() {
+        return { Referer: `${origin}/` };
+    }
+
+    function parseGallery(key, html) {
+        const server = hiddenValue(html, 'load_server');
+        const dir = hiddenValue(html, 'load_dir');
+        const loadId = hiddenValue(html, 'load_id');
+        const pages = parseInt(hiddenValue(html, 'load_pages'), 10);
+        if (!server || !dir || !loadId || !Number.isFinite(pages) || pages <= 0) {
+            throw new Error('Gallery page is blocked or unexpected page layout (no page data found)');
+        }
+
+        const h1 = html.match(/<h1[^>]*>([\s\S]*?)<\/h1>/i);
+        const title = h1 ? cleanTitle(h1[1]) : '';
+
+        const artists = taxonomy(html, 'artist');
+        const groups = taxonomy(html, 'group');
+        const authorSlug = artists[0] || groups[0] || null;
+        const languages = taxonomy(html, 'language').filter(l => !NON_LANGUAGE_FLAGS.has(l));
+        const tags = taxonomy(html, 'tag').map(slug => ({ name: slug.replace(/-/g, ' ') }));
+        const host = imageHost(server);
+
+        return {
+            title: title || `Gallery ${key.slice(id.length + 1)}`,
+            numPages: pages,
+            ext: PAGE_EXTS[0],
+            pageExts: {},
+            langStr: languages[0] ? titleCaseSlug(languages[0]) : 'Unknown',
+            authorStr: authorSlug ? titleCaseSlug(authorSlug) : 'Other',
+            extraMeta: { tags, source: id },
+            pageUrls(n) {
+                return PAGE_EXTS.map(ext => ({ ext, url: `https://${host}/${dir}/${loadId}/${n}.${ext}` }));
+            }
+        };
     }
 
     return {
@@ -24,8 +101,20 @@ function createBoardsProvider(cfg) {
         buildUrl(key) {
             return `${origin}/${galleryPath}/${key.slice(id.length + 1)}/`;
         },
+        imageHeaders,
+        async fetchMeta(key, { fetchText }) {
+            const url = this.buildUrl(key);
+            const res = await fetchText(url, imageHeaders());
+            if (res.status === 404) {
+                const e = new Error('404 - gallery not found / already removed');
+                e.permanent = true;
+                throw e;
+            }
+            if (res.status !== 200) throw new Error(`Gallery page returned status ${res.status}`);
+            return parseGallery(key, res.body);
+        },
         cfg
     };
 }
 
-module.exports = { createBoardsProvider };
+module.exports = { createBoardsProvider, PAGE_EXTS };
