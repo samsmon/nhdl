@@ -187,11 +187,11 @@ Task:
 - [x] Kontrak API: format `galleryId` berprefix, field `source`, dan penanganan baris tidak dikenali dicatat di `docs/API.md`
 - [x] Registry provider (`core/providers/`) dan kunci kanonik berprefix
 - [x] Parser list bersama (`core/db/listParser.js`) dan migrasi skema v3 (`gallery_id` TEXT) di SQLite dan PostgreSQL
-- [x] Provider metadata dan URL halaman: site B1/B2 (HTML) dan site C (JSON API)
+- [x] Provider metadata dan URL halaman: site B1/B2 (HTML) dan site C (JSON API; unduhan nyata site C lewat transport curl, lihat task di bawah)
 - [x] Engine: unduh galeri berprefix lewat provider, pause/resume, rescan, dan hook server
 - [x] UI: badge sumber dan filter sumber di antrian, sidebar, dan Library
 - [x] Tes langsung: site B1 (240 halaman, pause/resume) dan site B2 (51 halaman) lulus
-- [ ] Site C: API gambar menjawab 403 (tantangan Cloudflare) untuk klien Node walau `curl` dengan header sama lolos; cari cara yang sah agar request engine lolos, lalu ulangi tes langsung 17 gambar
+- [x] Site C: API gambar menjawab 403 (tantangan Cloudflare) untuk klien Node; diselesaikan dengan transport `curl` sistem (`transport: 'curl'` di provider), tes langsung 17/17 gambar lulus
 - [ ] Putuskan apakah `samples/` (sampel manual user) masuk `.gitignore`
 
 ## Log
@@ -235,3 +235,4 @@ Task:
 | 2026-09-28 | 7 | Eksekusi live test suite PostgreSQL sungguhan (TEST_DATABASE_URL): uji migrasi skema, enqueue, done, library, export/import, proteksi format invalid, dan verifikasi tipe number — 41/41 test lulus (0 fail, 0 skip) |
 | 2026-09-28 | 8 | Fase 8 selesai: `docs/AI_AGENT.md` (deploy/manage/modify/maintain, env var dicek ke kode, troubleshooting, larangan untuk agent), blok pemicu di README, tautan di AGENTS.md; divalidasi dari clone bersih |
 | 2026-10-06 | Multi-source | Multi-source download: lapisan provider, kunci berprefix, skema v3, `source`, badge/filter UI. Tes langsung site B1 (240/240 + pause/resume) dan site B2 (51/51) lulus; site C 403 untuk klien Node (terbuka). 79 lulus, 1 skip, 0 gagal |
+| 2026-10-06 | Multi-source | Transport curl untuk site C (`curlFetchText`/`curlDownloadToFile`, field `transport` di provider). Tes langsung site C 17/17 lulus. 84 lulus, 1 skip, 0 gagal |

@@ -8,6 +8,13 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Transport curl untuk site C
+- `core/providers/http.js`: `resolveCurlPath`, `curlFetchText`, dan `curlDownloadToFile` (system `curl` lewat `execFile` dengan array argumen; status HTTP dibaca lewat `-w`, unduhan ke `.part` lalu rename hanya untuk 200, error HTTP membawa `statusCode`). Ditambahkan tanpa mengubah ekspor lama.
+- Provider punya field `transport`: `'curl'` untuk site C, `'node'` untuk site B1/B2 dan default. `fetchProviderMetadata` dan `downloadProviderPage` di engine memilih helper sesuai `transport`; logika fallback 404 per kandidat, placeholder, dan retry tidak berubah.
+- Alasan: API gambar site C menjawab 403 (tantangan Cloudflare) untuk klien Node, sedangkan `curl` sistem dengan User-Agent/Referer yang sama mendapat 200. Tidak ada impersonasi, penyelesaian tantangan, atau trik DNS.
+- Tes baru untuk helper curl, pemilihan transport, dan unduhan engine lewat curl dari server lokal. Tes langsung site C (antrian lewat API, SQLite sementara): 17/17 file (16 `.webp` + 1 `.jpg`, total byte sama dengan salinan referensi), tanpa `.part`, tanpa file < 2 KB, `pageExts` di library sama dengan file di disk, marker `.nhdl-id` berisi kunci berprefix, field `source` berisi prefix sumber.
+- Test suite: 84 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Multi-source download
 - **Lapisan provider (`core/providers/`)**: registry sumber unduhan dengan pengenalan URL/ID/kunci berprefix (`resolveInput`), provider default (certain site ( ͡° ͜ʖ ͡°)) plus tiga sumber baru: site B1 dan B2 (halaman galeri HTML, ekstensi per halaman) dan site C (slug + JSON API gambar). `http.js` menyediakan `fetchText` dan `downloadToFile` bersama.
 - **Kunci galeri berprefix**: `gallery_id` kini kunci kanonik bertipe teks (`b1:...`, `b2:...`, `c1:...`; site A tetap angka polos). `toPublicId()` mengembalikan angka untuk site A dan string untuk sumber lain, sehingga API lama tetap kompatibel. `core/db/listParser.js` mengurai baris `list.txt` lewat registry; baris yang tidak dikenali dilewati dan dihitung di `ignored`.
