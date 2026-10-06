@@ -102,13 +102,13 @@ Never guess or brute-force the password. Ask the user.
 |---|---|
 | Add galleries (keep existing queue) | `POST /api/queue/import` `{"text":"468614\nhttps://certain.site/g/123456/"}` |
 | Export queue as list.txt | `GET /api/queue/export` |
-| Pause / resume items | `POST /api/queue/pause` or `/resume` `{"ids":[468614,"b1:539224"]}` |
+| Pause / resume items | `POST /api/queue/pause` or `/resume` `{"ids":[468614,"b1:539224"]}` (`b1:` is a placeholder prefix, see below) |
 | Remove from queue (files untouched) | `POST /api/queue/delete` `{"ids":[...]}` |
 | Priority | `POST /api/queue/priority` `{"ids":[...],"action":"top"\|"up"\|"down"\|"bottom"}` |
 | Engine | `POST /api/control` `{"action":"pause"\|"resume"\|"restart"}` |
 | Retry one item now | `POST /api/retry` `{"galleryId":468614}` |
 
-Gallery keys: site A is a plain number (`468614`); other sources (site B1, B2, C) use a prefixed string such as `b1:539224` or `c1:some-slug`, and every item/library entry carries a `source` field. Unrecognised lines are skipped and counted in `ignored`.
+Gallery keys: site A is a plain number (`468614`); other sources (site B1, B2, C) use a prefixed string such as `b1:539224` or `c1:some-slug`, and every item/library entry carries a `source` field. The `b1:`/`c1:` prefixes here are placeholders: the real prefixes are the `id` values listed in `GET /api/config` -> `sources`, so read them from there instead of copying the examples literally. Unrecognised lines are skipped and counted in `ignored`.
 
 `POST /api/queue` (without `/import`) **replaces** the whole queue with the given text. Prefer `/api/queue/import`.
 

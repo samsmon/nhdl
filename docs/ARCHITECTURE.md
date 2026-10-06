@@ -23,7 +23,7 @@ nhdl/
 │   │   ├── default.js                       — Provider site A (certain site ( ͡° ͜ʖ ͡°)): kunci angka polos, jalur API/CDN lama di engine
 │   │   ├── boards.js                        — Pabrik provider site B1/B2 (halaman HTML galeri + daftar halaman ber-ekstensi per halaman)
 │   │   ├── slugapi.js                       — Pabrik provider site C (slug galeri + JSON API gambar)
-│   │   └── http.js                          — `fetchText` & `downloadToFile` bersama (User-Agent, redirect, file `.part` atomik) plus `curlFetchText` & `curlDownloadToFile` (system `curl` lewat `execFile`)
+│   │   └── http.js                          — `fetchText` & `downloadToFile` bersama (User-Agent, redirect, file `.part` atomik; sebelum rename, `.part` harus diawali signature gambar webp/jpeg/png/gif, kalau tidak dianggap halaman blokir HTML dan ditolak tanpa `statusCode`) plus `curlFetchText` & `curlDownloadToFile` (system `curl` lewat `execFile`)
 │   ├── engine.js               (1010 baris) — DownloaderEngine (EventEmitter), ambil item `getNextPendingItem()`, metadata fetch, CDN/API download, 429 backoff
 │   ├── tracker.js               (380 baris) — Wrapper `queue` & `library` SQLite/Postgres, `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), rename, CBZ compress
 │   ├── utils.js                 (233 baris) — sanitizeName (escaped control chars), getDynamicDelay, verifyImage, blank PNG, atomicWriteFileSync
@@ -146,7 +146,7 @@ Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
 3. Panggil `fetchMetadata(galleryId)`:
    - **API-first** (`core/nhentaiApi.js` -> `GET /api/v2/galleries/<id>` via `curl --resolve certain.site:443:104.26.4.188`). Menggunakan `title.pretty` untuk nama file.
    - **Fallback HTML scrape** (`fetchMetadataViaHtml`) jika API gagal.
-   - Jika `RATE_LIMIT` (429), cek dulu `getCachedDisplayName()` di `list.txt` + `findExistingOnDisk()` untuk menghindari cooldown 5 menit jika file sebenarnya sudah ada di disk.
+   - Jika `RATE_LIMIT` (429; untuk provider non-default, status 429/503 dari `fetchMeta` dipetakan ke `RATE_LIMIT` oleh `fetchProviderMetadata`), cek dulu `getCachedDisplayName()` di `list.txt` + `findExistingOnDisk()` untuk menghindari cooldown 5 menit jika file sebenarnya sudah ada di disk.
 4. Cek apakah sudah ada archive/folder di `parentDir` (`<base>/<Lang>/<Author>/`).
 5. **Fast-path API Archive Download** (`tryApiArchiveDownload` L464): jika `NHENTAI_API_KEY` diset dan format target `cbz`/`zip`, minta presigned download URL dari API v2. Jika gagal, fallback ke per-page CDN.
 6. **Per-page CDN Download** (L681–L833):

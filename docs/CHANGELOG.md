@@ -23,7 +23,8 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 - **Field `source`** ditambahkan di `/api/status`, `/api/library`, dan event SSE `item`; kontrak dicatat di `docs/API.md`.
 - **UI**: badge sumber di tabel antrian, sidebar, dan Library, plus filter sumber; seluruh webui memakai kunci string.
 - **Tes langsung** terhadap tiga situs sungguhan (antrian lewat API, SQLite sementara): site B1 240/240 halaman dan site B2 51/51 halaman selesai tanpa file `.part`, tanpa file < 2 KB, ekstensi di library sama dengan file di disk, marker `.nhdl-id` berisi kunci berprefix, pause (72/240) lalu resume berlanjut sampai 240/240. Site C **gagal**: API-nya menjawab 403 (tantangan Cloudflare) untuk klien Node (`fetch`/`https`) sementara `curl` dengan header yang sama lolos; tidak dipatch di entri ini dan dicatat sebagai pekerjaan lanjutan di `docs/PLAN.md`.
-- Test suite: 79 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
+- **Perbaikan hasil review akhir**: baris tanpa skema (`host/g/123/`) di-resolve ke provider yang benar dan host asing tidak lagi jatuh ke ID site A (dihitung `ignored`); 429/503 dari site B/C masuk ke cooldown/circuit breaker yang sama dengan site A; unduhan gambar memeriksa signature file (halaman blokir/tantangan HTML ditolak, bukan disimpan sebagai gambar); jumlah `ignored` tampil di log aktivitas dan toast; URL fallback per sumber saat `url` kosong (enqueue/import); nilai `load_server`/`load_dir`/`load_id` divalidasi sebelum membentuk URL; API site C tanpa gambar menjadi SKIPPED permanen; koreksi dokumen (`galleryId`, `stopping`, contoh `source`, catatan prefix asli di `docs/AI_AGENT.md`).
+- Test suite: 96 lulus, 1 di-skip (live PostgreSQL), 0 gagal.
 
 ## 2026-10-06 · Manual (Maja) · Multi-source download
 - Meminta dukungan unduhan dari beberapa sumber (tiga situs tambahan) dan menyediakan sampel manual untuk pembanding tes langsung.

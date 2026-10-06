@@ -90,7 +90,7 @@ Download per halaman: coba kandidat `urls` berurutan sampai ada yang berstatus 2
 Tidak ada endpoint baru. Perubahan kontrak:
 - `POST /api/queue`: baris `text` menerima URL dari site B1, B2, C, dan ID berprefix. Baris tak dikenal ditolak dengan pesan jelas (bukan diam-diam dilewati).
 - `POST /api/retry` dan `GET` yang menerima `galleryId`: nilai berupa string, boleh berprefix.
-- Payload event SSE `item`/`progress` dan respons `/api/status`, `/api/library`: `galleryId` selalu string, dan setiap item punya field turunan `source` (lihat 6b).
+- Payload event SSE `item`/`progress` dan respons `/api/status`, `/api/library`: `galleryId` bertipe number untuk site A dan string untuk kunci berprefix (sesuai bagian 4), dan setiap item punya field turunan `source` (lihat 6b).
 - `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/CHANGELOG.md` (aktor `AI (Claude Code, Sonnet 5.5)`), dan `docs/PLAN.md` diperbarui; nama situs asli tidak ditulis di dokumen.
 
 ## 6b. Kategori sumber di list (UI)
