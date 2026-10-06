@@ -78,7 +78,7 @@ Dampak yang sudah dicek:
 ## 8. UI
 
 - Badge tipe (`Comic` / `Manga` / `Other`) di baris list, di samping badge sumber; item tanpa tipe tidak punya badge.
-- Sidebar: bagian **"Type"** berisi chip filter `Comic`/`Manga`/`Other` dengan hitungan, tampil bila ≥ 2 tipe hadir (pola yang sama dengan bagian "Source"). Filter tipe digabung (AND) dengan filter status, sumber, batch, dan pencarian.
+- Sidebar: bagian **"Type"** berisi chip filter `Comic`/`Manga`/`Other` dengan hitungan, tampil bila minimal 1 tipe hadir (sama seperti bagian "Source"). Filter tipe digabung (AND) dengan filter status, sumber, batch, dan pencarian.
 - Library Manager: badge tipe dan dropdown filter tipe di samping filter sumber.
 - Helper murni di `webui/src/lib/sources.js` (atau `contentType.js` di webui) dengan tes `node:test`.
 - Item yang masih menunggu belum punya tipe sampai metadatanya diambil saat gilirannya tiba (batasan yang diterima).

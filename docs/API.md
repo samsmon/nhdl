@@ -16,6 +16,7 @@ Representasi item antrian yang dikirim melalui REST (`/api/status`) maupun SSE (
   "id": 1,
   "galleryId": 123456,
   "source": "default",
+  "category": null,
   "status": "PENDING",
   "rawStatus": "PENDING",
   "url": "https://certain.site/g/123456/ | [Artist] Title",
@@ -36,6 +37,7 @@ Representasi item antrian yang dikirim melalui REST (`/api/status`) maupun SSE (
 - Nilai `status`: sama dengan `rawStatus`, atau `"${rawStatus} - ${error}"` apabila kolom `error` terisi.
 - `galleryId`: `number` untuk galeri site A (kunci angka polos, kompatibel dengan versi sebelumnya), `string` berprefix (`"<prefix>:<isi>"`) untuk site B1/B2/C. Contoh: `123456`, `"b1:539224"`, `"c1:some-slug"`. Nilai ini dipakai apa adanya pada `ids`/`galleryId` di endpoint lain.
 - `source`: id sumber hasil turunan dari prefix `galleryId` (`"default"` bila tanpa prefix). Tidak disimpan di DB. Daftar sumber ada di `GET /api/config` → `sources`.
+- `category`: tipe konten `"comic" | "manga" | "other" | null`. Dipetakan dari kategori di situs asal (site B1/B2/C); `null` untuk site A, item lama, dan item yang metadatanya belum diambil. Disimpan di tabel `queue` (kolom `category`) dan ikut di event SSE `item`.
 
 ### `LiveProgress`
 Representasi progress unduhan aktif (`engine.currentProgress`), atau `null` jika sedang tidak mengunduh:
@@ -175,6 +177,8 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 | `GET` | `/api/library/compress-status` | — | `{"job": CompressJob\|null}` | Membaca progres job kompresi massal yang sedang/terakhir berjalan. |
 
 `LibraryItem` memiliki field tambahan `source` (sama seperti `QueueItem.source`).
+
+`LibraryItem` juga memiliki field `category` (nilai yang sama seperti `QueueItem.category`, dibaca dari `meta` library; `null` bila tidak ada).
 
 ### 3.6. Log & Penjelajah Direktori
 
