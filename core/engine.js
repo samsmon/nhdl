@@ -41,6 +41,9 @@ const NHENTAI_MAIN_IP = '104.26.4.188';
 
 const PLACEHOLDER_RETRY_THRESHOLD = 5;
 const PLACEHOLDER_SIZE_CEILING = 1536;
+// A page whose URL keeps returning an HTML/error body (not an image) is a broken upstream file, not a
+// transient block; give it longer than 404s before substituting a blank page so one bad file cannot stall the queue.
+const PLACEHOLDER_NOT_IMAGE_THRESHOLD = 20;
 
 function resolveCurlBinary() {
     if (process.platform !== 'win32') return 'curl';
@@ -1057,7 +1060,9 @@ class DownloaderEngine extends EventEmitter {
                             })
                             .catch(async (err) => {
                                 const attempt = retryCount + 1;
-                                if (!provider.isDefault && err && err.statusCode === 404 && attempt >= PLACEHOLDER_RETRY_THRESHOLD) {
+                                const missingPage = !provider.isDefault && err && err.statusCode === 404 && attempt >= PLACEHOLDER_RETRY_THRESHOLD;
+                                const brokenPage = !provider.isDefault && err && err.notImage && attempt >= PLACEHOLDER_NOT_IMAGE_THRESHOLD;
+                                if (missingPage || brokenPage) {
                                     // Every candidate extension 404'd repeatedly: the page does not exist on the
                                     // source. Substitute a blank page rather than retrying forever.
                                     try {
@@ -1065,7 +1070,7 @@ class DownloaderEngine extends EventEmitter {
                                         const phSize = writeBlankPlaceholderImage(phPath);
                                         pageExts[currentPage] = 'png';
                                         await logPlaceholderPage(galleryId, currentPage, title);
-                                        await logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: source returned 404 for every candidate ${attempt}x in a row - substituted a blank page instead of retrying forever`);
+                                        await logActivity(`[PLACEHOLDER] ID ${galleryId} page ${currentPage}: source returned ${brokenPage ? 'a non-image body' : '404 for every candidate'} ${attempt}x in a row - substituted a blank page instead of retrying forever`);
                                         pageRetryCounts.delete(currentPage);
                                         pageErrors.delete(currentPage);
                                         completedBytes += phSize;

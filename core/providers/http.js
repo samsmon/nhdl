@@ -63,7 +63,9 @@ function hasImageSignature(filePath) {
 }
 
 function blockedError(contentType) {
-    return new Error(`Response is not an image (blocked or unexpected HTML page${contentType ? `, content-type: ${contentType}` : ''})`);
+    const err = new Error(`Response is not an image (blocked or unexpected HTML page${contentType ? `, content-type: ${contentType}` : ''})`);
+    err.notImage = true;
+    return err;
 }
 
 async function downloadToFile(url, destPath, headers = {}, onProgress = null, timeoutMs = 30000) {
