@@ -4,7 +4,7 @@ services:
     container_name: nhdl
     restart: unless-stopped
     environment:
-      - DOWNLOAD_DIR=/mnt/hdd-music/download/nhdl
+      - DOWNLOAD_DIR=/mnt/hdd-backup/manga-raw/nsfw
       - TZ=Asia/Jakarta
       - WEB_GUI=true
       # Centralized PostgreSQL database connection (optional).
@@ -13,6 +13,10 @@ services:
       # - DATABASE_URL=${DATABASE_URL}
     ports:
       - "8098:8080"
+    dns:
+      - 172.19.0.53
+    depends_on:
+      - nhdl-dns
     volumes:
       - /mnt/hdd-media/nhdl/downloads:/downloads
       # Local SQLite database (nhdl.db) and backup files (data/backups/).
@@ -21,9 +25,29 @@ services:
       - /mnt/hdd-media/nhdl/data:/app/data
       - /mnt/hdd-media:/mnt/hdd-media
       - /mnt/hdd-music:/mnt/hdd-music
+      - /mnt/hdd-backup:/mnt/hdd-backup
     # When connecting to a shared PostgreSQL container on a Docker network:
     # networks:
     #   - shared_postgres_net
+
+  # ISP hijacks plain UDP DNS for nhentai-family domains (block-page IP 202.169.44.80);
+  # TCP DNS is untouched. This forwarder upgrades container DNS to TCP. (2026-10-07)
+  nhdl-dns:
+    image: coredns/coredns:1.11.3
+    container_name: nhdl-dns
+    restart: unless-stopped
+    command: -conf /Corefile
+    volumes:
+      - ./Corefile:/Corefile:ro
+    networks:
+      default:
+        ipv4_address: 172.19.0.53
+
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16
 
 # networks:
 #   shared_postgres_net:
