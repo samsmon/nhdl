@@ -44,9 +44,10 @@ function getJob() { return job; }
 function isRunning() { return !!(job && !job.finishedAt); }
 function cancel() { cancelRequested = true; }
 
-async function startBackfill() {
+async function startBackfill({ background = false } = {}) {
     if (isRunning()) return { started: false, error: 'A metadata backfill is already running' };
     const candidates = (await getAllLibraryEntries()).filter(isCandidate);
+    if (background && candidates.length === 0) return { started: false, total: 0 };
     const apiKey = process.env.NHENTAI_API_KEY || '';
     job = {
         total: candidates.length,
@@ -63,7 +64,7 @@ async function startBackfill() {
         finishedAt: null
     };
     cancelRequested = false;
-    run(candidates, apiKey).catch(async (e) => {
+    run(candidates, apiKey, background).catch(async (e) => {
         job.abortedReason = e.message;
         job.finishedAt = new Date().toISOString();
         await logActivity(`Metadata backfill crashed: ${e.message}`);
@@ -82,8 +83,9 @@ async function fetchWithRetry(id, apiKey) {
     return last;
 }
 
-async function run(candidates, apiKey) {
-    const delay = apiKey ? 1500 : 3200;
+async function run(candidates, apiKey, background) {
+    // Background runs share the rate limit with active downloads, so they go at about half speed.
+    const delay = background ? (apiKey ? 2500 : 6500) : (apiKey ? 1500 : 3200);
     let consecutiveFailures = 0;
     await logActivity(`Metadata backfill started: ${candidates.length} entries`);
 

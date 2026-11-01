@@ -13,7 +13,8 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 - `tracker.saveToLibrary`/`saveArchivedToLibrary` menulis `ComicInfo.xml` untuk unduhan baru; `compressLibraryEntry` ikut membawa file itu ke arsip.
 - Job baru `core/backfill.js` untuk koleksi lama (hasil rescan, hanya punya artist dari nama folder): mengambil metadata dari API dengan jeda di bawah rate limit, mengisi `library.meta`, lalu menulis `ComicInfo.xml`. Endpoint `/api/library/backfill-metadata` (+ `/cancel`) tercatat di `docs/API.md`.
 - Tes baru `test/comicInfo.test.js`; `npm test` 132 lulus, 1 dilewati.
-- Belum dikerjakan: sinkron otomatis per tag (endpoint pencarian belum diverifikasi), tombol backfill di UI.
+- Backfill berjalan otomatis di latar belakang (setengah kecepatan) setiap kali pengunduhan dimulai, tanpa langkah manual; nonaktif lewat `NHDL_AUTO_BACKFILL=0`, dan mati di bawah `node --test`.
+- Belum dikerjakan: langganan/sinkron per tag (endpoint pencarian belum diverifikasi), tombol backfill di UI.
 
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Verifikasi: PostgreSQL nyata dan cek metadata langsung
 - Adapter PostgreSQL dijalankan pertama kali pada server PostgreSQL 18 sementara (localhost, port khusus, dihapus setelahnya): suite live `test/db.test.js` 32/32 lulus, seluruh `npm test` dengan `TEST_DATABASE_URL` 129/129 lulus, dan pemeriksaan tambahan upgrade DB skema v2 → v4 (tipe `gallery_id` menjadi TEXT, kolom `category`, baris/prioritas tetap, ID angka tetap angka di API, kunci berprefix, import/export dengan `category`, `initDb` idempoten) lulus. Tidak ada cacat adapter ditemukan.
