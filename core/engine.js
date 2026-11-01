@@ -549,7 +549,7 @@ class DownloaderEngine extends EventEmitter {
             html.includes("Rate limit exceeded") || html.includes("Attention Required! | Cloudflare")) {
             return { status: "RATE_LIMIT" };
         } else if (titleMatch && titleMatch[1].includes("404")) {
-            const e = new Error("Link tidak dapat diakses (404 - gallery not found / sudah dihapus)");
+            const e = new Error("Link is not accessible (404 - gallery not found / already deleted)");
             e.permanent = true;
             throw e;
         } else if (!html || html.trim().length === 0) {

@@ -61,20 +61,20 @@
 
   const desktopColumns = [
     { id: 'order', label: '#', minWidth: 44, align: 'text-right' },
-    { id: 'title', label: 'Judul', minWidth: 160, align: 'text-left', flex: true },
+    { id: 'title', label: 'Title', minWidth: 160, align: 'text-left', flex: true },
     { id: 'galleryId', label: 'ID', minWidth: 72, align: 'text-left' },
     { id: 'status', label: 'Status', minWidth: 92, align: 'text-left' },
     { id: 'progress', label: 'Progress', minWidth: 108, align: 'text-left' },
-    { id: 'pages', label: 'Halaman', minWidth: 70, align: 'text-right' },
+    { id: 'pages', label: 'Pages', minWidth: 70, align: 'text-right' },
     { id: 'speed', label: 'Speed', minWidth: 72, align: 'text-right' },
     { id: 'eta', label: 'ETA', minWidth: 64, align: 'text-right' },
     { id: 'batch', label: 'Batch', minWidth: 56, align: 'text-right' },
     { id: 'format', label: 'Format', minWidth: 60, align: 'text-center' },
-    { id: 'createdAt', label: 'Ditambahkan', minWidth: 96, align: 'text-left' }
+    { id: 'createdAt', label: 'Added', minWidth: 96, align: 'text-left' }
   ];
 
   const mobileColumns = [
-    { id: 'title', label: 'Judul', align: 'text-left', flex: true },
+    { id: 'title', label: 'Title', align: 'text-left', flex: true },
     { id: 'status', label: 'Status', width: '88px', align: 'text-left' },
     { id: 'progress', label: 'Progress', width: '92px', align: 'text-left' }
   ];
@@ -428,7 +428,7 @@
               data-gallery-id={gid}
             >
               {#if isMobile}
-                <!-- Mobile (< 768px): Judul, Status, Progress -->
+                <!-- Mobile (< 768px): Title, Status, Progress -->
                 <div class="px-2 truncate font-sans text-xs" title={formatRowTitle(item)}>
                   <span class="text-[var(--text-muted)] font-mono mr-1">#{gid}</span>
                   <span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase bg-[#1e293b] text-[#7dd3fc] border border-[#334155] mr-1" title={sourceLabel(src, appStore.sources)}>{sourceLabel(src, appStore.sources)}</span>{#if ctype}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase mr-1 {typeBadgeClass(ctype)}" title="Type: {typeLabel(ctype)}">{typeLabel(ctype)}</span>{/if}
@@ -457,7 +457,7 @@
                   <span class="text-[10px] w-7 text-right">{prog.pct}%</span>
                 </div>
               {:else}
-                <!-- Desktop: #, Judul, ID, Status, Progress, Halaman, Speed, ETA, Batch, Format, Ditambahkan -->
+                <!-- Desktop: #, Title, ID, Status, Progress, Pages, Speed, ETA, Batch, Format, Added -->
                 <div class="px-2 text-right text-[11px] text-[var(--text-muted)] truncate">
                   {rank}
                 </div>

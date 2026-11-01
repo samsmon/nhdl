@@ -248,7 +248,7 @@
         {@const raw = getItemRawStatus(item)}
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
           <div class="col-span-1 md:col-span-2 lg:col-span-3 flex items-baseline gap-2 border-b border-[var(--border-subtle)] pb-1.5">
-            <span class="text-[var(--text-muted)] w-24 shrink-0 uppercase text-[10px]">Judul:</span>
+            <span class="text-[var(--text-muted)] w-24 shrink-0 uppercase text-[10px]">Title:</span>
             <span class="text-white font-sans font-medium select-all break-all">{displayTitle(item)}</span>
           </div>
 

@@ -36,7 +36,7 @@ test('formatAddedAt / formatAddedAtFull use local time', async () => {
     const q = await load();
     const d = new Date('2026-10-06T06:31:45Z');
     const short = q.formatAddedAt('2026-10-06 06:31:45');
-    assert.strictEqual(short, `${pad(d.getDate())} Okt ${pad(d.getHours())}:${pad(d.getMinutes())}`);
+    assert.strictEqual(short, `${pad(d.getDate())} Oct ${pad(d.getHours())}:${pad(d.getMinutes())}`);
     const full = q.formatAddedAtFull('2026-10-06 06:31:45');
     assert.strictEqual(
         full,
@@ -46,7 +46,7 @@ test('formatAddedAt / formatAddedAtFull use local time', async () => {
     assert.strictEqual(q.formatAddedAtFull(null), '—');
     // month abbreviations
     const may = new Date(2026, 4, 3, 9, 5, 0);
-    assert.match(q.formatAddedAt(may.toISOString()), /^03 Mei 09:05$/);
+    assert.match(q.formatAddedAt(may.toISOString()), /^03 May 09:05$/);
 });
 
 test('formatCooldown', async () => {

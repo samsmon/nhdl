@@ -1,6 +1,6 @@
 // Pure helpers for the queue view (status grouping, "added at" column, cooldown chip).
 // Plain ES module without runes so node:test can import it (see test/webuiQueueView.test.js).
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'Mei', 'Jun', 'Jul', 'Agu', 'Sep', 'Okt', 'Nov', 'Des'];
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const SQLITE_UTC = /^(\d{4}-\d{2}-\d{2}) (\d{2}:\d{2}:\d{2})(\.\d+)?$/;
 const COOLDOWN_TYPES = { COOLDOWN: 'next', BATCH_REST: 'next', RATE_LIMIT: 'rate_limit' };
 

@@ -1,218 +1,218 @@
 # NHDL — Architecture & Codebase Reference
 
-Dokumen ini adalah peta teknis lengkap codebase NHDL agar AI agent di sesi baru **tidak perlu membaca ulang ribuan baris source code** (`core/engine.js`, `server/index.js`, `webui/src/lib/stores/app.svelte.js`, dll.) dari awal. Jumlah baris di bawah adalah hasil `wc -l` pada saat dokumen ini diperbarui, jadi anggap sebagai perkiraan.
+This document is the complete technical map of the NHDL codebase so AI agents in a new session **do not need to re-read thousands of lines of source code** (`core/engine.js`, `server/index.js`, `webui/src/lib/stores/app.svelte.js`, etc.) from scratch. The line counts below come from `wc -l` at the time this document was updated, so treat them as approximate.
 
 ---
 
-## 1. Struktur Direktori & Ukuran Modul
+## 1. Directory Structure & Module Sizes
 
 ```text
 nhdl/
 ├── server/
-│   └── index.js                 (1132 baris) — HTTP server, auth gate, REST API, SSE, batch compress job, static file server
+│   └── index.js                 (1132 lines) — HTTP server, auth gate, REST API, SSE, batch compress job, static file server
 ├── core/
-│   ├── db.js                     (326 baris) — Database facade & dispatcher (SQLite / PostgreSQL via DATABASE_URL), semua fungsi async
+│   ├── db.js                     (326 lines) — Database facade & dispatcher (SQLite / PostgreSQL via DATABASE_URL), all functions async
 │   ├── db/
-│   │   ├── common.js             (131 baris) — normalizeGalleryId (kunci kanonik), formatQueueRow/publicRow (`toPublicId`), maskDatabaseUrl, validasi import, CURRENT_APP_SCHEMA_VERSION (4)
-│   │   ├── listParser.js          (83 baris) — parseListText / parseListTextDetailed: baris list.txt (URL, ID polos, kunci berprefix) -> kunci kanonik via provider registry, menghitung `ignored`
-│   │   ├── events.js               (7 baris) — Shared EventEmitter (dbEvents)
-│   │   ├── sqlite.js            (1249 baris) — SQLite adapter (`node:sqlite`, `data/nhdl.db`, WAL), array `MIGRATIONS` v1–v4
-│   │   ├── postgres.js          (1271 baris) — PostgreSQL adapter (`pg.Pool`, retry koneksi, BIGSERIAL, TIMESTAMPTZ), array `MIGRATIONS` v1–v4
-│   │   ├── backup.js             (209 baris) — Backup JSON manual/terjadwal, rotasi, restore, folder backup (`NHDL_BACKUP_DIR`)
-│   │   └── auto-migrate.js       (107 baris) — Migrasi otomatis SQLite -> PostgreSQL saat Postgres masih kosong
-│   ├── providers/                           — Lapisan multi-source (satu file per jenis sumber)
-│   │   ├── index.js              (111 baris) — Registry: `resolveInput`, `canonicalKey`, `toPublicId`, `sourceOf`, `providerForKey`, `listSources`, `registerProvider`
-│   │   ├── default.js             (21 baris) — Provider site A (certain site ( ͡° ͜ʖ ͡°)): kunci angka polos, jalur API/CDN lama di engine
-│   │   ├── contentType.js         (30 baris) — Tipe konten: `mapCategoryToType(slug)` (slug kategori situs -> `comic`/`manga`/`other`), `typeFolderName`, `isContentType`
-│   │   ├── boards.js             (144 baris) — Pabrik provider site B1/B2 (halaman HTML galeri + daftar halaman ber-ekstensi per halaman)
-│   │   ├── slugapi.js            (116 baris) — Pabrik provider site C (slug galeri + JSON API gambar)
-│   │   └── http.js               (201 baris) — `fetchText` & `downloadToFile` bersama (User-Agent, redirect, file `.part` atomik; sebelum rename, `.part` harus diawali signature gambar webp/jpeg/png/gif, kalau tidak dianggap halaman blokir HTML dan ditolak tanpa `statusCode`) plus `curlFetchText` & `curlDownloadToFile` (system `curl` lewat `execFile`)
-│   ├── engine.js               (1377 baris) — DownloaderEngine (EventEmitter): loop antrian, metadata fetch, API/CDN/provider download, 429 backoff + circuit breaker, pengaman folder download
-│   ├── tracker.js               (622 baris) — Library & antrian di atas DB: `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), `isDownloadDirHealthy`, rename, kompresi CBZ/ZIP
-│   ├── utils.js                 (232 baris) — sanitizeName (escaped control chars), getDynamicDelay, verifyImage, blank PNG, atomicWriteFileSync
-│   ├── nhentaiApi.js            (187 baris) — certain site ( ͡° ͜ʖ ͡°) API v2 wrapper via curl + Cloudflare IP bypass + Zip magic-byte check (PK\x03\x04)
-│   ├── zip.js                   (100 baris) — Zero-dependency Store-only ZIP/CBZ binary builder (PKWARE spec)
-│   ├── auth.js                   (66 baris) — In-memory session token (30d TTL) + timingSafeEqual password check (NHDL_PASSWORD)
-│   ├── env.js                    (62 baris) — Zero-dependency .env parser & updater (saveEnvValue)
-│   └── logger.js                 (83 baris) — Audit & error logger ke tabel `events` (retensi 10.000 baris)
+│   │   ├── common.js             (131 lines) — normalizeGalleryId (canonical key), formatQueueRow/publicRow (`toPublicId`), maskDatabaseUrl, import validation, CURRENT_APP_SCHEMA_VERSION (4)
+│   │   ├── listParser.js          (83 lines) — parseListText / parseListTextDetailed: list.txt lines (URL, plain ID, prefixed key) -> canonical key via the provider registry, counts `ignored`
+│   │   ├── events.js               (7 lines) — Shared EventEmitter (dbEvents)
+│   │   ├── sqlite.js            (1249 lines) — SQLite adapter (`node:sqlite`, `data/nhdl.db`, WAL), `MIGRATIONS` array v1–v4
+│   │   ├── postgres.js          (1271 lines) — PostgreSQL adapter (`pg.Pool`, connection retry, BIGSERIAL, TIMESTAMPTZ), `MIGRATIONS` array v1–v4
+│   │   ├── backup.js             (209 lines) — Manual/scheduled JSON backup, rotation, restore, backup folder (`NHDL_BACKUP_DIR`)
+│   │   └── auto-migrate.js       (107 lines) — Automatic SQLite -> PostgreSQL migration when Postgres is still empty
+│   ├── providers/                           — Multi-source layer (one file per source type)
+│   │   ├── index.js              (111 lines) — Registry: `resolveInput`, `canonicalKey`, `toPublicId`, `sourceOf`, `providerForKey`, `listSources`, `registerProvider`
+│   │   ├── default.js             (21 lines) — Site A provider (certain site ( ͡° ͜ʖ ͡°)): plain numeric key, legacy API/CDN path in the engine
+│   │   ├── contentType.js         (30 lines) — Content type: `mapCategoryToType(slug)` (site category slug -> `comic`/`manga`/`other`), `typeFolderName`, `isContentType`
+│   │   ├── boards.js             (144 lines) — Site B1/B2 provider factory (gallery HTML page + per-page list with extensions)
+│   │   ├── slugapi.js            (116 lines) — Site C provider factory (gallery slug + image JSON API)
+│   │   └── http.js               (201 lines) — Shared `fetchText` & `downloadToFile` (User-Agent, redirects, atomic `.part` file; before rename, the `.part` must start with a webp/jpeg/png/gif image signature, otherwise it is treated as an HTML block page and rejected without a `statusCode`) plus `curlFetchText` & `curlDownloadToFile` (system `curl` via `execFile`)
+│   ├── engine.js               (1377 lines) — DownloaderEngine (EventEmitter): queue loop, metadata fetch, API/CDN/provider download, 429 backoff + circuit breaker, download folder safeguard
+│   ├── tracker.js               (622 lines) — Library & queue on top of the DB: `rescanLibrary` (`.nhdl-id` / `.cbz.nhdl-id`), `isDownloadDirHealthy`, rename, CBZ/ZIP compression
+│   ├── utils.js                 (232 lines) — sanitizeName (escaped control chars), getDynamicDelay, verifyImage, blank PNG, atomicWriteFileSync
+│   ├── nhentaiApi.js            (187 lines) — certain site ( ͡° ͜ʖ ͡°) API v2 wrapper via curl + Cloudflare IP bypass + Zip magic-byte check (PK\x03\x04)
+│   ├── zip.js                   (100 lines) — Zero-dependency Store-only ZIP/CBZ binary builder (PKWARE spec)
+│   ├── auth.js                   (66 lines) — In-memory session token (30d TTL) + timingSafeEqual password check (NHDL_PASSWORD)
+│   ├── env.js                    (62 lines) — Zero-dependency .env parser & updater (saveEnvValue)
+│   └── logger.js                 (83 lines) — Audit & error logger to the `events` table (10,000-row retention)
 ├── scripts/
-│   └── find-bad-archives.js     (122 baris) — `npm run check:archives` (deteksi & `--delete` file .cbz/.zip korup/HTML challenge + cetak daftar ID)
-├── test/                                    — Suite `node:test` (`npm test`), 14 file; jaringan selalu di-stub
-│   ├── db.test.js              (2168 baris) — `core/db.js`, migrasi, import/export, backup, `rescanLibrary`, pre-pass engine, 1000-link restart consistency; suite live PostgreSQL (di-skip tanpa `TEST_DATABASE_URL`)
-│   ├── sse.test.js              (840 baris) — SSE snapshot/delta, 5000-item, endpoint API
-│   ├── nhentaiApi.test.js        (51 baris) — `downloadArchiveFile` User-Agent & validasi signature zip
-│   ├── multiSource.db.test.js   (292 baris) — kunci berprefix, parser list, migrasi v3, export/import
-│   ├── multiSource.engine.test.js (264 baris) — unduhan galeri berprefix lewat provider (server lokal)
-│   ├── providers.test.js         (69 baris) — registry/resolveInput
-│   ├── providerFetch.test.js    (384 baris) — `fetchMeta`/`pageUrls` per provider, helper `http.js` (Node & curl), 429/503
-│   ├── providerCategory.test.js (101 baris) — ekstraksi kategori di provider B1/B2/C
-│   ├── contentType.test.js       (34 baris) — pemetaan kategori -> tipe
-│   ├── contentType.db.test.js   (100 baris) — skema v4 `queue.category`, export/import
-│   ├── contentType.engine.test.js (143 baris) — folder bertipe & `findExistingOnDisk`
-│   ├── webuiSources.test.js      (47 baris) — helper `webui/src/lib/sources.js`
-│   ├── webuiQueueView.test.js    (90 baris) — helper `webui/src/lib/queueView.js`
-│   └── webuiContentType.test.js  (47 baris) — helper `webui/src/lib/contentType.js`
+│   └── find-bad-archives.js     (122 lines) — `npm run check:archives` (detects & `--delete`s corrupt/HTML challenge .cbz/.zip files + prints the ID list)
+├── test/                                    — `node:test` suite (`npm test`), 14 files; network is always stubbed
+│   ├── db.test.js              (2168 lines) — `core/db.js`, migrations, import/export, backup, `rescanLibrary`, engine pre-pass, 1000-link restart consistency; live PostgreSQL suite (skipped without `TEST_DATABASE_URL`)
+│   ├── sse.test.js              (840 lines) — SSE snapshot/delta, 5000-item, API endpoints
+│   ├── nhentaiApi.test.js        (51 lines) — `downloadArchiveFile` User-Agent & zip signature validation
+│   ├── multiSource.db.test.js   (292 lines) — prefixed keys, list parser, v3 migration, export/import
+│   ├── multiSource.engine.test.js (264 lines) — prefixed gallery download via provider (local server)
+│   ├── providers.test.js         (69 lines) — registry/resolveInput
+│   ├── providerFetch.test.js    (384 lines) — per-provider `fetchMeta`/`pageUrls`, `http.js` helpers (Node & curl), 429/503
+│   ├── providerCategory.test.js (101 lines) — category extraction in the B1/B2/C providers
+│   ├── contentType.test.js       (34 lines) — category -> type mapping
+│   ├── contentType.db.test.js   (100 lines) — schema v4 `queue.category`, export/import
+│   ├── contentType.engine.test.js (143 lines) — typed folders & `findExistingOnDisk`
+│   ├── webuiSources.test.js      (47 lines) — `webui/src/lib/sources.js` helper
+│   ├── webuiQueueView.test.js    (90 lines) — `webui/src/lib/queueView.js` helper
+│   └── webuiContentType.test.js  (47 lines) — `webui/src/lib/contentType.js` helper
 ├── webui/
 │   ├── package.json                         — Svelte 5.57, Vite 8.3, Tailwind 4.3, GSAP 3.15, lucide-svelte
 │   └── src/
-│       ├── App.svelte             (90 baris) — Layout utama qBittorrent/IDM (Toolbar, SidebarFilter, VirtualQueueTable, DetailPanel, StatusBar + modal)
-│       ├── main.js, app.css                 — Entry Vite dan tema (CSS variables)
+│       ├── App.svelte             (90 lines) — Main qBittorrent/IDM layout (Toolbar, SidebarFilter, VirtualQueueTable, DetailPanel, StatusBar + modals)
+│       ├── main.js, app.css                 — Vite entry and theme (CSS variables)
 │       └── lib/
-│           ├── api.js            (280 baris) — Satu-satunya tempat `fetch` ke backend
-│           ├── sources.js         (58 baris) — Helper murni: sumber item, filter/hitung per sumber, label badge
-│           ├── queueView.js       (56 baris) — Helper murni: definisi filter "Queue", `nextPendingId`, chip cooldown, kolom "Ditambahkan"
-│           ├── contentType.js     (43 baris) — Helper murni: label/badge/filter tipe konten
-│           ├── stores/app.svelte.js (925 baris) — Store reaktif (runes): klien SSE, `SvelteMap` queue, filter, seleksi, config
-│           └── components/                  — 19 komponen Svelte 5 (lihat bagian 5)
+│           ├── api.js            (280 lines) — The only place that calls `fetch` to the backend
+│           ├── sources.js         (58 lines) — Pure helpers: item source, per-source filter/count, badge label
+│           ├── queueView.js       (56 lines) — Pure helpers: "Queue" filter definition, `nextPendingId`, cooldown chip, "Added" column
+│           ├── contentType.js     (43 lines) — Pure helpers: content type label/badge/filter
+│           ├── stores/app.svelte.js (925 lines) — Reactive store (runes): SSE client, queue `SvelteMap`, filters, selection, config
+│           └── components/                  — 19 Svelte 5 components (see section 5)
 └── docs/
-    ├── PLAN.md                              — Roadmap rework (Fase 0–8) + multi-source + tipe konten
-    ├── CHANGELOG.md                         — Riwayat perubahan (Manual & AI)
-    ├── ARCHITECTURE.md                      — Dokumen referensi teknis ini
-    ├── API.md                               — Kontrak endpoint REST & event SSE
-    ├── AI_AGENT.md                          — Panduan deploy/kelola/modifikasi/rawat untuk AI agent
-    ├── POSTGRES.md                          — Panduan konfigurasi PostgreSQL terpusat
-    └── superpowers/                         — Spec & plan historis (tidak diubah)
+    ├── PLAN.md                              — Rework roadmap (Phases 0–8) + multi-source + content type
+    ├── CHANGELOG.md                         — Change history (Manual & AI)
+    ├── ARCHITECTURE.md                      — This technical reference document
+    ├── API.md                               — REST endpoint & SSE event contract
+    ├── AI_AGENT.md                          — Deploy/manage/modify/maintain guide for AI agents
+    ├── POSTGRES.md                          — Centralized PostgreSQL configuration guide
+    └── superpowers/                         — Historical specs & plans (unchanged)
 ```
 
-Di luar kode: `Dockerfile` (multi-stage, `node:24-alpine`, `curl` terpasang, port 8080), `docker-compose.yml`, `.env.example`, `start.bat`, `list.txt.example`. `.gitignore` mengabaikan `node_modules/`, `webui/dist/`, `data/`, `Download/`, `.env`, `samples/` (sampel manual lokal), dan sisa file state lama.
+Outside the code: `Dockerfile` (multi-stage, `node:24-alpine`, `curl` installed, port 8080), `docker-compose.yml`, `.env.example`, `start.bat`, `list.txt.example`. `.gitignore` ignores `node_modules/`, `webui/dist/`, `data/`, `Download/`, `.env`, `samples/` (local manual samples), and leftover old state files.
 
 ---
 
-## 2. State & Format Data
+## 2. State & Data Formats
 
-Semua state ada di database (`core/db.js`): SQLite `data/nhdl.db` (atau `NHDL_DB_PATH`) secara default, PostgreSQL bila `DATABASE_URL` terisi. Satu-satunya state di luar DB adalah secret di `.env` dan file marker di folder unduhan. Folder unduhan (`engine.baseDownloadDir`) hanya berisi hasil unduhan.
+All state lives in the database (`core/db.js`): SQLite `data/nhdl.db` (or `NHDL_DB_PATH`) by default, PostgreSQL when `DATABASE_URL` is set. The only state outside the DB is the secrets in `.env` and the marker files in the download folder. The download folder (`engine.baseDownloadDir`) contains only downloaded output.
 
-### Tabel (versi skema saat ini: **4**)
+### Tables (current schema version: **4**)
 
-| Tabel | Kolom utama |
+| Table | Main columns |
 |---|---|
-| `queue` | `id`, `gallery_id` (TEXT, UNIQUE; kunci kanonik), `url`, `title`, `status`, `batch`, `priority`, `pages_done`, `pages_total`, `error`, `retries`, `created_at`, `updated_at`, `format` (v2), `category` (v4; tipe konten `comic`/`manga`/`other` atau NULL) |
-| `library` | `gallery_id` (TEXT, PK), `title`, `path` (folder atau file arsip), `pages`, `format`, `language`, `artist`, `added_at`, `meta` (v2; JSON teks: `ext`, `pageExts`, `tags`, `contentType`, dst.; untuk galeri yang di-skip permanen: `{ "skipped": true, "reason": ..., "skippedAt": ... }`) |
-| `settings` | `key`, `value` (JSON teks): `downloadDir`, `downloadFormat`, `autoContinueBatches`, `backupIntervalHours`, `backupKeep`, `lastBackupAt` |
-| `events` | `id`, `ts`, `level`, `gallery_id`, `message` (log aktivitas & error, dipangkas ke 10.000 baris) |
+| `queue` | `id`, `gallery_id` (TEXT, UNIQUE; canonical key), `url`, `title`, `status`, `batch`, `priority`, `pages_done`, `pages_total`, `error`, `retries`, `created_at`, `updated_at`, `format` (v2), `category` (v4; content type `comic`/`manga`/`other` or NULL) |
+| `library` | `gallery_id` (TEXT, PK), `title`, `path` (folder or archive file), `pages`, `format`, `language`, `artist`, `added_at`, `meta` (v2; JSON text: `ext`, `pageExts`, `tags`, `contentType`, etc.; for permanently skipped galleries: `{ "skipped": true, "reason": ..., "skippedAt": ... }`) |
+| `settings` | `key`, `value` (JSON text): `downloadDir`, `downloadFormat`, `autoContinueBatches`, `backupIntervalHours`, `backupKeep`, `lastBackupAt` |
+| `events` | `id`, `ts`, `level`, `gallery_id`, `message` (activity & error log, trimmed to 10,000 rows) |
 | `schema_version` | `version` |
 
-Migrasi: v1 skema awal, v2 kolom `queue.format` dan `library.meta`, v3 `gallery_id` menjadi `TEXT`, v4 `queue.category`. Migrasi ada di array `MIGRATIONS` pada **kedua** adapter dan dijalankan otomatis saat startup. Status item `queue`: `PENDING`, `ON_PROGRESS`, `STOPPED` (pause manual), `PAUSED` (circuit breaker), `COOLDOWN`, `DONE`, `ERROR`, `SKIPPED`.
+Migrations: v1 initial schema, v2 the `queue.format` and `library.meta` columns, v3 `gallery_id` becomes `TEXT`, v4 `queue.category`. Migrations live in the `MIGRATIONS` array in **both** adapters and run automatically on startup. `queue` item statuses: `PENDING`, `ON_PROGRESS`, `STOPPED` (manual pause), `PAUSED` (circuit breaker), `COOLDOWN`, `DONE`, `ERROR`, `SKIPPED`.
 
-### Marker file & `.env`
+### Marker files & `.env`
 
-- **`.nhdl-id`** (di dalam folder galeri) dan **`<Arsip>.cbz.nhdl-id`** (di samping arsip): berisi kunci kanonik galeri (angka polos untuk site A, `<prefix>:...` untuk sumber lain). Dipakai `rescanLibrary()` (`MAX_DEPTH = 6`) untuk melacak folder/arsip yang dipindah manual oleh user dan untuk mem-prune entri yang sudah dihapus dari disk.
-- **`.env`**: `NHDL_PASSWORD`, `NHENTAI_API_KEY`, `DATABASE_URL`, `PORT`, dst. Tidak pernah disimpan di DB atau dikirim ke UI.
-- **`config.json` lama** (root project): hanya dibaca satu kali oleh `migrateLegacyConfigJson` bila tabel `settings` kosong (dimatikan dengan `NHDL_LEGACY_CONFIG=`). File state teks lama (`list_status.txt`, `library.json`, `progress.json`, `activity.log`, `error.log`) tidak dipakai lagi; `list.txt` hanya format import/export (`# BATCH N FORMAT=cbz`).
-- **Folder unduhan**: `DOWNLOAD_DIR` bila di-set, kalau tidak `./Download` (Docker: `/downloads`). Pilihan folder di Settings diterapkan langsung dan disimpan ke `settings.downloadDir`. Saat startup, `engine.applySavedSettings()` (dipanggil di `server/index.js` setelah DB siap dan sebelum rescan/backup/auto-proses antrian) membaca `downloadDir`, `downloadFormat`, dan `autoContinueBatches` dari `settings`; prioritas folder: `DOWNLOAD_DIR` > `settings.downloadDir` > `./Download`. Nilai tersimpan yang tidak valid diabaikan, dan pengaman folder tetap berlaku (folder tidak dibuat bila library punya entri; status `Download folder unavailable`).
+- **`.nhdl-id`** (inside the gallery folder) and **`<Archive>.cbz.nhdl-id`** (next to the archive): contain the gallery's canonical key (plain number for site A, `<prefix>:...` for other sources). Used by `rescanLibrary()` (`MAX_DEPTH = 6`) to track folders/archives the user moved manually and to prune entries already deleted from disk.
+- **`.env`**: `NHDL_PASSWORD`, `NHENTAI_API_KEY`, `DATABASE_URL`, `PORT`, etc. Never stored in the DB or sent to the UI.
+- **Old `config.json`** (project root): read only once by `migrateLegacyConfigJson` when the `settings` table is empty (disabled with `NHDL_LEGACY_CONFIG=`). Old text state files (`list_status.txt`, `library.json`, `progress.json`, `activity.log`, `error.log`) are no longer used; `list.txt` is only an import/export format (`# BATCH N FORMAT=cbz`).
+- **Download folder**: `DOWNLOAD_DIR` if set, otherwise `./Download` (Docker: `/downloads`). The folder choice in Settings is applied immediately and saved to `settings.downloadDir`. On startup, `engine.applySavedSettings()` (called in `server/index.js` after the DB is ready and before rescan/backup/auto-processing the queue) reads `downloadDir`, `downloadFormat`, and `autoContinueBatches` from `settings`; folder priority: `DOWNLOAD_DIR` > `settings.downloadDir` > `./Download`. Invalid saved values are ignored, and the folder safeguard still applies (the folder is not created if the library has entries; status `Download folder unavailable`).
 
-### 2a. Kunci Galeri (`gallery_id`), Provider, dan `source`
+### 2a. Gallery Key (`gallery_id`), Provider, and `source`
 
-- **Kunci kanonik** disimpan sebagai `TEXT` di tabel `queue` dan `library` (skema v3). Site A memakai angka polos sebagai teks (`"468614"`); sumber lain memakai `"<prefix>:<isi>"` (mis. `b1:539224`, `b2:817456`, `c1:some-slug`). Prefix nyata hanya ada di `core/providers/index.js`.
-- **`toPublicId(key)`** (`core/providers/index.js`): kunci angka polos dikembalikan sebagai `number` (kompatibel dengan klien/API lama), kunci berprefix tetap `string`. Dipakai oleh `formatQueueRow`/`publicRow` sehingga API, SSE, dan export JSON selalu memuat nilai publik; `canonicalKey()` membalikkannya untuk input.
-- **`source`**: field turunan (`sourceOf(key)`) berisi id provider (`"default"` untuk site A / kunci angka polos, prefix provider untuk sumber lain). Tidak ada kolom DB khusus; dihitung saat baris diformat. Diekspos di `/api/status`, `/api/library`, dan event SSE `item`. UI memakainya untuk badge dan filter sumber (`webui/src/lib/sources.js`).
-- **Tampilan antrian di webui** (`webui/src/lib/queueView.js`, helper murni): filter sidebar "Queue" (id `queued`) mencakup `PENDING` + `ON_PROGRESS`; `filterCounts.queued` memakai definisi yang sama, sedangkan `filterCounts.pending` (hanya `PENDING`) dipakai status bar. Store menurunkan `nextPendingId` (item `PENDING` pertama menurut urutan rank) dan `cooldown` (dari `liveProgress`: `COOLDOWN`/`BATCH_REST` menjadi chip di `nextPendingId`, `RATE_LIMIT` menjadi chip di item berstatus `COOLDOWN`). Kolom "Ditambahkan" membaca `createdAt` (SQLite: UTC tanpa zona; PostgreSQL: ISO). Semua perubahan lewat SSE yang sudah ada.
-- **Interface provider** (objek di registry): `id`, `label`, `prefix`, `isDefault`, `transport` (`'node'` atau `'curl'`), `origin`, `urlPatterns` (regex URL galeri, grup 1 = isi kunci), `makeKey(body)`, `buildUrl(key)`, `imageHeaders()`, `fetchMeta(key, { fetchText })` -> `{ title, numPages, ext, pageExts, langStr, authorStr, extraMeta, pageUrls(n) }` dengan `pageUrls(n)` mengembalikan kandidat `[{ ext, url }]` per halaman. Galeri berprefix diunduh engine lewat provider (halaman per halaman, tanpa filter: semua halaman yang diumumkan diunduh); site A tetap lewat jalur API/CDN lama. `transport: 'curl'` (site C) membuat engine memakai `curlFetchText`/`curlDownloadToFile` di `core/providers/http.js`: CDN site C menyajikan halaman tantangan ke stack HTTP Node tetapi tidak ke `curl` sistem (site A memakai `curl` karena alasan yang sama). Kontrak error sama dengan helper Node (HTTP non-200 -> `err.statusCode`; kegagalan jaringan/timeout -> Error tanpa `statusCode`), jadi fallback 404 per kandidat tetap berlaku. Hanya `curl` biasa: argumen array tanpa shell, DNS normal, tanpa impersonasi atau penyelesaian tantangan.
-- **Parsing input**: `core/db/listParser.js` memanggil `resolveInput()`; baris yang tidak dikenali dilewati dan dihitung di `ignored`.
-- **Migrasi skema v3**: kolom `gallery_id` berubah dari `INTEGER`/`BIGINT` ke `TEXT` di kedua adapter; baris lama dikonversi ke teks angka tanpa kehilangan data. Export/import tetap membawa `gallery_id` publik (angka untuk site A).
-- **Tipe konten (comic/manga/other)**: provider B1/B2/C mengambil slug kategori situs (`extraMeta`/`meta.category`; kategori yang tidak ditemukan dicatat di `categoryError`, hanya peringatan log `[CATEGORY]` tanpa menggagalkan unduhan) dan `core/providers/contentType.js` memetakannya: `western`, `porn-comic`, `comic` -> `comic`; `manga`, `doujinshi` -> `manga`; slug lain yang valid -> `other`; tidak ada/tidak valid -> `null`. Nama folder tipe hanya dari tabel tetap (`Comic`/`Manga`/`Other`), tidak pernah dari teks remote. Layout folder sumber berprefix: `<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`; site A tidak berubah (`<base>/<Bahasa>/<Author>/<Judul>`). Tipe disimpan di `queue.category` (kolom `TEXT` nullable; berisi tipe, bukan slug mentah) dan `library.meta.contentType`; keduanya ikut export/import. `findExistingOnDisk` (fallback 429 yang berjalan sebelum metadata ada, jadi tanpa input tipe) memindai folder dasar dan semua folder tipe (`Comic`/`Manga`/`Other`) yang ada. Salinan lengkap galeri provider yang tersimpan di layout LAMA tanpa baris library diunduh ulang ke layout bertipe (baris library yang cocok berdasarkan id tetap menghentikan unduhan). UI menampilkan badge tipe dan filter **Type** di antrian dan library (filter yang tipenya sudah tidak ada diabaikan).
-- **Migrasi skema v4**: menambah kolom `queue.category TEXT` di kedua adapter; baris lama bernilai `NULL`; export/import membawa `category`.
-- **Nama folder**: bila judul kosong, nama folder diturunkan dari kunci lewat `safeKeyName()` (`core/engine.js`) agar tanda `:` tidak pernah muncul di path (tidak valid di Windows).
+- **Canonical key** is stored as `TEXT` in the `queue` and `library` tables (schema v3). Site A uses a plain number as text (`"468614"`); other sources use `"<prefix>:<content>"` (e.g. `b1:539224`, `b2:817456`, `c1:some-slug`). The real prefixes exist only in `core/providers/index.js`.
+- **`toPublicId(key)`** (`core/providers/index.js`): a plain numeric key is returned as a `number` (compatible with old clients/API), a prefixed key stays a `string`. Used by `formatQueueRow`/`publicRow` so the API, SSE, and JSON export always carry the public value; `canonicalKey()` reverses it for input.
+- **`source`**: derived field (`sourceOf(key)`) holding the provider id (`"default"` for site A / plain numeric key, the provider prefix for other sources). There is no dedicated DB column; it is computed when the row is formatted. Exposed in `/api/status`, `/api/library`, and the SSE `item` event. The UI uses it for source badges and filters (`webui/src/lib/sources.js`).
+- **Queue view in the webui** (`webui/src/lib/queueView.js`, pure helpers): the "Queue" sidebar filter (id `queued`) covers `PENDING` + `ON_PROGRESS`; `filterCounts.queued` uses the same definition, while `filterCounts.pending` (`PENDING` only) is used by the status bar. The store derives `nextPendingId` (the first `PENDING` item by rank order) and `cooldown` (from `liveProgress`: `COOLDOWN`/`BATCH_REST` become a chip on `nextPendingId`, `RATE_LIMIT` becomes a chip on items with status `COOLDOWN`). The "Added" column reads `createdAt` (SQLite: UTC without a zone; PostgreSQL: ISO). All changes go through the existing SSE.
+- **Provider interface** (object in the registry): `id`, `label`, `prefix`, `isDefault`, `transport` (`'node'` or `'curl'`), `origin`, `urlPatterns` (gallery URL regexes, group 1 = key content), `makeKey(body)`, `buildUrl(key)`, `imageHeaders()`, `fetchMeta(key, { fetchText })` -> `{ title, numPages, ext, pageExts, langStr, authorStr, extraMeta, pageUrls(n) }` with `pageUrls(n)` returning candidates `[{ ext, url }]` per page. Prefixed galleries are downloaded by the engine through the provider (page by page, no filter: all announced pages are downloaded); site A still uses the legacy API/CDN path. `transport: 'curl'` (site C) makes the engine use `curlFetchText`/`curlDownloadToFile` in `core/providers/http.js`: site C's CDN serves a challenge page to Node's HTTP stack but not to the system `curl` (site A uses `curl` for the same reason). The error contract is the same as the Node helpers (non-200 HTTP -> `err.statusCode`; network failure/timeout -> Error without `statusCode`), so the per-candidate 404 fallback still applies. Plain `curl` only: array arguments without a shell, normal DNS, no impersonation or challenge solving.
+- **Input parsing**: `core/db/listParser.js` calls `resolveInput()`; unrecognized lines are skipped and counted in `ignored`.
+- **Schema v3 migration**: the `gallery_id` column changes from `INTEGER`/`BIGINT` to `TEXT` in both adapters; old rows are converted to numeric text without data loss. Export/import still carries the public `gallery_id` (a number for site A).
+- **Content type (comic/manga/other)**: the B1/B2/C providers fetch the site's category slug (`extraMeta`/`meta.category`; categories that cannot be found are recorded in `categoryError`, only a `[CATEGORY]` log warning without failing the download) and `core/providers/contentType.js` maps it: `western`, `porn-comic`, `comic` -> `comic`; `manga`, `doujinshi` -> `manga`; other valid slugs -> `other`; missing/invalid -> `null`. The type folder name comes only from a fixed table (`Comic`/`Manga`/`Other`), never from remote text. Prefixed source folder layout: `<base>/<Type>/<Language>/<Author>/<Title>`; site A is unchanged (`<base>/<Language>/<Author>/<Title>`). The type is stored in `queue.category` (nullable `TEXT` column; holds the type, not the raw slug) and `library.meta.contentType`; both are included in export/import. `findExistingOnDisk` (the 429 fallback that runs before metadata exists, so without type input) scans the base folder and all existing type folders (`Comic`/`Manga`/`Other`). A complete copy of a provider gallery stored in the OLD layout without a library row is downloaded again into the typed layout (a library row matching by id still stops the download). The UI shows a type badge and a **Type** filter in the queue and library (filters whose type no longer exists are ignored).
+- **Schema v4 migration**: adds the `queue.category TEXT` column in both adapters; old rows are `NULL`; export/import carries `category`.
+- **Folder name**: if the title is empty, the folder name is derived from the key via `safeKeyName()` (`core/engine.js`) so a `:` never appears in the path (invalid on Windows).
 
 ---
 
 ## 3. Core Engine (`core/engine.js` — `DownloaderEngine`)
 
-Turunan `EventEmitter`. Mengelola antrian, anti-rate-limit, dan pengunduhan.
+Extends `EventEmitter`. Manages the queue, anti-rate-limit, and downloading.
 
-### Properti Utama
-- `baseDownloadDir`: Folder output (site A: `<base>/<Language>/<Author>/<Title>`; sumber berprefix: `<base>/<Tipe>/<Language>/<Author>/<Title>`). Diisi dari opsi konstruktor, `DOWNLOAD_DIR`, atau `<repo>/Download`, lalu ditimpa `settings.downloadDir` oleh `applySavedSettings()` saat startup (kecuali `DOWNLOAD_DIR` di-set).
+### Main Properties
+- `baseDownloadDir`: Output folder (site A: `<base>/<Language>/<Author>/<Title>`; prefixed sources: `<base>/<Type>/<Language>/<Author>/<Title>`). Filled from the constructor options, `DOWNLOAD_DIR`, or `<repo>/Download`, then overridden by `settings.downloadDir` through `applySavedSettings()` on startup (unless `DOWNLOAD_DIR` is set).
 - `downloadFormat`: `'cbz'` (default) | `'zip'` | `'folder'`.
 - `autoContinueBatches`: `boolean` (default `true`).
-- `batchSize`: `50` galeri sebelum istirahat batch (`batchRestMinutes`: `5` menit).
-- `concurrency`: `3` halaman paralel per galeri.
-- `isRunning`, `isPaused`, `isStopped`, `forceRetry`: Flags kontrol eksekusi.
-- `currentProgress`: Snapshot progress aktif (dibaca `/api/status` dan dipush lewat SSE `progress`).
-- `downloadDirUnavailable` + `statusReason`: pengaman folder download. Bila folder hilang/tidak ter-mount (`isDownloadDirHealthy` gagal), `getStatus()` mengembalikan teks alasan (mis. `Download folder unavailable`) alih-alih `IDLE`/`RUNNING`, run dibatalkan, dan timer pengecekan (`healthCheckIntervalMs`, default 60 detik) menjalankan `checkDownloadDirRecovery()` sampai folder sehat lagi. Folder dianggap tidak sehat bila tidak ada, bukan direktori, kosong padahal `library` punya entri aktif, atau >50% dari ≥10 entri library hilang dari disk. Pemulihan manual: perbaiki mount/`DOWNLOAD_DIR`, lalu jalankan **Library → Rescan** (`POST /api/library/rescan`); rescan yang sukses menghapus flag. Mulai ulang server juga menjalankan rescan startup.
-- `getStatus()`: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'COOLDOWN'` (jeda anti-ban/istirahat batch) | `'COOLDOWN_429'` (rate limit) | teks `statusReason` saat folder tidak tersedia.
-- `consecutiveRateLimits`, `circuitBreakerTripped`: State proteksi 429. Cooldown 5m -> 10m -> 20m (dobel tiap hit, maks 60 menit); hit ke-4 berturut-turut men-trip circuit breaker dan engine otomatis `pause()`. Berlaku sama untuk 429/503 dari sumber non-default.
+- `batchSize`: `50` galleries before a batch rest (`batchRestMinutes`: `5` minutes).
+- `concurrency`: `3` parallel pages per gallery.
+- `isRunning`, `isPaused`, `isStopped`, `forceRetry`: Execution control flags.
+- `currentProgress`: Active progress snapshot (read by `/api/status` and pushed via SSE `progress`).
+- `downloadDirUnavailable` + `statusReason`: download folder safeguard. When the folder is missing/not mounted (`isDownloadDirHealthy` fails), `getStatus()` returns the reason text (e.g. `Download folder unavailable`) instead of `IDLE`/`RUNNING`, the run is aborted, and a check timer (`healthCheckIntervalMs`, default 60 seconds) runs `checkDownloadDirRecovery()` until the folder is healthy again. The folder is considered unhealthy if it does not exist, is not a directory, is empty while `library` has active entries, or >50% of ≥10 library entries are missing from disk. Manual recovery: fix the mount/`DOWNLOAD_DIR`, then run **Library → Rescan** (`POST /api/library/rescan`); a successful rescan clears the flag. Restarting the server also runs a startup rescan.
+- `getStatus()`: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'COOLDOWN'` (anti-ban pause/batch rest) | `'COOLDOWN_429'` (rate limit) | the `statusReason` text when the folder is unavailable.
+- `consecutiveRateLimits`, `circuitBreakerTripped`: 429 protection state. Cooldown 5m -> 10m -> 20m (doubling on each hit, max 60 minutes); the 4th consecutive hit trips the circuit breaker and the engine automatically `pause()`s. Applies the same to 429/503 from non-default sources.
 
-### Event yang Di-emit oleh `DownloaderEngine`
-| Event | Payload | Keterangan |
+### Events Emitted by `DownloaderEngine`
+| Event | Payload | Notes |
 |---|---|---|
-| `'batch_start'` | `{ total, pending, skipped }` | Saat `runBatch()` dimulai |
-| `'progress'` | `currentProgress` (`{ galleryId, title, percent, completed, total, taskNum, totalTasks, activePages, speedKBps, stalled, stalledSeconds, live: true }`) | Heartbeat tiap 1 detik atau saat halaman selesai |
-| `'cooldown'` | `currentProgress` (`{ type: 'COOLDOWN' \| 'BATCH_REST' \| 'RATE_LIMIT', title, message, percent, remaining, total, taskNum, totalTasks }`) | Detak tiap 1 detik selama masa tunggu |
-| `'done'` | `{ galleryId, title, pages, currentTaskNum, totalTasks }` | Satu galeri selesai diunduh (via API, CDN, atau provider) |
-| `'skipped'` | `{ galleryId, title, currentTaskNum, totalTasks, reason }` | Galeri dilewati (ada di library / disk / 404) |
-| `'gallery_stopped'` | `{ galleryId, pagesDone, pagesTotal, deleted }` | Galeri `ON_PROGRESS` dihentikan di batas halaman (pause/delete per item) |
-| `'error'` | `{ galleryId, error, currentTaskNum, totalTasks }` | Galeri gagal (`server/index.js` memasang listener agar tidak crash) |
-| `'rate_limit'` | `{ galleryId, waitSeconds, consecutiveRateLimits }` | Saat terkena HTTP 429 |
-| `'circuit_breaker'` | `{ galleryId, consecutiveRateLimits }` | Setelah 3 cooldown berturut-turut, hit ke-4 men-trip (engine otomatis `pause()`) |
-| `'batch_complete'` | `{ processed }` | Saat `runBatch()` selesai |
-| `'download_dir_unavailable'` | `{ reason, downloadDir }` | Folder download tidak sehat |
-| `'paused'` / `'resumed'` / `'stopped'` / `'restarted'` / `'retry_triggered'` / `'config_updated'` | Objek opsional | Perubahan state engine |
+| `'batch_start'` | `{ total, pending, skipped }` | When `runBatch()` starts |
+| `'progress'` | `currentProgress` (`{ galleryId, title, percent, completed, total, taskNum, totalTasks, activePages, speedKBps, stalled, stalledSeconds, live: true }`) | Heartbeat every 1 second or when a page finishes |
+| `'cooldown'` | `currentProgress` (`{ type: 'COOLDOWN' \| 'BATCH_REST' \| 'RATE_LIMIT', title, message, percent, remaining, total, taskNum, totalTasks }`) | Tick every 1 second during the wait |
+| `'done'` | `{ galleryId, title, pages, currentTaskNum, totalTasks }` | One gallery finished downloading (via API, CDN, or provider) |
+| `'skipped'` | `{ galleryId, title, currentTaskNum, totalTasks, reason }` | Gallery skipped (in library / on disk / 404) |
+| `'gallery_stopped'` | `{ galleryId, pagesDone, pagesTotal, deleted }` | An `ON_PROGRESS` gallery stopped at a page boundary (per-item pause/delete) |
+| `'error'` | `{ galleryId, error, currentTaskNum, totalTasks }` | Gallery failed (`server/index.js` attaches a listener so it does not crash) |
+| `'rate_limit'` | `{ galleryId, waitSeconds, consecutiveRateLimits }` | When HTTP 429 is hit |
+| `'circuit_breaker'` | `{ galleryId, consecutiveRateLimits }` | After 3 consecutive cooldowns, the 4th hit trips it (engine automatically `pause()`s) |
+| `'batch_complete'` | `{ processed }` | When `runBatch()` finishes |
+| `'download_dir_unavailable'` | `{ reason, downloadDir }` | Download folder is unhealthy |
+| `'paused'` / `'resumed'` / `'stopped'` / `'restarted'` / `'retry_triggered'` / `'config_updated'` | Optional object | Engine state changes |
 
-`server/index.js` meneruskan ke SSE `engine`: `paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`, `download_dir_unavailable`, ditambah `progress` dan `cooldown` ke SSE `progress`.
+`server/index.js` forwards these to SSE `engine`: `paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`, `download_dir_unavailable`, plus `progress` and `cooldown` to SSE `progress`.
 
-### Alur `processGallery(galleryId)` — jalur site A; galeri berprefix memakai jalur provider (lihat 2a)
-1. Set status `ON_PROGRESS` di tabel `queue`.
-2. Cek tabel `library`: jika valid di disk (`verifyImage` >= 2KB untuk tiap halaman atau file `.cbz`/`.zip` ada), langsung return `SKIPPED - Already in Library` (0 request jaringan).
-3. Panggil `fetchMetadata(galleryId)`:
-   - **API-first** (`core/nhentaiApi.js` -> `GET /api/v2/galleries/<id>` via `curl --resolve certain.site:443:104.26.4.188`). Menggunakan `title.pretty` untuk nama file.
-   - **Fallback HTML scrape** (`fetchMetadataViaHtml`) jika API gagal.
-   - Jika `RATE_LIMIT` (429; untuk provider non-default, status 429/503 dari `fetchMeta` dipetakan ke `RATE_LIMIT` oleh `fetchProviderMetadata`), cek dulu cache judul + `findExistingOnDisk()` untuk menghindari cooldown 5 menit jika file sebenarnya sudah ada di disk.
-4. Cek apakah sudah ada archive/folder di `parentDir` (`<base>/<Lang>/<Author>/`).
-5. **Fast-path API Archive Download** (`tryApiArchiveDownload`): jika `NHENTAI_API_KEY` diset dan format target `cbz`/`zip`, minta presigned download URL dari API v2. Jika gagal, fallback ke per-page CDN.
+### `processGallery(galleryId)` Flow — site A path; prefixed galleries use the provider path (see 2a)
+1. Set status `ON_PROGRESS` in the `queue` table.
+2. Check the `library` table: if valid on disk (`verifyImage` >= 2KB for each page or the `.cbz`/`.zip` file exists), return `SKIPPED - Already in Library` immediately (0 network requests).
+3. Call `fetchMetadata(galleryId)`:
+   - **API-first** (`core/nhentaiApi.js` -> `GET /api/v2/galleries/<id>` via `curl --resolve certain.site:443:104.26.4.188`). Uses `title.pretty` for the file name.
+   - **HTML scrape fallback** (`fetchMetadataViaHtml`) if the API fails.
+   - If `RATE_LIMIT` (429; for non-default providers, 429/503 status from `fetchMeta` is mapped to `RATE_LIMIT` by `fetchProviderMetadata`), first check the title cache + `findExistingOnDisk()` to avoid the 5-minute cooldown if the file actually already exists on disk.
+4. Check whether an archive/folder already exists in `parentDir` (`<base>/<Lang>/<Author>/`).
+5. **API Archive Download fast path** (`tryApiArchiveDownload`): if `NHENTAI_API_KEY` is set and the target format is `cbz`/`zip`, request a presigned download URL from API v2. If it fails, fall back to per-page CDN.
 6. **Per-page CDN Download**:
-   - Unduh paralel (`concurrency = 3`) dari `i1..i4.certain.site` (dipin ke IP `104.26.4.188`).
-   - Jika sebuah halaman gagal verifikasi (`< 2KB`) sebanyak 5x berturut-turut dan ukurannya `< 1536` byte (placeholder blokir CDN), substitusi dengan PNG putih valid menggunakan `writeBlankPlaceholderImage()` dan catat ke tabel `events`.
-   - Setelah semua halaman selesai, simpan ke tabel `library`, tulis `.nhdl-id`, dan panggil `maybeCompress()` jika format batch adalah `cbz`/`zip`.
+   - Parallel download (`concurrency = 3`) from `i1..i4.certain.site` (pinned to IP `104.26.4.188`).
+   - If a page fails verification (`< 2KB`) 5 times in a row and its size is `< 1536` bytes (CDN block placeholder), substitute a valid white PNG using `writeBlankPlaceholderImage()` and log it to the `events` table.
+   - After all pages finish, save to the `library` table, write `.nhdl-id`, and call `maybeCompress()` if the batch format is `cbz`/`zip`.
 
-Galeri berprefix: `fetchProviderMetadata` memilih transport (`node` atau `curl`) sesuai provider, `downloadProviderPage` mencoba kandidat URL per halaman (404 di satu kandidat lanjut ke berikutnya), lalu jalur simpan/library/marker sama seperti di atas dengan folder bertipe (lihat 2a).
+Prefixed galleries: `fetchProviderMetadata` picks the transport (`node` or `curl`) per provider, `downloadProviderPage` tries the URL candidates per page (a 404 on one candidate moves on to the next), then the save/library/marker path is the same as above with a typed folder (see 2a).
 
 ---
 
-## 4. Kontrak REST API & SSE (`server/index.js` & `docs/API.md`)
+## 4. REST API & SSE Contract (`server/index.js` & `docs/API.md`)
 
-Port default: `8080`. Spesifikasi lengkap request/response dan payload SSE ada di [`docs/API.md`](API.md); tabel di bawah hanya peta ringkas.
+Default port: `8080`. The full request/response specification and SSE payloads are in [`docs/API.md`](API.md); the table below is only a short map.
 
-| Method | Endpoint | Fungsi |
+| Method | Endpoint | Function |
 |---|---|---|
-| `GET` | `/api/events` | Stream SSE: `snapshot` awal, lalu delta `item` (`dbEvents`), `progress`, `engine`, dan `reloaded` setelah import/restore |
-| `POST` | `/api/login`, `/api/logout` | Sesi (cookie `nhdl_session`, HttpOnly, 30 hari) bila `NHDL_PASSWORD` diset |
-| `GET` | `/api/status` | Endpoint kompatibilitas: `{ items, batchCount, rawList, errors, liveProgress, engineStatus, autoContinueBatches }` |
-| `POST` | `/api/queue`, `/api/queue/import` | Impor teks list; `/api/queue` mengganti seluruh antrian, `/import` menambah. Mengembalikan `added`, `updated`, `duplicates`, `ignored`, `galleryIds`, `total` |
-| `GET` | `/api/queue/export` | Ekspor antrian sebagai `list.txt` |
-| `POST` | `/api/queue/pause`, `/resume`, `/delete`, `/priority` | Kontrol per item (`ids`), prioritas `top`/`up`/`down`/`bottom` |
+| `GET` | `/api/events` | SSE stream: initial `snapshot`, then `item` deltas (`dbEvents`), `progress`, `engine`, and `reloaded` after import/restore |
+| `POST` | `/api/login`, `/api/logout` | Session (cookie `nhdl_session`, HttpOnly, 30 days) when `NHDL_PASSWORD` is set |
+| `GET` | `/api/status` | Compatibility endpoint: `{ items, batchCount, rawList, errors, liveProgress, engineStatus, autoContinueBatches }` |
+| `POST` | `/api/queue`, `/api/queue/import` | Import list text; `/api/queue` replaces the whole queue, `/import` adds. Returns `added`, `updated`, `duplicates`, `ignored`, `galleryIds`, `total` |
+| `GET` | `/api/queue/export` | Export the queue as `list.txt` |
+| `POST` | `/api/queue/pause`, `/resume`, `/delete`, `/priority` | Per-item control (`ids`), priority `top`/`up`/`down`/`bottom` |
 | `POST` | `/api/control` | `{ action: 'pause' \| 'stop' \| 'resume' \| 'start' \| 'restart' }` (`stop` = `pause`, `start` = `resume`) |
-| `POST` | `/api/retry` | `{ galleryId? }`: lewati cooldown; dengan `galleryId`, kembalikan item itu ke `PENDING` |
-| `GET` / `POST` | `/api/config`, `/api/config/verify-key` | Pengaturan (`downloadDir`, `downloadFormat`, `autoContinueBatches`, `apiKey`, jadwal backup) dan daftar `sources` |
-| `GET` | `/api/library` | Entri library (`source`, `category`, dst.) |
-| `POST` | `/api/library/rescan`, `/rename`, `/compress`, `/batch-compress` | Rescan marker, rename, kompresi satu/banyak galeri (job latar belakang) |
-| `GET` | `/api/library/compress-status` | `{ job }` progres batch compress |
-| `GET` | `/api/logs`, `/api/logs/download` | Log aktivitas (`?galleryId=&limit=` untuk satu galeri) dan unduhan `.log` |
-| `GET` | `/api/fs/browse?path=...` | Penjelajah direktori untuk pemilih folder |
-| `GET` / `POST` / `DELETE` | `/api/db/info`, `/export`, `/import`, `/backup`, `/backups`, `/restore`, `/backups/:name` | Manajemen database (info, export/import JSON, backup, restore) |
+| `POST` | `/api/retry` | `{ galleryId? }`: skip cooldown; with `galleryId`, return that item to `PENDING` |
+| `GET` / `POST` | `/api/config`, `/api/config/verify-key` | Settings (`downloadDir`, `downloadFormat`, `autoContinueBatches`, `apiKey`, backup schedule) and the `sources` list |
+| `GET` | `/api/library` | Library entries (`source`, `category`, etc.) |
+| `POST` | `/api/library/rescan`, `/rename`, `/compress`, `/batch-compress` | Marker rescan, rename, compress one/many galleries (background job) |
+| `GET` | `/api/library/compress-status` | `{ job }` batch compress progress |
+| `GET` | `/api/logs`, `/api/logs/download` | Activity log (`?galleryId=&limit=` for one gallery) and `.log` download |
+| `GET` | `/api/fs/browse?path=...` | Directory browser for the folder picker |
+| `GET` / `POST` / `DELETE` | `/api/db/info`, `/export`, `/import`, `/backup`, `/backups`, `/restore`, `/backups/:name` | Database management (info, JSON export/import, backup, restore) |
 
 ---
 
-## 5. Peta Frontend (`webui/src`)
+## 5. Frontend Map (`webui/src`)
 
-Svelte 5 (runes: `$state`, `$derived`, `$props`, `$effect`; tanpa `$:`/`export let`). Seluruh HTTP lewat `lib/api.js`; seluruh state lewat `lib/stores/app.svelte.js` (`appStore`).
+Svelte 5 (runes: `$state`, `$derived`, `$props`, `$effect`; no `$:`/`export let`). All HTTP goes through `lib/api.js`; all state goes through `lib/stores/app.svelte.js` (`appStore`).
 
-- **`App.svelte`** (90 baris): merakit `Toolbar`, `SidebarFilter`, `VirtualQueueTable`, `DetailPanel`, `StatusBar`, dialog (`AddDialog`, `DeleteConfirmDialog`), dan modal (`FolderPickerModal` = Settings, `LibraryModal`, `LogsModal`), serta `Toast`. Saat mount memanggil `appStore.loadConfig()` dan `appStore.connectSSE()`.
-- **Store** (`app.svelte.js`): `SvelteMap` item per `galleryId` (kunci string), klien `EventSource('/api/events')` dengan reconnect berbackoff dan fallback polling 3 detik (`sseStatus: 'polling'`), `applySnapshot`/`applyItemEvent`/`applyProgressEvent`/`applyEngineEvent`, filter status/tipe/sumber/batch, sort, seleksi (klik/Ctrl/Shift/Ctrl+A), dan turunan `nextPendingId` + `cooldown` dari `queueView.js`. `appStore.sources` berasal dari `GET /api/config` -> `sources`.
-- **Toolbar**: Add (paste/upload `list.txt`), Resume, Pause, Delete, prioritas, Skip Cooldown & Force Retry, Start/Pause dan Restart engine, Library, Settings, Logs, Logout (bila login aktif).
-- **SidebarFilter**: filter status (All, Downloading, **Queue** = `PENDING` + `ON_PROGRESS`, Completed, Stopped, Failed), bagian **Source** (muncul bila ada ≥1 sumber), bagian **Type** (hanya tipe yang ada; filter yang tipenya sudah tidak ada diabaikan), dan daftar Batch.
-- **VirtualQueueTable**: virtualisasi sendiri (baris `32px`, overscan `±10`), kolom `#`, Judul, ID, Status, Progress, Halaman, Speed, ETA, Batch, Format, **Ditambahkan** (`createdAt`); sortable, resizable (lebar di `localStorage`), badge sumber dan badge tipe di baris, penanda aksen biru untuk `ON_PROGRESS`, chip hitung mundur cooldown di sel Status, context menu klik kanan. Mode `< 768px`: 3 kolom.
-- **DetailPanel**: tab General / Pages / Log (`/api/logs?galleryId=`). **StatusBar**: status engine (termasuk peringatan folder tidak tersedia), counter, speed, status SSE.
-- **LibraryModal**: daftar library dengan filter sumber/tipe, rescan, rename inline, kompresi satu/banyak galeri (polling `compress-status`).
-- **FolderPickerModal** (Settings): tab General (folder unduhan, format, auto-continue batch, API key) dan tab Database (info, export/import, backup, restore, jadwal backup).
-- **Helper murni** di `lib/` (diuji di `test/webui*.test.js`): `sources.js`, `queueView.js`, `contentType.js`.
-- **Komponen sisa yang tidak diimpor `App.svelte`**: `Header`, `HudPanel`, `QueuePanel`, `BatchGroup`, `QueueItem`, `RightSidebar`, `DeleteBatchModal` (tidak dirujuk dari tree aktif).
+- **`App.svelte`** (90 lines): assembles `Toolbar`, `SidebarFilter`, `VirtualQueueTable`, `DetailPanel`, `StatusBar`, dialogs (`AddDialog`, `DeleteConfirmDialog`), and modals (`FolderPickerModal` = Settings, `LibraryModal`, `LogsModal`), plus `Toast`. On mount it calls `appStore.loadConfig()` and `appStore.connectSSE()`.
+- **Store** (`app.svelte.js`): `SvelteMap` of items per `galleryId` (string key), `EventSource('/api/events')` client with backoff reconnect and a 3-second polling fallback (`sseStatus: 'polling'`), `applySnapshot`/`applyItemEvent`/`applyProgressEvent`/`applyEngineEvent`, status/type/source/batch filters, sort, selection (click/Ctrl/Shift/Ctrl+A), and derived `nextPendingId` + `cooldown` from `queueView.js`. `appStore.sources` comes from `GET /api/config` -> `sources`.
+- **Toolbar**: Add (paste/upload `list.txt`), Resume, Pause, Delete, priority, Skip Cooldown & Force Retry, Start/Pause and Restart engine, Library, Settings, Logs, Logout (when login is active).
+- **SidebarFilter**: status filters (All, Downloading, **Queue** = `PENDING` + `ON_PROGRESS`, Completed, Stopped, Failed), a **Source** section (appears if there is ≥1 source), a **Type** section (only existing types; filters whose type no longer exists are ignored), and the Batch list.
+- **VirtualQueueTable**: in-house virtualization (`32px` rows, overscan `±10`), columns `#`, Title, ID, Status, Progress, Pages, Speed, ETA, Batch, Format, **Added** (`createdAt`); sortable, resizable (widths in `localStorage`), source badge and type badge on rows, blue accent marker for `ON_PROGRESS`, cooldown countdown chip in the Status cell, right-click context menu. `< 768px` mode: 3 columns.
+- **DetailPanel**: General / Pages / Log tabs (`/api/logs?galleryId=`). **StatusBar**: engine status (including the folder-unavailable warning), counters, speed, SSE status.
+- **LibraryModal**: library list with source/type filters, rescan, inline rename, compress one/many galleries (polling `compress-status`).
+- **FolderPickerModal** (Settings): General tab (download folder, format, auto-continue batch, API key) and Database tab (info, export/import, backup, restore, backup schedule).
+- **Pure helpers** in `lib/` (tested in `test/webui*.test.js`): `sources.js`, `queueView.js`, `contentType.js`.
+- **Leftover components not imported by `App.svelte`**: `Header`, `HudPanel`, `QueuePanel`, `BatchGroup`, `QueueItem`, `RightSidebar`, `DeleteBatchModal` (not referenced from the active tree).
 
 ---
 
-## 6. Prinsip Arsitektur & Riwayat Rework (`docs/PLAN.md`)
+## 6. Architecture Principles & Rework History (`docs/PLAN.md`)
 
-1. **Semua state di DB** (`queue`, `library`, `settings`, `events`, `schema_version`); `.env` tetap di file untuk secret; `list.txt` hanya import/export.
-2. **Perubahan mengalir DB -> SSE**: setiap mutasi baris `queue` meng-emit `dbEvents`, `/api/events` meneruskannya sebagai delta ke UI. Tidak ada polling (kecuali fallback saat SSE tidak tersedia).
-3. **Dua adapter database**: `core/db.js` memilih `core/db/postgres.js` bila `DATABASE_URL` terisi (driver `pg` adalah satu-satunya dependensi runtime backend; pengecualian aturan zero-dependency), atau `core/db/sqlite.js` (default). Skema dan migrasi kompatibel; `gallery_id` bertipe `TEXT` di keduanya sejak v3, `created_at`/`updated_at` memakai `TIMESTAMPTZ`/`now()` di PostgreSQL, pool maks 10 koneksi dengan retry startup 60 detik. Hak akses minimal dicatat di `docs/POSTGRES.md`.
-4. **Multi-source lewat provider** (`core/providers/`): sumber baru = satu provider terdaftar di registry; engine tidak perlu tahu detail situs.
-5. **Rework Fase 0–8** (CLI dihapus, SQLite, SSE, Svelte 5 + virtual table, PostgreSQL + backup/export/import, panduan AI agent) selesai; Fase 6 (backend Go) dibatalkan. Detail dan log ada di `docs/PLAN.md`.
+1. **All state in the DB** (`queue`, `library`, `settings`, `events`, `schema_version`); `.env` stays a file for secrets; `list.txt` is only import/export.
+2. **Changes flow DB -> SSE**: every `queue` row mutation emits `dbEvents`, and `/api/events` forwards it as a delta to the UI. No polling (except the fallback when SSE is unavailable).
+3. **Two database adapters**: `core/db.js` picks `core/db/postgres.js` when `DATABASE_URL` is set (the `pg` driver is the only backend runtime dependency; an exception to the zero-dependency rule), or `core/db/sqlite.js` (default). Schema and migrations are compatible; `gallery_id` is `TEXT` in both since v3, `created_at`/`updated_at` use `TIMESTAMPTZ`/`now()` in PostgreSQL, pool max 10 connections with a 60-second startup retry. Minimal privileges are documented in `docs/POSTGRES.md`.
+4. **Multi-source through providers** (`core/providers/`): a new source = one provider registered in the registry; the engine does not need to know site details.
+5. **Rework Phases 0–8** (CLI removed, SQLite, SSE, Svelte 5 + virtual table, PostgreSQL + backup/export/import, AI agent guide) are done; Phase 6 (Go backend) was cancelled. Details and log are in `docs/PLAN.md`.

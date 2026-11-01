@@ -1,107 +1,107 @@
 # Content type (Comic / Manga) — Design
 
-Status: desain disetujui di chat (2026-10-06), menunggu review spec tertulis.
-Branch: `rework`. Melanjutkan [multi-source download](2026-10-06-multi-source-download-design.md).
+Status: design approved in chat (2026-10-06), awaiting written spec review.
+Branch: `rework`. Continues [multi-source download](2026-10-06-multi-source-download-design.md).
 
-> Aturan dokumentasi repo: situs ditulis generik — **site A** (default, tidak berubah), **site B1/B2** (ID angka, kategori dibaca dari halaman), **site C** (ID slug, kategori dari API). Nama asli, domain, dan prefix asli hanya ada di kode.
+> Repo documentation rule: sites are written generically — **site A** (default, unchanged), **site B1/B2** (numeric ID, category read from the page), **site C** (slug ID, category from the API). Real names, domains, and prefixes exist only in code.
 
-## 1. Tujuan
+## 1. Goal
 
-Galeri dari site B1, B2, dan C punya **kategori** di situsnya. NHDL memetakannya ke tipe konten `comic` / `manga` / `other`, lalu:
-- menyimpan hasil download di folder per tipe (`Download/<Tipe>/<Bahasa>/<Author>/<Judul>`), dan
-- menampilkan tipe di UI (badge, filter sidebar, Library Manager).
+Galleries from site B1, B2, and C have a **category** on their site. NHDL maps it to a `comic` / `manga` / `other` content type, then:
+- stores downloads in a per-type folder (`Download/<Type>/<Language>/<Author>/<Title>`), and
+- shows the type in the UI (badge, sidebar filter, Library Manager).
 
 Success criteria:
-- Galeri baru dari site B1/B2/C masuk ke folder tipe yang benar; galeri `western`/komik barat masuk `Comic`, `manga` dan `doujinshi` masuk `Manga`.
-- Antrean dan library memperlihatkan tipe per item dan bisa difilter per tipe.
-- Data lama (antrean, library, marker `.nhdl-id`, file yang sudah terunduh) tetap valid; tidak ada file yang dipindah otomatis.
-- Site A tidak berubah sama sekali (tanpa tipe, folder lama).
+- New galleries from site B1/B2/C land in the correct type folder; `western`/Western comic galleries go to `Comic`, `manga` and `doujinshi` go to `Manga`.
+- The queue and library show the type per item and can be filtered by type.
+- Old data (queue, library, `.nhdl-id` markers, already downloaded files) stays valid; no files are moved automatically.
+- Site A is completely unchanged (no type, old folder).
 
-Di luar lingkup: memindahkan library yang sudah ada ke struktur baru, tipe untuk site A, kategori selain pemetaan di bawah sebagai tipe sendiri.
+Out of scope: moving the existing library to the new structure, types for site A, categories other than the mapping below as their own type.
 
-## 2. Temuan data (dicek langsung ke situs)
+## 2. Data findings (checked directly against the sites)
 
-| Situs | Sumber kategori | Contoh |
+| Site | Category source | Example |
 |---|---|---|
-| Site B1 | halaman galeri memuat tautan kategori bergaya `href='/category/<slug>/'` | `manga` |
-| Site B2 | sama seperti B1 | `western`, `doujinshi` |
-| Site C | endpoint detail `GET /api/comics/<slug>` mengembalikan `category: { name, slug }`; endpoint `/images` yang dipakai sekarang tidak memuatnya | `porn-comic`, `manga` |
+| Site B1 | the gallery page contains category links styled like `href='/category/<slug>/'` | `manga` |
+| Site B2 | same as B1 | `western`, `doujinshi` |
+| Site C | the detail endpoint `GET /api/comics/<slug>` returns `category: { name, slug }`; the `/images` endpoint currently used does not include it | `porn-comic`, `manga` |
 
-Daftar kategori yang terlihat: doujinshi, manga, non-h, western, imageset, artistcg, misc, dan satu kategori komik khusus site C. Doujinshi adalah kategori terbesar di site C.
+Categories seen: doujinshi, manga, non-h, western, imageset, artistcg, misc, and one comic category specific to site C. Doujinshi is the largest category on site C.
 
-## 3. Model tipe
+## 3. Type model
 
-`ContentType = 'comic' | 'manga' | 'other'`. Label UI dan nama folder: `Comic`, `Manga`, `Other`.
+`ContentType = 'comic' | 'manga' | 'other'`. UI label and folder name: `Comic`, `Manga`, `Other`.
 
-Pemetaan slug kategori (huruf kecil) → tipe, satu fungsi `mapCategoryToType(slug)` di `core/providers/contentType.js`:
+Category slug (lowercase) → type mapping, a single function `mapCategoryToType(slug)` in `core/providers/contentType.js`:
 
-| Slug | Tipe |
+| Slug | Type |
 |---|---|
 | `western`, `porn-comic`, `comic` | `comic` |
 | `manga`, `doujinshi` | `manga` |
-| slug lain yang tidak kosong (non-h, imageset, artistcg, misc, dst.) | `other` |
-| kosong / tidak ditemukan | `null` (tanpa tipe) |
+| any other non-empty slug (non-h, imageset, artistcg, misc, etc.) | `other` |
+| empty / not found | `null` (no type) |
 
-Provider mengisi `meta.category` (slug mentah) dan `meta.contentType` (hasil pemetaan). Site A tidak mengisi keduanya.
+The provider fills `meta.category` (raw slug) and `meta.contentType` (mapped result). Site A fills neither.
 
-## 4. Pengambilan kategori
+## 4. Fetching the category
 
-- **Site B1/B2 (`boards.js`)**: baca slug kategori dari tautan `href='/category/<slug>/'` pada halaman galeri (pola kutip tunggal yang sama dengan taksonomi lain). Bila ada beberapa, ambil yang pertama bukan duplikat; bila tidak ada → `null`.
-- **Site C (`slugapi.js`)**: setelah `/images` berhasil, ambil `GET /api/comics/<slug>` dan baca `category.slug`. Request ini memakai transport yang sama (curl). **Kegagalan request kategori tidak boleh menggagalkan download**: catat peringatan di activity log dan lanjut dengan `null`.
-- Validasi: slug kategori dari remote hanya diterima bila cocok `^[a-z0-9][a-z0-9-]{0,40}$`; selain itu dianggap `null` (tidak pernah dipakai mentah sebagai nama folder — folder memakai label tipe tetap).
+- **Site B1/B2 (`boards.js`)**: read the category slug from the `href='/category/<slug>/'` link on the gallery page (the same single-quote pattern as other taxonomies). If there are several, take the first non-duplicate; if none → `null`.
+- **Site C (`slugapi.js`)**: after `/images` succeeds, fetch `GET /api/comics/<slug>` and read `category.slug`. This request uses the same transport (curl). **A failed category request must not fail the download**: log a warning in the activity log and continue with `null`.
+- Validation: a category slug from the remote is accepted only if it matches `^[a-z0-9][a-z0-9-]{0,40}$`; otherwise it is treated as `null` (never used raw as a folder name — the folder uses the fixed type label).
 
-## 5. Penyimpanan folder
+## 5. Folder storage
 
-Di `core/engine.js` `processGallery`, untuk provider non-default dengan `contentType` tidak `null`:
+In `core/engine.js` `processGallery`, for non-default providers with a non-`null` `contentType`:
 
-`parentDir = <base>/<TypeLabel>/<Language>/<Author>` (sebelumnya `<base>/<Language>/<Author>`). Bila `contentType` `null`, atau provider default, layout lama dipakai.
+`parentDir = <base>/<TypeLabel>/<Language>/<Author>` (previously `<base>/<Language>/<Author>`). If `contentType` is `null`, or the provider is the default, the old layout is used.
 
-Dampak yang sudah dicek:
-- `deriveLineageFromPath` (artist = parent, language = grandparent) tetap benar karena level tipe berada di atas bahasa.
-- `rescanLibrary` memakai `MAX_DEPTH = 6` dan marker; kedalaman baru (`base/Tipe/Bahasa/Author/Judul` = 4) masih di dalam batas.
-- `findExistingOnDisk` (fallback saat 429) saat ini menelusuri dua level (`Bahasa/Author`); diperluas agar juga menelusuri `Tipe/Bahasa/Author`.
-- Galeri yang sebagian sudah terunduh di layout lama akan mulai ulang di layout baru (halaman diunduh ulang); ini diterima dan dicatat di dokumentasi.
+Impact checked:
+- `deriveLineageFromPath` (artist = parent, language = grandparent) remains correct because the type level sits above language.
+- `rescanLibrary` uses `MAX_DEPTH = 6` and markers; the new depth (`base/Type/Language/Author/Title` = 4) is still within the limit.
+- `findExistingOnDisk` (fallback on 429) currently walks two levels (`Language/Author`); it is extended to also walk `Type/Language/Author`.
+- A gallery that was partly downloaded in the old layout will restart in the new layout (pages are downloaded again); this is accepted and noted in the documentation.
 
-## 6. Database (migrasi v4, kedua adapter)
+## 6. Database (migration v4, both adapters)
 
-- `ALTER TABLE queue ADD COLUMN category TEXT` (nullable) — menyimpan `contentType` hasil pemetaan (`comic`/`manga`/`other`), bukan slug mentah.
-- SQLite: tambah kolom hanya bila belum ada (cek `PRAGMA table_info`); PostgreSQL: `ADD COLUMN IF NOT EXISTS`. Idempoten; `CURRENT_APP_SCHEMA_VERSION` naik ke 4; export/import tetap kompatibel (kolom baru opsional).
-- `library`: `contentType` dan `category` disimpan di JSON `meta` yang sudah ada (tanpa kolom baru).
-- Fungsi `updateQueueItem` menerima field `category`; `formatQueueRow` mengeluarkan `category` (string atau `null`). Event SSE `item` otomatis membawanya karena memakai `formatQueueRow`.
+- `ALTER TABLE queue ADD COLUMN category TEXT` (nullable) — stores the mapped `contentType` (`comic`/`manga`/`other`), not the raw slug.
+- SQLite: add the column only if it does not exist (check `PRAGMA table_info`); PostgreSQL: `ADD COLUMN IF NOT EXISTS`. Idempotent; `CURRENT_APP_SCHEMA_VERSION` goes up to 4; export/import stays compatible (the new column is optional).
+- `library`: `contentType` and `category` are stored in the existing `meta` JSON (no new column).
+- The `updateQueueItem` function accepts a `category` field; `formatQueueRow` emits `category` (string or `null`). The SSE `item` event carries it automatically because it uses `formatQueueRow`.
 
-## 7. API (didokumentasikan di `docs/API.md` sebelum implementasi)
+## 7. API (documented in `docs/API.md` before implementation)
 
-- `QueueItem.category`: `"comic" | "manga" | "other" | null`. `null` untuk site A dan untuk item yang metadatanya belum diambil.
-- `LibraryItem.category`: nilai yang sama, dari `meta`.
-- Tidak ada endpoint baru.
+- `QueueItem.category`: `"comic" | "manga" | "other" | null`. `null` for site A and for items whose metadata has not been fetched yet.
+- `LibraryItem.category`: the same values, from `meta`.
+- No new endpoints.
 
 ## 8. UI
 
-- Badge tipe (`Comic` / `Manga` / `Other`) di baris list, di samping badge sumber; item tanpa tipe tidak punya badge.
-- Sidebar: bagian **"Type"** berisi chip filter `Comic`/`Manga`/`Other` dengan hitungan, tampil bila minimal 1 tipe hadir (sama seperti bagian "Source"). Filter tipe digabung (AND) dengan filter status, sumber, batch, dan pencarian.
-- Library Manager: badge tipe dan dropdown filter tipe di samping filter sumber.
-- Helper murni di `webui/src/lib/sources.js` (atau `contentType.js` di webui) dengan tes `node:test`.
-- Item yang masih menunggu belum punya tipe sampai metadatanya diambil saat gilirannya tiba (batasan yang diterima).
+- Type badge (`Comic` / `Manga` / `Other`) in the list row, next to the source badge; items without a type have no badge.
+- Sidebar: a **"Type"** section with `Comic`/`Manga`/`Other` filter chips with counts, shown when at least 1 type is present (same as the "Source" section). The type filter is combined (AND) with the status, source, batch, and search filters.
+- Library Manager: type badge and a type filter dropdown next to the source filter.
+- Pure helper in `webui/src/lib/sources.js` (or `contentType.js` in webui) with `node:test` tests.
+- A pending item has no type until its metadata is fetched when its turn comes (accepted limitation).
 
-## 9. Penanganan error
+## 9. Error handling
 
-| Kasus | Perilaku |
+| Case | Behavior |
 |---|---|
-| Kategori tidak ditemukan / tidak valid | `contentType = null`, layout folder lama, tidak ada error |
-| Request kategori site C gagal | peringatan di activity log, `contentType = null`, download tetap lanjut |
-| Slug kategori tidak dikenal | tipe `other` |
+| Category not found / invalid | `contentType = null`, old folder layout, no error |
+| Site C category request fails | warning in the activity log, `contentType = null`, download continues |
+| Unknown category slug | type `other` |
 
-## 10. Pengujian
+## 10. Testing
 
-1. `mapCategoryToType`: tabel pemetaan lengkap, huruf besar, slug kosong, slug tidak valid.
-2. Parser kategori boards (fixture HTML) dan site C (fixture JSON; kegagalan request kategori tidak menggagalkan `fetchMeta`).
-3. Engine: galeri uji dengan kategori `manga` dan `western` masuk ke `Manga/...` dan `Comic/...`; tanpa kategori memakai layout lama; site A tidak berubah; `findExistingOnDisk` menemukan di layout dengan tipe.
-4. Migrasi v4: DB v3 berisi data → v4 tanpa kehilangan baris, idempoten, kolom `category` nullable; `formatQueueRow` mengeluarkan `category`.
-5. `rescanLibrary` mengenali marker di `Tipe/Bahasa/Author/Judul`.
-6. Helper UI + build web UI; `npm test` hijau.
+1. `mapCategoryToType`: complete mapping table, uppercase, empty slug, invalid slug.
+2. Boards category parser (HTML fixture) and site C (JSON fixture; a failed category request does not fail `fetchMeta`).
+3. Engine: test galleries with category `manga` and `western` land in `Manga/...` and `Comic/...`; without a category the old layout is used; site A is unchanged; `findExistingOnDisk` finds items in the layout with a type.
+4. Migration v4: a v3 DB with data → v4 without losing rows, idempotent, `category` column nullable; `formatQueueRow` emits `category`.
+5. `rescanLibrary` recognizes markers in `Type/Language/Author/Title`.
+6. UI helper + web UI build; `npm test` green.
 
-## 11. Keputusan yang diambil
+## 11. Decisions made
 
-- Doujinshi dipetakan ke `manga` (keputusan user).
-- Site A tetap tanpa tipe dan folder lama (usulan, tidak ditolak user).
-- Library yang sudah ada tidak dipindah otomatis.
+- Doujinshi is mapped to `manga` (user decision).
+- Site A stays without a type and in the old folder (proposal, not rejected by the user).
+- The existing library is not moved automatically.

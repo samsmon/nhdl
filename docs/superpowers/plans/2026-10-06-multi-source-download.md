@@ -2,94 +2,94 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Antrean NHDL bisa menerima dan mendownload galeri dari tiga situs tambahan (dua situs ber-ID angka dengan platform sama, satu situs ber-ID slug dengan API JSON), dan list menampilkan kategori sumber tiap item.
+**Goal:** The NHDL queue can accept and download galleries from three additional sites (two numeric-ID sites on the same platform, one slug-ID site with a JSON API), and the list shows the source category of each item.
 
-**Architecture:** Lapisan provider kecil (`core/providers/`) mengenali URL/ID, membangun kunci berprefix (`xxx:539224`, `com:<slug>`), dan mengambil metadata + daftar URL gambar per halaman. `gallery_id` di DB menjadi TEXT (migrasi v3, kedua adapter); ID lama tanpa prefix tetap berarti situs default, sehingga data lama dan API publik untuk situs default tidak berubah (`galleryId` tetap number untuk situs default, string untuk situs lain). Engine memakai provider hanya untuk metadata dan URL gambar; alur lain (library, retry, kompres, SSE) dipakai bersama.
+**Architecture:** A small provider layer (`core/providers/`) recognizes URLs/IDs, builds prefixed keys (`xxx:539224`, `com:<slug>`), and fetches metadata + the image URL list per page. `gallery_id` in the DB becomes TEXT (migration v3, both adapters); old IDs without a prefix still mean the default site, so old data and the public API for the default site are unchanged (`galleryId` stays a number for the default site, a string for other sites). The engine uses the provider only for metadata and image URLs; the other flows (library, retry, compression, SSE) are shared.
 
-**Tech Stack:** Node >= 22.13 (`node:test`, `node:sqlite`), `pg`, Svelte 5 + Vite (webui). Tanpa dependensi baru.
+**Tech Stack:** Node >= 22.13 (`node:test`, `node:sqlite`), `pg`, Svelte 5 + Vite (webui). No new dependencies.
 
 **Spec:** `docs/superpowers/specs/2026-10-06-multi-source-download-design.md`
 
 ## Global Constraints
 
-- Tanpa dependensi runtime baru; hanya `pg` yang sudah ada.
-- Commit **atas nama user** (`git config user.name/email`), tanpa trailer `Co-Authored-By` atau atribusi AI di pesan commit. Jalankan `npm test` sebelum commit; jangan commit kalau gagal.
-- Kerja di branch `rework`.
-- Setiap endpoint/field/event baru ditulis di `docs/API.md` **dulu**, baru diimplementasikan (Task 1).
-- Di dokumen (`docs/*`, termasuk dokumen ini) situs ditulis generik: **site A** (default), **site B1/B2** (ID angka), **site C** (slug). Nama asli, domain, dan prefix hanya ada di kode dan test.
-- State tetap di DB lewat `core/db.js`; migrasi skema di **kedua** adapter (`core/db/sqlite.js`, `core/db/postgres.js`); UI menerima perubahan lewat SSE, bukan polling.
-- Kode tidak boleh menembus blokir DNS/ISP (tidak ada `--resolve`/IP pin untuk provider baru). Provider baru memakai DNS sistem biasa.
-- Prefix kunci (konstanta di kode): site B1 = `xxx`, site B2 = `rox`, site C = `com`.
-- Kunci kanonik: angka polos `^[1-9]\d*$` (site A) atau `<prefix>:<isi>`; isi site B = angka > 0, isi site C = slug `^[a-z0-9][a-z0-9-]*$` (huruf kecil).
-- ID di respons API/SSE: **number** bila kunci angka polos, **string** bila berprefix (helper `toPublicId`).
-- Jangan commit isi `samples/`.
+- No new runtime dependencies; only the existing `pg`.
+- Commit **under the user's name** (`git config user.name/email`), without a `Co-Authored-By` trailer or AI attribution in the commit message. Run `npm test` before committing; do not commit if it fails.
+- Work on the `rework` branch.
+- Every new endpoint/field/event is written in `docs/API.md` **first**, then implemented (Task 1).
+- In documents (`docs/*`, including this one) sites are written generically: **site A** (default), **site B1/B2** (numeric ID), **site C** (slug). Real names, domains, and prefixes exist only in code and tests.
+- State stays in the DB through `core/db.js`; schema migrations in **both** adapters (`core/db/sqlite.js`, `core/db/postgres.js`); the UI receives changes via SSE, not polling.
+- The code must not bypass DNS/ISP blocking (no `--resolve`/IP pin for new providers). New providers use the normal system DNS.
+- Key prefixes (constants in code): site B1 = `xxx`, site B2 = `rox`, site C = `com`.
+- Canonical key: plain number `^[1-9]\d*$` (site A) or `<prefix>:<content>`; site B content = number > 0, site C content = slug `^[a-z0-9][a-z0-9-]*$` (lowercase).
+- ID in API/SSE responses: **number** if the key is a plain number, **string** if prefixed (helper `toPublicId`).
+- Do not commit the contents of `samples/`.
 
 ## Review Focus
 
-1. Satu baris URL site B/C yang juga memuat angka 5–7 digit di slug/judul tidak boleh salah dikenali sebagai ID site A (regex fallback lama `\b\d{5,7}\b`): URL `.../g/539224/` harus jadi kunci `xxx:539224`, bukan `539224`.
-2. Kunci berprefix mengandung `:` yang tidak valid sebagai nama folder di Windows: nama folder fallback dan marker tidak boleh memakai kunci mentah.
-3. Semua tempat yang dulu membandingkan `Number(gallery_id)` (reorder prioritas, import replace, bulk pause/delete) tidak boleh menghasilkan `NaN` untuk kunci berprefix.
-4. Halaman yang diumumkan situs tetapi 404 pada semua ekstensi kandidat harus berakhir sebagai retry/error terukur, bukan loop tak berujung atau file HTML tersimpan sebagai gambar.
-5. Respons HTML halaman blokir/tantangan (bukan galeri) harus jadi error jelas, bukan metadata kosong.
-6. Migrasi v3 harus idempoten pada DB yang sudah v3 dan tidak menghilangkan baris/urutan antrean (`id`, `priority`, `created_at`) pada DB v2 berisi ID angka.
-7. Rescan library harus mengenali marker `.nhdl-id` berisi kunci berprefix, dan tetap mengenali marker angka lama.
+1. A site B/C URL line that also contains a 5–7 digit number in the slug/title must not be mistaken for a site A ID (old fallback regex `\b\d{5,7}\b`): the URL `.../g/539224/` must become the key `xxx:539224`, not `539224`.
+2. A prefixed key contains `:`, which is invalid in a folder name on Windows: the fallback folder name and the marker must not use the raw key.
+3. Every place that used to compare `Number(gallery_id)` (priority reorder, import replace, bulk pause/delete) must not produce `NaN` for prefixed keys.
+4. A page announced by the site but 404 on all candidate extensions must end as a bounded retry/error, not an endless loop or an HTML file saved as an image.
+5. A block/challenge HTML page response (not a gallery) must become a clear error, not empty metadata.
+6. Migration v3 must be idempotent on a DB that is already v3 and must not lose queue rows/order (`id`, `priority`, `created_at`) on a v2 DB containing numeric IDs.
+7. Library rescan must recognize `.nhdl-id` markers containing prefixed keys, and still recognize old numeric markers.
 
 ---
 
 ## File Structure
 
-| File | Tanggung jawab |
+| File | Responsibility |
 |---|---|
-| `core/providers/index.js` (baru) | Registry provider, `resolveInput`, `canonicalKey`, `providerForKey`, `sourceOf`, `toPublicId`, `listSources`, `registerProvider` |
-| `core/providers/default.js` (baru) | Definisi site A (pengenal URL/ID saja; metadata tetap via `engine.fetchMetadata`) |
-| `core/providers/boards.js` (baru) | Pabrik provider site B1/B2: parser HTML + URL gambar |
-| `core/providers/slugapi.js` (baru) | Provider site C: API JSON `/api/comics/<slug>/images` |
-| `core/providers/http.js` (baru) | `fetchText`, `downloadToFile` (http/https, redirect, `.part`, tanpa IP pin) |
-| `core/db/listParser.js` (baru) | `parseListText` bersama untuk kedua adapter |
-| `core/db/common.js` | `normalizeGalleryId`/`isValidGalleryId` baru, `toPublicId`, `formatQueueRow` + `source` |
-| `core/db/sqlite.js`, `core/db/postgres.js` | Migrasi v3, penggantian `Number(gallery_id)`, `parseListText` bersama |
-| `core/engine.js` | Stop-flag berbasis string, jalur provider di `processGallery`, `downloadProviderPage` |
-| `core/tracker.js` | Rescan marker memakai `canonicalKey` |
-| `server/index.js` | `source` di `/api/library`, `sources` di `/api/config`, `activeGalleryId` string |
-| `webui/src/lib/sources.js` (baru) | Helper murni sumber (badge, filter, hitung) |
-| `webui/src/lib/stores/app.svelte.js`, `QueueItem.svelte`, `SidebarFilter.svelte`, `LibraryModal.svelte` | Badge + filter sumber |
-| `test/providers.test.js`, `test/providerFetch.test.js`, `test/multiSource.db.test.js`, `test/multiSource.engine.test.js`, `test/webuiSources.test.js` (baru) | Tes |
+| `core/providers/index.js` (new) | Provider registry, `resolveInput`, `canonicalKey`, `providerForKey`, `sourceOf`, `toPublicId`, `listSources`, `registerProvider` |
+| `core/providers/default.js` (new) | Site A definition (URL/ID recognizer only; metadata still via `engine.fetchMetadata`) |
+| `core/providers/boards.js` (new) | Site B1/B2 provider factory: HTML parser + image URLs |
+| `core/providers/slugapi.js` (new) | Site C provider: JSON API `/api/comics/<slug>/images` |
+| `core/providers/http.js` (new) | `fetchText`, `downloadToFile` (http/https, redirect, `.part`, no IP pin) |
+| `core/db/listParser.js` (new) | Shared `parseListText` for both adapters |
+| `core/db/common.js` | New `normalizeGalleryId`/`isValidGalleryId`, `toPublicId`, `formatQueueRow` + `source` |
+| `core/db/sqlite.js`, `core/db/postgres.js` | Migration v3, replacement of `Number(gallery_id)`, shared `parseListText` |
+| `core/engine.js` | String-based stop flags, provider path in `processGallery`, `downloadProviderPage` |
+| `core/tracker.js` | Marker rescan uses `canonicalKey` |
+| `server/index.js` | `source` in `/api/library`, `sources` in `/api/config`, string `activeGalleryId` |
+| `webui/src/lib/sources.js` (new) | Pure source helpers (badge, filter, count) |
+| `webui/src/lib/stores/app.svelte.js`, `QueueItem.svelte`, `SidebarFilter.svelte`, `LibraryModal.svelte` | Source badge + filter |
+| `test/providers.test.js`, `test/providerFetch.test.js`, `test/multiSource.db.test.js`, `test/multiSource.engine.test.js`, `test/webuiSources.test.js` (new) | Tests |
 
 ---
 
-### Task 1: Dokumentasi kontrak API (docs-first)
+### Task 1: API contract documentation (docs-first)
 
 **Files:**
-- Modify: `docs/API.md` (bagian 1 `QueueItem`, 3.2 antrean, 3.3 retry, 3.4 config, 3.5 library)
+- Modify: `docs/API.md` (section 1 `QueueItem`, 3.2 queue, 3.3 retry, 3.4 config, 3.5 library)
 
 **Interfaces:**
-- Produces: kontrak tertulis yang diikuti Task 6–8 (`QueueItem.source`, `LibraryItem.source`, `GET /api/config` → `sources`, format `galleryId`).
+- Produces: the written contract followed by Tasks 6–8 (`QueueItem.source`, `LibraryItem.source`, `GET /api/config` → `sources`, `galleryId` format).
 
-- [ ] **Step 1: Ubah contoh `QueueItem` dan catatannya**
+- [ ] **Step 1: Update the `QueueItem` example and its notes**
 
-Di `docs/API.md` bagian `### QueueItem`, tambahkan field `"source": "default"` setelah `"galleryId": 123456` dan tambahkan bullet berikut sesudah bullet `Nilai status`:
+In `docs/API.md` section `### QueueItem`, add the field `"source": "default"` after `"galleryId": 123456` and add the following bullets after the `Status values` bullet:
 
 ```markdown
-- `galleryId`: `number` untuk galeri site A (kunci angka polos, kompatibel dengan versi sebelumnya), `string` berprefix (`"<prefix>:<isi>"`) untuk site B1/B2/C. Contoh: `123456`, `"b1:539224"`, `"c1:some-slug"`. Nilai ini dipakai apa adanya pada `ids`/`galleryId` di endpoint lain.
-- `source`: id sumber hasil turunan dari prefix `galleryId` (`"default"` bila tanpa prefix). Tidak disimpan di DB. Daftar sumber ada di `GET /api/config` → `sources`.
+- `galleryId`: `number` for site A galleries (plain-number key, compatible with earlier versions), prefixed `string` (`"<prefix>:<content>"`) for site B1/B2/C. Examples: `123456`, `"b1:539224"`, `"c1:some-slug"`. This value is used as is for `ids`/`galleryId` in other endpoints.
+- `source`: source id derived from the `galleryId` prefix (`"default"` if there is no prefix). Not stored in the DB. The source list is in `GET /api/config` → `sources`.
 ```
 
-- [ ] **Step 2: Ubah baris `POST /api/queue`, `/api/queue/import`, pause/resume/delete/priority, `/api/retry`**
+- [ ] **Step 2: Update the rows `POST /api/queue`, `/api/queue/import`, pause/resume/delete/priority, `/api/retry`**
 
-Pada tabel 3.2 dan 3.3 ganti tipe `number[]` menjadi `(number\|string)[]` untuk `ids`, dan `number[]` menjadi `(number\|string)[]` untuk `galleryIds`. Tambahkan ke kolom Keterangan `POST /api/queue` dan `/api/queue/import`:
+In tables 3.2 and 3.3 change the type `number[]` to `(number\|string)[]` for `ids`, and `number[]` to `(number\|string)[]` for `galleryIds`. Add to the Notes column of `POST /api/queue` and `/api/queue/import`:
 
 ```markdown
-Setiap baris boleh berupa URL galeri dari site A, B1, B2, atau C, ID polos site A, atau kunci berprefix. Baris yang tidak dikenali dilewati dan dihitung di field `ignored` pada respons.
+Each line may be a gallery URL from site A, B1, B2, or C, a plain site A ID, or a prefixed key. Unrecognized lines are skipped and counted in the `ignored` field of the response.
 ```
 
-Dan ubah respons keduanya menjadi `{"success":true, "added": number, "updated": number, "duplicates": number, "ignored": number, "galleryIds": (number|string)[], "total": number}`.
+And change both responses to `{"success":true, "added": number, "updated": number, "duplicates": number, "ignored": number, "galleryIds": (number|string)[], "total": number}`.
 
-- [ ] **Step 3: Ubah `GET /api/config` dan library**
+- [ ] **Step 3: Update `GET /api/config` and library**
 
-Di tabel 3.4 baris `GET /api/config` tambahkan `"sources": {"id": string, "label": string}[]` ke respons, dengan keterangan: `Daftar sumber yang dikenal server (urutan tampilan UI), dipakai untuk label badge dan filter kategori.` Di tabel 3.5 baris `GET /api/library` ubah respons menjadi `{"items": LibraryItem[], "total": number}` dan tambahkan di bawah tabel:
+In table 3.4 on the `GET /api/config` row add `"sources": {"id": string, "label": string}[]` to the response, with the note: `List of sources known to the server (UI display order), used for badge labels and category filters.` In table 3.5 on the `GET /api/library` row change the response to `{"items": LibraryItem[], "total": number}` and add below the table:
 
 ```markdown
-`LibraryItem` memiliki field tambahan `source` (sama seperti `QueueItem.source`).
+`LibraryItem` has an additional field `source` (same as `QueueItem.source`).
 ```
 
 - [ ] **Step 4: Commit**
@@ -101,27 +101,27 @@ git commit -m "docs(api): document multi-source galleryId format, source field, 
 
 ---
 
-### Task 2: Registry provider dan kunci kanonik
+### Task 2: Provider registry and canonical key
 
 **Files:**
-- Create: `core/providers/default.js`, `core/providers/boards.js` (hanya bagian pengenal URL/ID dulu), `core/providers/slugapi.js` (idem), `core/providers/index.js`
+- Create: `core/providers/default.js`, `core/providers/boards.js` (URL/ID recognizer part only for now), `core/providers/slugapi.js` (same), `core/providers/index.js`
 - Test: `test/providers.test.js`
 
 **Interfaces:**
 - Produces (`core/providers/index.js`):
-  - `resolveInput(text: string) -> { provider, key: string, url: string } | null` — `text` adalah satu URL, ID polos, atau kunci berprefix.
+  - `resolveInput(text: string) -> { provider, key: string, url: string } | null` — `text` is a single URL, plain ID, or prefixed key.
   - `canonicalKey(input: string|number) -> string | null`
-  - `providerForKey(key: string|number) -> provider` (default bila tanpa prefix; melempar `Error` bila prefix tak dikenal)
-  - `sourceOf(key) -> string` (id provider; `'default'` bila tanpa prefix atau prefix tak dikenal)
+  - `providerForKey(key: string|number) -> provider` (default if no prefix; throws `Error` if the prefix is unknown)
+  - `sourceOf(key) -> string` (provider id; `'default'` if no prefix or unknown prefix)
   - `toPublicId(key) -> number | string`
   - `listSources() -> { id: string, label: string }[]`
-  - `registerProvider(provider) -> void` (dipakai tes dan perluasan)
-  - `PROVIDERS: provider[]` (array hidup)
-  - Bentuk provider: `{ id, label, prefix, isDefault, urlPatterns: RegExp[], parseBody(body) -> string|null, makeKey(body) -> string|null, buildUrl(key) -> string }` (+ `fetchMeta`, `imageHeaders` di Task 5).
+  - `registerProvider(provider) -> void` (used by tests and extension)
+  - `PROVIDERS: provider[]` (live array)
+  - Provider shape: `{ id, label, prefix, isDefault, urlPatterns: RegExp[], parseBody(body) -> string|null, makeKey(body) -> string|null, buildUrl(key) -> string }` (+ `fetchMeta`, `imageHeaders` in Task 5).
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/providers.test.js`:
+Create `test/providers.test.js`:
 
 ```js
 const test = require('node:test');
@@ -195,14 +195,14 @@ test('listSources lists every provider with a label, default first', () => {
 });
 ```
 
-- [ ] **Step 2: Jalankan tes, pastikan gagal**
+- [ ] **Step 2: Run the test, confirm it fails**
 
 Run: `node --test test/providers.test.js`
 Expected: FAIL (`Cannot find module '../core/providers'`).
 
-- [ ] **Step 3: Implementasi provider default**
+- [ ] **Step 3: Implement the default provider**
 
-Buat `core/providers/default.js`:
+Create `core/providers/default.js`:
 
 ```js
 const POSITIVE_INT = /^\d+$/;
@@ -226,9 +226,9 @@ module.exports = {
 };
 ```
 
-- [ ] **Step 4: Implementasi pabrik provider site B (bagian pengenal)**
+- [ ] **Step 4: Implement the site B provider factory (recognizer part)**
 
-Buat `core/providers/boards.js`:
+Create `core/providers/boards.js`:
 
 ```js
 function createBoardsProvider(cfg) {
@@ -264,9 +264,9 @@ function createBoardsProvider(cfg) {
 module.exports = { createBoardsProvider };
 ```
 
-- [ ] **Step 5: Implementasi provider site C (bagian pengenal)**
+- [ ] **Step 5: Implement the site C provider (recognizer part)**
 
-Buat `core/providers/slugapi.js`:
+Create `core/providers/slugapi.js`:
 
 ```js
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -302,9 +302,9 @@ function createSlugApiProvider(cfg) {
 module.exports = { createSlugApiProvider };
 ```
 
-- [ ] **Step 6: Implementasi registry**
+- [ ] **Step 6: Implement the registry**
 
-Buat `core/providers/index.js`:
+Create `core/providers/index.js`:
 
 ```js
 const defaultProvider = require('./default');
@@ -420,10 +420,10 @@ module.exports = {
 };
 ```
 
-- [ ] **Step 7: Jalankan tes, pastikan lulus**
+- [ ] **Step 7: Run the test, confirm it passes**
 
 Run: `node --test test/providers.test.js`
-Expected: PASS (semua test hijau). Catatan: `'0468614'` menghasilkan kunci `468614` karena `Number('0468614')` = 468614; `'0'` dan `'-5'` ditolak.
+Expected: PASS (all tests green). Note: `'0468614'` produces the key `468614` because `Number('0468614')` = 468614; `'0'` and `'-5'` are rejected.
 
 - [ ] **Step 8: Commit**
 
@@ -434,28 +434,28 @@ git commit -m "feat(providers): add provider registry and canonical gallery keys
 
 ---
 
-### Task 3: ID helper di lapisan DB, parser list bersama, field `source`
+### Task 3: ID helper in the DB layer, shared list parser, `source` field
 
 **Files:**
 - Create: `core/db/listParser.js`
 - Modify: `core/db/common.js:1-30,47-51` (`normalizeGalleryId`, `isValidGalleryId`, `formatQueueRow`), re-export `toPublicId`
-- Modify: `core/db/sqlite.js:637-682`, `core/db/postgres.js:694-740` (hapus `parseListText` lokal, pakai bersama)
-- Test: `test/multiSource.db.test.js` (dibuat di sini, diperluas di Task 4)
+- Modify: `core/db/sqlite.js:637-682`, `core/db/postgres.js:694-740` (remove the local `parseListText`, use the shared one)
+- Test: `test/multiSource.db.test.js` (created here, extended in Task 4)
 
 **Interfaces:**
 - Consumes: Task 2 (`canonicalKey`, `resolveInput`, `toPublicId`, `sourceOf`, `defaultProvider`).
 - Produces:
-  - `common.normalizeGalleryId(v) -> string` (kunci kanonik; melempar `Invalid gallery_id: <v>` bila tidak valid)
+  - `common.normalizeGalleryId(v) -> string` (canonical key; throws `Invalid gallery_id: <v>` if invalid)
   - `common.isValidGalleryId(v) -> boolean`
   - `common.toPublicId` (re-export)
-  - `formatQueueRow(r)` menambah `source` dan mengeluarkan `galleryId: toPublicId(r.gallery_id)`
+  - `formatQueueRow(r)` adds `source` and emits `galleryId: toPublicId(r.gallery_id)`
   - `listParser.parseListText(text, defaultFormat) -> { galleryId: number|string, url: string, title: string|null, batch: number, format: string|null }[]`
   - `listParser.parseListTextDetailed(text, defaultFormat) -> { items: (same shape as above)[], ignored: number }`
-  - `common.publicRow(row) -> row` dengan `gallery_id` lewat `toPublicId` (dipakai Task 4 untuk baris mentah DB)
+  - `common.publicRow(row) -> row` with `gallery_id` passed through `toPublicId` (used by Task 4 for raw DB rows)
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/multiSource.db.test.js`:
+Create `test/multiSource.db.test.js`:
 
 ```js
 const test = require('node:test');
@@ -517,14 +517,14 @@ test('parseListText: legacy loose formats still work (id with trailing text, id 
 });
 ```
 
-- [ ] **Step 2: Jalankan tes, pastikan gagal**
+- [ ] **Step 2: Run the test, confirm it fails**
 
 Run: `node --test test/multiSource.db.test.js`
 Expected: FAIL (`Cannot find module '../core/db/listParser'`).
 
-- [ ] **Step 3: Buat parser list bersama**
+- [ ] **Step 3: Create the shared list parser**
 
-Buat `core/db/listParser.js`:
+Create `core/db/listParser.js`:
 
 ```js
 const { resolveInput, defaultProvider, toPublicId } = require('../providers');
@@ -601,9 +601,9 @@ function parseListText(text, defaultFormat = null) {
 module.exports = { parseListText, parseListTextDetailed };
 ```
 
-- [ ] **Step 4: Ganti `normalizeGalleryId`, `isValidGalleryId`, `formatQueueRow` di `core/db/common.js`**
+- [ ] **Step 4: Replace `normalizeGalleryId`, `isValidGalleryId`, `formatQueueRow` in `core/db/common.js`**
 
-Ganti bagian atas file (fungsi `normalizeGalleryId` dan `formatQueueRow`) dengan:
+Replace the top of the file (the `normalizeGalleryId` and `formatQueueRow` functions) with:
 
 ```js
 const { canonicalKey, toPublicId, sourceOf } = require('../providers');
@@ -641,7 +641,7 @@ function formatQueueRow(r) {
 }
 ```
 
-Ganti `isValidGalleryId` menjadi:
+Replace `isValidGalleryId` with:
 
 ```js
 function isValidGalleryId(rawId) {
@@ -649,7 +649,7 @@ function isValidGalleryId(rawId) {
 }
 ```
 
-Tambahkan fungsi berikut tepat sesudah `formatQueueRow` (dipakai Task 4 agar baris mentah dari DB tetap memberi `gallery_id` number untuk site A, seperti sebelum migrasi):
+Add the following function right after `formatQueueRow` (used by Task 4 so raw rows from the DB still give a number `gallery_id` for site A, as before the migration):
 
 ```js
 function publicRow(row) {
@@ -657,25 +657,25 @@ function publicRow(row) {
 }
 ```
 
-Tambahkan `toPublicId` dan `publicRow` ke `module.exports` di akhir file.
+Add `toPublicId` and `publicRow` to `module.exports` at the end of the file.
 
-- [ ] **Step 5: Pakai parser bersama di kedua adapter**
+- [ ] **Step 5: Use the shared parser in both adapters**
 
-Di `core/db/sqlite.js` hapus fungsi `parseListText` (baris 637–682) dan tambahkan di bagian require atas:
+In `core/db/sqlite.js` remove the `parseListText` function (lines 637–682) and add to the require section at the top:
 
 ```js
 const { parseListText } = require('./listParser');
 ```
 
-Lakukan hal yang sama di `core/db/postgres.js` (hapus fungsi `parseListText` di baris 694–740). Pastikan `parseListText` tetap ada di `module.exports` kedua adapter (nama sama, kini merujuk fungsi impor).
+Do the same in `core/db/postgres.js` (remove the `parseListText` function at lines 694–740). Make sure `parseListText` is still in `module.exports` of both adapters (same name, now referring to the imported function).
 
-- [ ] **Step 6: Jalankan tes baru dan seluruh suite**
+- [ ] **Step 6: Run the new tests and the whole suite**
 
 Run: `node --test test/multiSource.db.test.js`
 Expected: PASS.
 
 Run: `npm test`
-Expected: Suite lama mungkin gagal di tempat yang membandingkan `gallery_id` dari DB (kini string setelah Task 4) — di Task ini DB belum diubah, jadi seluruh suite harus tetap PASS. Jika ada yang gagal, perbaiki sebelum lanjut.
+Expected: The old suite might fail where it compares `gallery_id` from the DB (now a string after Task 4) — in this Task the DB is not changed yet, so the whole suite must still PASS. If anything fails, fix it before continuing.
 
 - [ ] **Step 7: Commit**
 
@@ -686,21 +686,21 @@ git commit -m "feat(db): canonical string gallery keys, shared list parser, and 
 
 ---
 
-### Task 4: Migrasi skema v3 dan adaptasi adapter DB
+### Task 4: Schema migration v3 and DB adapter adaptation
 
 **Files:**
 - Modify: `core/db/common.js:45` (`CURRENT_APP_SCHEMA_VERSION = 3`)
-- Modify: `core/db/sqlite.js` (migrasi, penggantian `Number(...gallery_id)`, `logEvent`, `parseLibraryRow`, ID yang dikembalikan)
-- Modify: `core/db/postgres.js` (migrasi, penggantian serupa, parser tipe)
-- Test: `test/multiSource.db.test.js` (tambahan)
+- Modify: `core/db/sqlite.js` (migration, replacement of `Number(...gallery_id)`, `logEvent`, `parseLibraryRow`, returned IDs)
+- Modify: `core/db/postgres.js` (migration, similar replacements, type parser)
+- Test: `test/multiSource.db.test.js` (additions)
 
 **Interfaces:**
 - Consumes: Task 3 (`normalizeGalleryId`, `toPublicId`, `canonicalKey`).
-- Produces: DB v3 dengan `queue.gallery_id`, `library.gallery_id` TEXT (SQLite: rebuild; PG: `ALTER ... TYPE TEXT`), `events.gallery_id` TEXT di PG. Fungsi adapter menerima ID angka atau berprefix dan mengembalikan ID lewat `toPublicId`.
+- Produces: DB v3 with `queue.gallery_id`, `library.gallery_id` TEXT (SQLite: rebuild; PG: `ALTER ... TYPE TEXT`), `events.gallery_id` TEXT in PG. Adapter functions accept numeric or prefixed IDs and return IDs through `toPublicId`.
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Tambahkan di akhir `test/multiSource.db.test.js` (dan tambahkan `const fs = require('fs'); const os = require('os'); const path = require('path'); process.env.NHDL_LEGACY_CONFIG = ''; const dbMod = require('../core/db');` di bagian atas file, sebelum `const common`):
+Add at the end of `test/multiSource.db.test.js` (and add `const fs = require('fs'); const os = require('os'); const path = require('path'); process.env.NHDL_LEGACY_CONFIG = ''; const dbMod = require('../core/db');` at the top of the file, before `const common`):
 
 ```js
 async function createTempDb() {
@@ -868,14 +868,14 @@ test('migration v3 upgrades a v2 database in place: ids stay, order/priority kep
 });
 ```
 
-- [ ] **Step 2: Jalankan tes, pastikan gagal**
+- [ ] **Step 2: Run the test, confirm it fails**
 
 Run: `node --test test/multiSource.db.test.js`
-Expected: FAIL (versi skema masih 2, `gallery_id` masih INTEGER; kunci berprefix ditolak/`NaN`).
+Expected: FAIL (schema version is still 2, `gallery_id` is still INTEGER; prefixed keys rejected/`NaN`).
 
-- [ ] **Step 3: Tambahkan migrasi v3 di SQLite**
+- [ ] **Step 3: Add migration v3 in SQLite**
 
-Di `core/db/sqlite.js`, tambahkan elemen ke array `MIGRATIONS` (setelah versi 2):
+In `core/db/sqlite.js`, add an element to the `MIGRATIONS` array (after version 2):
 
 ```js
     ,{
@@ -939,15 +939,15 @@ Di `core/db/sqlite.js`, tambahkan elemen ke array `MIGRATIONS` (setelah versi 2)
     }
 ```
 
-(Letakkan koma dengan benar; elemen sebelumnya berakhir `}` lalu `,` di depan elemen baru sudah ditulis di atas.) Catatan: `ALTER TABLE ... RENAME` pada SQLite modern ikut memindahkan indeks bernama lama ke tabel yang di-rename, itulah sebabnya indeks lama di-`DROP` sebelum tabel baru dibuat.
+(Place the comma correctly; the previous element ends with `}` and the `,` before the new element is already written above.) Note: `ALTER TABLE ... RENAME` in modern SQLite also moves indexes named after the old table to the renamed table, which is why the old indexes are `DROP`ped before the new table is created.
 
-- [ ] **Step 4: Naikkan versi skema aplikasi**
+- [ ] **Step 4: Bump the application schema version**
 
-Di `core/db/common.js` ubah `const CURRENT_APP_SCHEMA_VERSION = 2;` menjadi `3`.
+In `core/db/common.js` change `const CURRENT_APP_SCHEMA_VERSION = 2;` to `3`.
 
-- [ ] **Step 5: Tambahkan migrasi v3 di PostgreSQL**
+- [ ] **Step 5: Add migration v3 in PostgreSQL**
 
-Di `core/db/postgres.js`, tambahkan elemen ke `MIGRATIONS` setelah versi 2:
+In `core/db/postgres.js`, add an element to `MIGRATIONS` after version 2:
 
 ```js
     ,{
@@ -962,23 +962,23 @@ Di `core/db/postgres.js`, tambahkan elemen ke `MIGRATIONS` setelah versi 2:
     }
 ```
 
-- [ ] **Step 6: Ganti perbandingan numerik di `core/db/sqlite.js`**
+- [ ] **Step 6: Replace numeric comparisons in `core/db/sqlite.js`**
 
-Terapkan aturan berikut di seluruh `core/db/sqlite.js` (cari dengan `grep -n "Number(.*gallery_id" core/db/sqlite.js`):
+Apply the following rules throughout `core/db/sqlite.js` (find with `grep -n "Number(.*gallery_id" core/db/sqlite.js`):
 
-1. Perbandingan/keanggotaan himpunan: `targetSet.has(Number(X.gallery_id))` → `targetSet.has(String(X.gallery_id))`. Berlaku di `updateQueuePriority` (baris ±497, 513, 516, 524, 527, 537, 545, 567, 577), dan `keepSet.has(Number(r.gallery_id))` di `importListText` → `keepSet.has(String(r.gallery_id))`.
-2. Nilai gallery id lokal yang dipakai sebagai argumen fungsi DB (`const gid = Number(selectedRows[i].gallery_id)` dan sejenisnya) → `const gid = String(...)`.
-3. `importListText`: biarkan `const galleryIds = parsedItems.map(i => i.galleryId);` apa adanya (isinya sudah ID publik, dikembalikan di ringkasan), tetapi ganti `const keepSet = new Set(galleryIds);` menjadi `const keepSet = new Set(galleryIds.map(g => normalizeGalleryId(g)));` agar cocok dengan perbandingan `String(r.gallery_id)`. Tambahkan `ignored` ke ringkasan: ubah impor di bagian atas ke `const { parseListTextDetailed } = require('./listParser');`, ganti `const parsedItems = parseListText(text, defaultFormat);` di `importListText` dengan
+1. Comparison/set membership: `targetSet.has(Number(X.gallery_id))` → `targetSet.has(String(X.gallery_id))`. Applies in `updateQueuePriority` (lines ±497, 513, 516, 524, 527, 537, 545, 567, 577), and `keepSet.has(Number(r.gallery_id))` in `importListText` → `keepSet.has(String(r.gallery_id))`.
+2. Local gallery id values used as DB function arguments (`const gid = Number(selectedRows[i].gallery_id)` and similar) → `const gid = String(...)`.
+3. `importListText`: leave `const galleryIds = parsedItems.map(i => i.galleryId);` as is (it already holds public IDs, returned in the summary), but change `const keepSet = new Set(galleryIds);` to `const keepSet = new Set(galleryIds.map(g => normalizeGalleryId(g)));` so it matches the `String(r.gallery_id)` comparison. Add `ignored` to the summary: change the import at the top to `const { parseListTextDetailed } = require('./listParser');`, replace `const parsedItems = parseListText(text, defaultFormat);` in `importListText` with
 
 ```js
     const { items: parsedItems, ignored } = parseListTextDetailed(text, defaultFormat);
 ```
 
-   dan ubah return akhir menjadi `return { added, updated, duplicates, ignored, galleryIds, total: parsedItems.length };`. (`parseListText` tetap di-export modul adapter lewat `const { parseListText, parseListTextDetailed } = require('./listParser');` — pakai satu baris impor yang memuat keduanya.)
-8. Baris mentah antrean: bungkus hasil `getQueueItem`, `getNextPendingItem`, dan `getQueueItems` dengan `publicRow` dari `./common` (impor `publicRow`), mis. `return publicRow(active.prepare(...).get(id) || null);` dan `return active.prepare(sql).all(...params).map(publicRow);`. Dengan begitu `row.gallery_id` untuk site A tetap number (seperti sebelum migrasi), dan `engine.js` yang memakai `String(row.gallery_id)` tetap benar.
-4. Daftar ID yang dikembalikan ke pemanggil (`stoppingIds`, `resumedIds`, `removedIds` di `deleteQueueBatch`/`clearCompletedQueue`): bungkus dengan `toPublicId(...)` — misalnya `stoppingIds.push(toPublicId(gid));` pada `pauseQueueItems` dan `deleteQueueItems`, `resumedIds.push(toPublicId(gid));`, dan `const removedIds = rows.map(r => toPublicId(r.gallery_id));`. Tambahkan `toPublicId` ke impor dari `./common`.
-5. `parseLibraryRow`: ubah `gallery_id: row.gallery_id,` menjadi `gallery_id: toPublicId(row.gallery_id),` (field `id: String(row.gallery_id)` tetap).
-6. `logEvent`: ganti
+   and change the final return to `return { added, updated, duplicates, ignored, galleryIds, total: parsedItems.length };`. (`parseListText` stays exported by the adapter module through `const { parseListText, parseListTextDetailed } = require('./listParser');` — use a single import line that has both.)
+8. Raw queue rows: wrap the results of `getQueueItem`, `getNextPendingItem`, and `getQueueItems` with `publicRow` from `./common` (import `publicRow`), e.g. `return publicRow(active.prepare(...).get(id) || null);` and `return active.prepare(sql).all(...params).map(publicRow);`. This way `row.gallery_id` for site A stays a number (as before the migration), and `engine.js`, which uses `String(row.gallery_id)`, stays correct.
+4. ID lists returned to callers (`stoppingIds`, `resumedIds`, `removedIds` in `deleteQueueBatch`/`clearCompletedQueue`): wrap with `toPublicId(...)` — for example `stoppingIds.push(toPublicId(gid));` in `pauseQueueItems` and `deleteQueueItems`, `resumedIds.push(toPublicId(gid));`, and `const removedIds = rows.map(r => toPublicId(r.gallery_id));`. Add `toPublicId` to the import from `./common`.
+5. `parseLibraryRow`: change `gallery_id: row.gallery_id,` to `gallery_id: toPublicId(row.gallery_id),` (the `id: String(row.gallery_id)` field stays).
+6. `logEvent`: replace
 
 ```js
     const gid = galleryId !== null && galleryId !== undefined && String(galleryId).trim() !== ''
@@ -986,7 +986,7 @@ Terapkan aturan berikut di seluruh `core/db/sqlite.js` (cari dengan `grep -n "Nu
         : null;
 ```
 
-   dengan
+   with
 
 ```js
     const gid = galleryId !== null && galleryId !== undefined && String(galleryId).trim() !== ''
@@ -994,26 +994,26 @@ Terapkan aturan berikut di seluruh `core/db/sqlite.js` (cari dengan `grep -n "Nu
         : null;
 ```
 
-   dan tambahkan `const { canonicalKey } = require('../providers');` di bagian atas. Untuk kunci angka polos, SQLite mengonversi `'5'` ke INTEGER 5 karena afinitas kolom, jadi perilaku lama terjaga.
-7. Pastikan `getEvents` tetap memakai `normalizeGalleryId(options.galleryId)` (sudah demikian).
+   and add `const { canonicalKey } = require('../providers');` at the top. For plain-number keys, SQLite converts `'5'` to INTEGER 5 because of the column affinity, so the old behavior is preserved.
+7. Make sure `getEvents` still uses `normalizeGalleryId(options.galleryId)` (it already does).
 
-- [ ] **Step 7: Terapkan aturan yang sama di `core/db/postgres.js`**
+- [ ] **Step 7: Apply the same rules in `core/db/postgres.js`**
 
-Gunakan aturan 1–7 di Step 6 pada `core/db/postgres.js` (grep `grep -n "Number(.*gallery_id" core/db/postgres.js`; baris ±555–632, 682, 760, 919, 1065, 1081, 1093, 1102). Perbedaan khusus PG:
+Apply rules 1–7 of Step 6 to `core/db/postgres.js` (grep `grep -n "Number(.*gallery_id" core/db/postgres.js`; lines ±555–632, 682, 760, 919, 1065, 1081, 1093, 1102). PG-specific differences:
 
-- Hapus baris `pg.types.setTypeParser(20, v => parseInt(v, 10));`? **Jangan hapus**: kolom lain (`id BIGSERIAL`, hitungan) masih BIGINT dan baris-baris pemetaan `Number(r.id)` tetap bergantung padanya.
-- Pemetaan baris: `gallery_id: Number(row.gallery_id)` (baris ±919, ±1081, ±1093) → `gallery_id: toPublicId(row.gallery_id)`; `gallery_id: r.gallery_id ? Number(r.gallery_id) : null` (±1065, ±1102) → `gallery_id: r.gallery_id ? toPublicId(r.gallery_id) : null`.
-- `logEvent` di PG (baris ±1020): ganti `parseInt(String(galleryId), 10) || null` dengan `(canonicalKey(galleryId) || null)`; kolom events kini TEXT sehingga nilai dikirim sebagai string.
+- Remove the line `pg.types.setTypeParser(20, v => parseInt(v, 10));`? **Do not remove it**: other columns (`id BIGSERIAL`, counts) are still BIGINT and the `Number(r.id)` mapping lines still depend on it.
+- Row mapping: `gallery_id: Number(row.gallery_id)` (lines ±919, ±1081, ±1093) → `gallery_id: toPublicId(row.gallery_id)`; `gallery_id: r.gallery_id ? Number(r.gallery_id) : null` (±1065, ±1102) → `gallery_id: r.gallery_id ? toPublicId(r.gallery_id) : null`.
+- `logEvent` in PG (line ±1020): replace `parseInt(String(galleryId), 10) || null` with `(canonicalKey(galleryId) || null)`; the events column is now TEXT so the value is sent as a string.
 
-- [ ] **Step 8: Jalankan tes baru**
+- [ ] **Step 8: Run the new tests**
 
 Run: `node --test test/multiSource.db.test.js`
 Expected: PASS.
 
-- [ ] **Step 9: Jalankan seluruh suite dan perbaiki regresi**
+- [ ] **Step 9: Run the whole suite and fix regressions**
 
 Run: `npm test`
-Expected: PASS. Jika ada tes lama yang gagal karena perbandingan tipe, penyebabnya salah satu dari: (a) keluaran fungsi adapter yang belum dibungkus `toPublicId` (perbaiki di adapter, bukan di tes); (b) pemanggil di `core/tracker.js`/`core/engine.js` yang masih memakai `parseInt` (ditangani di Task 6 — jika gagal karena itu, catat dan lanjut ke Task 6 sebelum commit, jangan ubah tes). Suite PostgreSQL (`test/db.test.js` varian PG, bila `DATABASE_URL` diisi) harus dijalankan juga: `DATABASE_URL=<url uji> npm test`.
+Expected: PASS. If an old test fails because of a type comparison, the cause is one of: (a) an adapter function output not yet wrapped with `toPublicId` (fix it in the adapter, not in the test); (b) a caller in `core/tracker.js`/`core/engine.js` that still uses `parseInt` (handled in Task 6 — if it fails because of that, note it and continue to Task 6 before committing, do not change the test). The PostgreSQL suite (`test/db.test.js` PG variant, when `DATABASE_URL` is set) must also be run: `DATABASE_URL=<test url> npm test`.
 
 - [ ] **Step 10: Commit**
 
@@ -1024,26 +1024,26 @@ git commit -m "feat(db): schema v3 with TEXT gallery_id and prefixed-key aware a
 
 ---
 
-### Task 5: Pengambilan metadata dan URL gambar per provider
+### Task 5: Metadata and image URL fetching per provider
 
 **Files:**
 - Create: `core/providers/http.js`
-- Modify: `core/providers/boards.js` (tambah `fetchMeta`, `imageHeaders`), `core/providers/slugapi.js` (idem), `core/providers/default.js` (tambah `imageHeaders`)
+- Modify: `core/providers/boards.js` (add `fetchMeta`, `imageHeaders`), `core/providers/slugapi.js` (same), `core/providers/default.js` (add `imageHeaders`)
 - Test: `test/providerFetch.test.js`
 
 **Interfaces:**
-- Consumes: Task 2 (bentuk provider).
+- Consumes: Task 2 (provider shape).
 - Produces:
-  - `http.fetchText(url: string, headers?: object, timeoutMs?: number) -> Promise<{ status: number, body: string }>` (ikut redirect maks 3x).
-  - `http.downloadToFile(url, destPath, headers?, onProgress?(received, total), timeoutMs?) -> Promise<void>`; menolak dengan `Error` ber-properti `statusCode` bila status bukan 200; menulis ke `<dest>.part` lalu rename.
+  - `http.fetchText(url: string, headers?: object, timeoutMs?: number) -> Promise<{ status: number, body: string }>` (follows redirects, max 3).
+  - `http.downloadToFile(url, destPath, headers?, onProgress?(received, total), timeoutMs?) -> Promise<void>`; rejects with an `Error` with a `statusCode` property if the status is not 200; writes to `<dest>.part` then renames.
   - `provider.imageHeaders() -> { 'User-Agent', Referer }`
-  - `provider.fetchMeta(key, { fetchText }) -> Promise<Meta>` untuk site B dan C, dengan `Meta = { title, numPages, ext, pageExts, langStr, authorStr, extraMeta, pageUrls(n) -> { ext: string, url: string }[] }`.
-  - Error 404: `Error` dengan `permanent = true` dan pesan diawali `404`.
-  - Konstanta `PAGE_EXTS = ['webp', 'jpg', 'png', 'gif']` diekspor dari `boards.js`.
+  - `provider.fetchMeta(key, { fetchText }) -> Promise<Meta>` for site B and C, with `Meta = { title, numPages, ext, pageExts, langStr, authorStr, extraMeta, pageUrls(n) -> { ext: string, url: string }[] }`.
+  - 404 error: `Error` with `permanent = true` and a message starting with `404`.
+  - The constant `PAGE_EXTS = ['webp', 'jpg', 'png', 'gif']` is exported from `boards.js`.
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/providerFetch.test.js`:
+Create `test/providerFetch.test.js`:
 
 ```js
 const test = require('node:test');
@@ -1192,12 +1192,12 @@ test('downloadToFile writes the file, reports progress, rejects non-200 with sta
 });
 ```
 
-- [ ] **Step 2: Jalankan tes, pastikan gagal**
+- [ ] **Step 2: Run the test, confirm it fails**
 
 Run: `node --test test/providerFetch.test.js`
 Expected: FAIL (`Cannot find module '../core/providers/http'`).
 
-- [ ] **Step 3: Implementasi `core/providers/http.js`**
+- [ ] **Step 3: Implement `core/providers/http.js`**
 
 ```js
 const http = require('http');
@@ -1279,17 +1279,17 @@ async function downloadToFile(url, destPath, headers = {}, onProgress = null, ti
 module.exports = { fetchText, downloadToFile, USER_AGENT };
 ```
 
-- [ ] **Step 4: `imageHeaders` untuk provider default**
+- [ ] **Step 4: `imageHeaders` for the default provider**
 
-Di `core/providers/default.js` tambahkan properti ke objek yang diekspor:
+In `core/providers/default.js` add the property to the exported object:
 
 ```js
     imageHeaders: () => ({ Referer: 'https://nhentai.net/' })
 ```
 
-- [ ] **Step 5: Lengkapi `core/providers/boards.js`**
+- [ ] **Step 5: Complete `core/providers/boards.js`**
 
-Ganti seluruh isi file dengan:
+Replace the entire file contents with:
 
 ```js
 const PAGE_EXTS = ['webp', 'jpg', 'png', 'gif'];
@@ -1414,9 +1414,9 @@ function createBoardsProvider(cfg) {
 module.exports = { createBoardsProvider, PAGE_EXTS };
 ```
 
-- [ ] **Step 6: Lengkapi `core/providers/slugapi.js`**
+- [ ] **Step 6: Complete `core/providers/slugapi.js`**
 
-Ganti seluruh isi file dengan:
+Replace the entire file contents with:
 
 ```js
 const SLUG = /^[a-z0-9][a-z0-9-]*$/;
@@ -1505,7 +1505,7 @@ function createSlugApiProvider(cfg) {
 module.exports = { createSlugApiProvider };
 ```
 
-- [ ] **Step 7: Jalankan tes**
+- [ ] **Step 7: Run the tests**
 
 Run: `node --test test/providerFetch.test.js test/providers.test.js`
 Expected: PASS.
@@ -1519,21 +1519,21 @@ git commit -m "feat(providers): fetch metadata and page URLs for the board-style
 
 ---
 
-### Task 6: Integrasi engine, tracker, dan server
+### Task 6: Engine, tracker, and server integration
 
 **Files:**
-- Modify: `core/engine.js` (impor; `stopGallery`/`cancelStopGallery`/`isGalleryStopping`/`isGalleryDeleting`/`clearGalleryStopFlags` baris 88–118; `processGallery` baris 602–976; metode baru `fetchProviderMetadata`, `downloadProviderPage`)
+- Modify: `core/engine.js` (imports; `stopGallery`/`cancelStopGallery`/`isGalleryStopping`/`isGalleryDeleting`/`clearGalleryStopFlags` lines 88–118; `processGallery` lines 602–976; new methods `fetchProviderMetadata`, `downloadProviderPage`)
 - Modify: `core/tracker.js:224-225,275-276` (rescan)
-- Modify: `server/index.js:452-453,514-515` (`activeGalleryId`), `server/index.js:367-383` (`/api/library` + `source`), handler `GET /api/config` (field `sources`), handler `/api/queue` (field `ignored` sudah dari ringkasan `importListText`)
+- Modify: `server/index.js:452-453,514-515` (`activeGalleryId`), `server/index.js:367-383` (`/api/library` + `source`), handler `GET /api/config` (field `sources`), handler `/api/queue` (the `ignored` field already comes from the `importListText` summary)
 - Test: `test/multiSource.engine.test.js`
 
 **Interfaces:**
 - Consumes: Task 2 (`providerForKey`, `registerProvider`, `toPublicId`, `canonicalKey`, `sourceOf`, `listSources`), Task 5 (`fetchText`, `downloadToFile`, `provider.fetchMeta`, `provider.imageHeaders`, `meta.pageUrls`, `PAGE_EXTS`).
-- Produces: `engine.processGallery(key)` bekerja untuk kunci berprefix; `engine.downloadProviderPage(provider, candidates, folderPath, page, onProgress) -> Promise<{ path, ext }>`; `engine.fetchProviderMetadata(provider, key) -> Promise<Meta>`; `safeKeyName(key) -> string` (lokal di `engine.js`: ganti karakter di luar `[A-Za-z0-9._-]` dengan `_`).
+- Produces: `engine.processGallery(key)` works for prefixed keys; `engine.downloadProviderPage(provider, candidates, folderPath, page, onProgress) -> Promise<{ path, ext }>`; `engine.fetchProviderMetadata(provider, key) -> Promise<Meta>`; `safeKeyName(key) -> string` (local to `engine.js`: replaces characters outside `[A-Za-z0-9._-]` with `_`).
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/multiSource.engine.test.js`:
+Create `test/multiSource.engine.test.js`:
 
 ```js
 const test = require('node:test');
@@ -1695,16 +1695,16 @@ test('rescanLibrary recognises prefixed and legacy markers', async () => {
 });
 ```
 
-Catatan untuk implementer: tes memakai opsi `imageBase` pada `createBoardsProvider` agar URL gambar menunjuk server lokal HTTP. Tambahkan dukungan opsi itu di Step 3 (di bawah) — **opsi opsional ini murni agar provider dapat diuji; bila `imageBase` tidak diberikan, perilaku produksi tidak berubah**.
+Note for the implementer: the test uses the `imageBase` option on `createBoardsProvider` so image URLs point to a local HTTP server. Add support for that option in Step 3 (below) — **this optional option exists purely so the provider can be tested; when `imageBase` is not given, production behavior does not change**.
 
-- [ ] **Step 2: Jalankan tes, pastikan gagal**
+- [ ] **Step 2: Run the test, confirm it fails**
 
 Run: `node --test test/multiSource.engine.test.js`
-Expected: FAIL (`engine.downloadProviderPage is not a function` dan sejenisnya).
+Expected: FAIL (`engine.downloadProviderPage is not a function` and similar).
 
-- [ ] **Step 3: Dukungan `imageBase` opsional di provider site B**
+- [ ] **Step 3: Optional `imageBase` support in the site B provider**
 
-Di `core/providers/boards.js`, ubah destrukturisasi `const { id, label, origin, galleryPath, hosts, imageHost } = cfg;` menjadi `const { id, label, origin, galleryPath, hosts, imageHost, imageBase } = cfg;` dan ganti isi `pageUrls(n)` di `parseGallery` dengan:
+In `core/providers/boards.js`, change the destructuring `const { id, label, origin, galleryPath, hosts, imageHost } = cfg;` to `const { id, label, origin, galleryPath, hosts, imageHost, imageBase } = cfg;` and replace the body of `pageUrls(n)` in `parseGallery` with:
 
 ```js
             pageUrls(n) {
@@ -1717,11 +1717,11 @@ Di `core/providers/boards.js`, ubah destrukturisasi `const { id, label, origin, 
             }
 ```
 
-Juga, `buildUrl` memakai `origin` (HTTP lokal di tes) sehingga `fetchMeta` memanggil server uji; tidak ada perubahan lain.
+Also, `buildUrl` uses `origin` (local HTTP in the test) so `fetchMeta` calls the test server; no other changes.
 
-- [ ] **Step 4: Stop-flag berbasis string di `core/engine.js`**
+- [ ] **Step 4: String-based stop flags in `core/engine.js`**
 
-Ganti baris 88–118 (lima metode stop-flag) dengan:
+Replace lines 88–118 (the five stop-flag methods) with:
 
 ```js
     stopGallery(galleryId, options = {}) {
@@ -1753,11 +1753,11 @@ Ganti baris 88–118 (lima metode stop-flag) dengan:
     }
 ```
 
-Di `processGallery` ganti `const gid = parseInt(String(galleryId), 10);` (baris 603) dengan `const gid = String(galleryId);` dan `this.emit('gallery_stopped', { galleryId: gid, ...` (baris ±850) dengan `this.emit('gallery_stopped', { galleryId: toPublicId(gid), ...`.
+In `processGallery` replace `const gid = parseInt(String(galleryId), 10);` (line 603) with `const gid = String(galleryId);` and `this.emit('gallery_stopped', { galleryId: gid, ...` (line ±850) with `this.emit('gallery_stopped', { galleryId: toPublicId(gid), ...`.
 
-- [ ] **Step 5: Impor dan helper di bagian atas `core/engine.js`**
+- [ ] **Step 5: Imports and helpers at the top of `core/engine.js`**
 
-Setelah baris `const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');` tambahkan:
+After the line `const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');` add:
 
 ```js
 const providers = require('./providers');
@@ -1771,9 +1771,9 @@ function safeKeyName(key) {
 }
 ```
 
-- [ ] **Step 6: Metode baru di kelas `DownloaderEngine`**
+- [ ] **Step 6: New methods in the `DownloaderEngine` class**
 
-Tambahkan dua metode tepat sebelum `async tryApiArchiveDownload(...)`:
+Add two methods right before `async tryApiArchiveDownload(...)`:
 
 ```js
     async fetchProviderMetadata(provider, galleryId) {
@@ -1800,9 +1800,9 @@ Tambahkan dua metode tepat sebelum `async tryApiArchiveDownload(...)`:
     }
 ```
 
-- [ ] **Step 7: Metadata lewat provider di `processGallery`**
+- [ ] **Step 7: Metadata through the provider in `processGallery`**
 
-Ganti baris 642 (`const meta = await this.fetchMetadata(galleryId);`) dengan:
+Replace line 642 (`const meta = await this.fetchMetadata(galleryId);`) with:
 
 ```js
             const provider = providers.providerForKey(galleryId);
@@ -1811,7 +1811,7 @@ Ganti baris 642 (`const meta = await this.fetchMetadata(galleryId);`) dengan:
                 : await this.fetchProviderMetadata(provider, galleryId);
 ```
 
-Ganti baris 675 dan 676 (destrukturisasi `meta` dan `extFor`) dengan:
+Replace lines 675 and 676 (the destructuring of `meta` and `extFor`) with:
 
 ```js
             const { title, mediaId, numPages, pageExts, langStr, authorStr, extraMeta } = meta;
@@ -1819,23 +1819,23 @@ Ganti baris 675 dan 676 (destrukturisasi `meta` dan `extFor`) dengan:
             const extFor = (page) => pageExts[page] || ext;
 ```
 
-Ganti baris 679 (`const sanitizedTitle = sanitizeName(title) || galleryId;`) dengan:
+Replace line 679 (`const sanitizedTitle = sanitizeName(title) || galleryId;`) with:
 
 ```js
             const sanitizedTitle = sanitizeName(title) || safeKeyName(galleryId);
 ```
 
-Ganti kondisi API-archive (baris 716) `if (apiKey && (targetFormat === 'cbz' ...` dengan `if (provider.isDefault && apiKey && (targetFormat === 'cbz' || targetFormat === 'zip') && !this.isGalleryStopping(gid)) {` (sisa blok tidak berubah).
+Replace the API-archive condition (line 716) `if (apiKey && (targetFormat === 'cbz' ...` with `if (provider.isDefault && apiKey && (targetFormat === 'cbz' || targetFormat === 'zip') && !this.isGalleryStopping(gid)) {` (the rest of the block is unchanged).
 
-Ganti baris 733 (`folderPath = path.join(parentDir, galleryId.toString());`) dengan:
+Replace line 733 (`folderPath = path.join(parentDir, galleryId.toString());`) with:
 
 ```js
                         folderPath = path.join(parentDir, safeKeyName(galleryId));
 ```
 
-- [ ] **Step 8: Cek halaman yang sudah ada (resume) untuk provider non-default**
+- [ ] **Step 8: Check existing pages (resume) for non-default providers**
 
-Ganti loop baris 745–753 dengan:
+Replace the loop at lines 745–753 with:
 
 ```js
             for (let j = 1; j <= numPages; j++) {
@@ -1856,9 +1856,9 @@ Ganti loop baris 745–753 dengan:
             }
 ```
 
-- [ ] **Step 9: Unduh halaman lewat provider**
+- [ ] **Step 9: Download pages through the provider**
 
-Ganti baris 872–876 (`const currentPage = pendingPages.shift();` sampai `const imageUrl = ...`) dengan:
+Replace lines 872–876 (`const currentPage = pendingPages.shift();` through `const imageUrl = ...`) with:
 
 ```js
                         const currentPage = pendingPages.shift();
@@ -1871,7 +1871,7 @@ Ganti baris 872–876 (`const currentPage = pendingPages.shift();` sampai `const
                             : (candidates[0] ? candidates[0].url : `${provider.origin}/page/${currentPage}`);
 ```
 
-Ganti baris 891–897 (`sleep(startDelay)` sampai `.then(async () => {`) dengan:
+Replace lines 891–897 (`sleep(startDelay)` through `.then(async () => {`) with:
 
 ```js
                         const onPageProgress = (received, total) => {
@@ -1894,18 +1894,18 @@ Ganti baris 891–897 (`sleep(startDelay)` sampai `.then(async () => {`) dengan:
                             .then(async () => {
 ```
 
-(Seluruh blok `.then(async () => {` setelahnya, termasuk `verifyImage(destPath)`, tidak diubah — `destPath` kini `let` dan sudah menunjuk file hasil unduhan.)
+(The entire `.then(async () => {` block after it, including `verifyImage(destPath)`, is unchanged — `destPath` is now `let` and already points to the downloaded file.)
 
-- [ ] **Step 10: Rescan marker di `core/tracker.js`**
+- [ ] **Step 10: Marker rescan in `core/tracker.js`**
 
-Tambahkan di bagian atas `core/tracker.js` (bersama require lain): `const { canonicalKey } = require('./providers');`. Di dua tempat (baris ±224–225 dan ±275–276) ganti:
+Add at the top of `core/tracker.js` (with the other requires): `const { canonicalKey } = require('./providers');`. In two places (lines ±224–225 and ±275–276) replace:
 
 ```js
                 const id = parseInt(rawId, 10);
                 if (Number.isFinite(id) && id > 0) {
 ```
 
-dengan:
+with:
 
 ```js
                 const id = canonicalKey(rawId);
@@ -1914,32 +1914,32 @@ dengan:
 
 - [ ] **Step 11: Server**
 
-Di `server/index.js`:
+In `server/index.js`:
 
-1. Pada dua tempat (baris ±452 dan ±514) ganti
+1. In two places (lines ±452 and ±514) replace
 
 ```js
                             const gid = parseInt(String(id), 10);
                             if (Number.isFinite(gid) && engine.activeGalleryId === gid) {
 ```
 
-dengan
+with
 
 ```js
                             const gid = String(id);
                             if (engine.activeGalleryId === gid) {
 ```
 
-2. Di handler `GET /api/library` (baris ±370) tambahkan field ke objek hasil `map`: `source: sourceOf(data.gallery_id),` dan impor di bagian atas file: `const { sourceOf, listSources } = require('../core/providers');`.
-3. Di handler `GET /api/config` (baris ±597) tambahkan `sources: listSources(),` ke objek JSON yang di-return.
+2. In the `GET /api/library` handler (line ±370) add a field to the `map` result object: `source: sourceOf(data.gallery_id),` and import at the top of the file: `const { sourceOf, listSources } = require('../core/providers');`.
+3. In the `GET /api/config` handler (line ±597) add `sources: listSources(),` to the returned JSON object.
 
-- [ ] **Step 12: Jalankan tes**
+- [ ] **Step 12: Run the tests**
 
 Run: `node --test test/multiSource.engine.test.js`
 Expected: PASS.
 
 Run: `npm test`
-Expected: PASS (seluruh suite, termasuk db.test.js/sse.test.js). Jika ada tes SSE/API yang mengasumsikan `galleryId` number untuk item site A, itu tetap number lewat `toPublicId`.
+Expected: PASS (the whole suite, including db.test.js/sse.test.js). If any SSE/API test assumes `galleryId` is a number for site A items, it stays a number through `toPublicId`.
 
 - [ ] **Step 13: Commit**
 
@@ -1950,27 +1950,27 @@ git commit -m "feat(engine): download prefixed galleries through providers; stri
 
 ---
 
-### Task 7: UI — badge sumber dan filter kategori
+### Task 7: UI — source badge and category filter
 
 **Files:**
 - Create: `webui/src/lib/sources.js`, `test/webuiSources.test.js`
-- Modify: `webui/src/lib/stores/app.svelte.js` (`extractGalleryId`, `parseItemUrl`, `rankById`, `filterCounts`, `filteredAndSortedItems`, state `sourceFilter`/`sources`, `setSourceFilter`, pemuatan `sources` dari config)
+- Modify: `webui/src/lib/stores/app.svelte.js` (`extractGalleryId`, `parseItemUrl`, `rankById`, `filterCounts`, `filteredAndSortedItems`, state `sourceFilter`/`sources`, `setSourceFilter`, loading `sources` from config)
 - Modify: `webui/src/lib/components/QueueItem.svelte`, `SidebarFilter.svelte`, `LibraryModal.svelte`
 
 **Interfaces:**
-- Consumes: respons API Task 1/6 (`item.source`, `LibraryItem.source`, `config.sources`).
-- Produces (`webui/src/lib/sources.js`, ES module murni, tanpa rune):
+- Consumes: API responses from Tasks 1/6 (`item.source`, `LibraryItem.source`, `config.sources`).
+- Produces (`webui/src/lib/sources.js`, pure ES module, no runes):
   - `sourceOfKey(key) -> string`
-  - `itemSource(item) -> string` (`item.source` bila ada, selain itu dari `item.galleryId ?? item.id`)
+  - `itemSource(item) -> string` (`item.source` if present, otherwise from `item.galleryId ?? item.id`)
   - `matchesSourceFilter(item, filter) -> boolean`
   - `countBySource(items) -> Map<string, number>`
   - `sourceLabel(id, sources) -> string`
-  - `shortKey(key) -> string` (bagian setelah `:` untuk kunci berprefix; kunci angka dikembalikan apa adanya)
-  - `urlKey(rawUrl) -> string | null` (mengenali URL galeri keempat jenis situs → kunci berprefix/angka; dipakai `extractGalleryId`/`parseItemUrl`)
+  - `shortKey(key) -> string` (the part after `:` for prefixed keys; numeric keys are returned as is)
+  - `urlKey(rawUrl) -> string | null` (recognizes gallery URLs of all four site kinds → prefixed/numeric key; used by `extractGalleryId`/`parseItemUrl`)
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/webuiSources.test.js`:
+Create `test/webuiSources.test.js`:
 
 ```js
 const test = require('node:test');
@@ -2019,12 +2019,12 @@ test('urlKey recognises all four URL shapes and ids', async () => {
 });
 ```
 
-- [ ] **Step 2: Jalankan tes, pastikan gagal**
+- [ ] **Step 2: Run the test, confirm it fails**
 
 Run: `node --test test/webuiSources.test.js`
-Expected: FAIL (module tidak ditemukan).
+Expected: FAIL (module not found).
 
-- [ ] **Step 3: Implementasi `webui/src/lib/sources.js`**
+- [ ] **Step 3: Implement `webui/src/lib/sources.js`**
 
 ```js
 // Pure helpers shared by the queue/library UI. Prefixes mirror core/providers (kept in sync
@@ -2086,16 +2086,16 @@ export function urlKey(raw) {
 }
 ```
 
-- [ ] **Step 4: Jalankan tes**
+- [ ] **Step 4: Run the tests**
 
 Run: `node --test test/webuiSources.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Store — parsing URL dan perbaikan kunci `rankById`**
+- [ ] **Step 5: Store — URL parsing and `rankById` key fix**
 
-Di `webui/src/lib/stores/app.svelte.js` tambahkan impor di bagian atas: `import { urlKey, matchesSourceFilter, countBySource } from '../sources.js';`.
+In `webui/src/lib/stores/app.svelte.js` add the import at the top: `import { urlKey, matchesSourceFilter, countBySource } from '../sources.js';`.
 
-Ganti `extractGalleryId` (baris 28–36) dengan:
+Replace `extractGalleryId` (lines 28–36) with:
 
 ```js
 export function extractGalleryId(str) {
@@ -2104,7 +2104,7 @@ export function extractGalleryId(str) {
 }
 ```
 
-Ganti `parseItemUrl` (baris 38–45) dengan:
+Replace `parseItemUrl` (lines 38–45) with:
 
 ```js
 export function parseItemUrl(urlStr) {
@@ -2116,20 +2116,20 @@ export function parseItemUrl(urlStr) {
 }
 ```
 
-Di `buildRawListFromMap` (baris 21) ganti fallback `https://nhentai.net/g/${row.galleryId}/` dengan `String(row.galleryId)` agar kunci berprefix tetap valid saat dibaca server (`String(row.url || '').split(' | ')[0].trim() || String(row.galleryId)`).
+In `buildRawListFromMap` (line 21) replace the fallback `https://nhentai.net/g/${row.galleryId}/` with `String(row.galleryId)` so prefixed keys stay valid when read by the server (`String(row.url || '').split(' | ')[0].trim() || String(row.galleryId)`).
 
-Di `rankById` ganti `map.set(Number(copy[i].galleryId), i + 1);` dengan `map.set(String(copy[i].galleryId), i + 1);` lalu cari semua pemakai `rankById` dengan `grep -rn "rankById" webui/src` dan ubah kunci pencarian dari `Number(...)` menjadi `String(...)` (mis. `ranks.get(Number(item.galleryId))` → `ranks.get(String(item.galleryId))`).
+In `rankById` replace `map.set(Number(copy[i].galleryId), i + 1);` with `map.set(String(copy[i].galleryId), i + 1);` then find all users of `rankById` with `grep -rn "rankById" webui/src` and change the lookup key from `Number(...)` to `String(...)` (e.g. `ranks.get(Number(item.galleryId))` → `ranks.get(String(item.galleryId))`).
 
-- [ ] **Step 6: Store — state, hitungan, dan filter sumber**
+- [ ] **Step 6: Store — state, counts, and source filter**
 
-Tambahkan state di class store dekat `batchFilter` (baris 109):
+Add state in the store class near `batchFilter` (line 109):
 
 ```js
   sourceFilter = $state('all'); // 'all' | provider id
   sources = $state([]); // [{ id, label }] from GET /api/config
 ```
 
-Tambahkan method dekat `setBatchFilter` (baris ±417):
+Add a method near `setBatchFilter` (line ±417):
 
 ```js
   setSourceFilter(id) {
@@ -2137,30 +2137,30 @@ Tambahkan method dekat `setBatchFilter` (baris ±417):
   }
 ```
 
-Di `filterCounts` (baris 151) tambahkan sebelum `return`: `const sourceCounts = countBySource(this.items);` dan ke objek yang di-return tambahkan:
+In `filterCounts` (line 151) add before `return`: `const sourceCounts = countBySource(this.items);` and add to the returned object:
 
 ```js
       sources: Array.from(sourceCounts.entries()).map(([id, count]) => ({ id, count }))
 ```
 
-Di `filteredAndSortedItems` (baris ±213) tambahkan `const srcf = this.sourceFilter;` dan setelah baris `if (bf !== null && ...) continue;` tambahkan:
+In `filteredAndSortedItems` (line ±213) add `const srcf = this.sourceFilter;` and after the line `if (bf !== null && ...) continue;` add:
 
 ```js
       if (!matchesSourceFilter(item, srcf)) continue;
 ```
 
-Cari fungsi yang memuat config dari server: `grep -n "fetchConfig\|getConfig\|downloadFormat =" webui/src/lib/stores/app.svelte.js webui/src/lib/api.js`. Pada kode yang menetapkan field config dari respons `/api/config` (tempat `this.downloadFormat` diisi), tambahkan satu baris `this.sources = Array.isArray(cfg.sources) ? cfg.sources : [];` (gunakan nama variabel respons yang dipakai di fungsi tersebut).
+Find the function that loads config from the server: `grep -n "fetchConfig\|getConfig\|downloadFormat =" webui/src/lib/stores/app.svelte.js webui/src/lib/api.js`. In the code that sets config fields from the `/api/config` response (where `this.downloadFormat` is filled), add one line `this.sources = Array.isArray(cfg.sources) ? cfg.sources : [];` (use the response variable name used in that function).
 
-- [ ] **Step 7: Badge di `QueueItem.svelte`**
+- [ ] **Step 7: Badge in `QueueItem.svelte`**
 
-Di `<script>` tambahkan impor `import { itemSource, sourceLabel, shortKey } from '../sources.js';` dan di antara deklarasi `$derived`:
+In `<script>` add the import `import { itemSource, sourceLabel, shortKey } from '../sources.js';` and among the `$derived` declarations:
 
 ```js
   let src = $derived(itemSource(item));
   let srcLabel = $derived(sourceLabel(src, appStore.sources));
 ```
 
-(`appStore` sudah diimpor di file ini; jika belum, tambahkan `import { appStore } from '../stores/app.svelte.js';`.) Pada baris 101 ganti `<span class="text-[#888] text-[10px] shrink-0">#{parsed.id}</span>` dengan:
+(`appStore` is already imported in this file; if not, add `import { appStore } from '../stores/app.svelte.js';`.) On line 101 replace `<span class="text-[#888] text-[10px] shrink-0">#{parsed.id}</span>` with:
 
 ```svelte
         {#if src !== 'default'}
@@ -2169,9 +2169,9 @@ Di `<script>` tambahkan impor `import { itemSource, sourceLabel, shortKey } from
         <span class="text-[#888] text-[10px] shrink-0">#{shortKey(parsed.id)}</span>
 ```
 
-- [ ] **Step 8: Filter kategori di `SidebarFilter.svelte`**
+- [ ] **Step 8: Category filter in `SidebarFilter.svelte`**
 
-Tambahkan impor `import { sourceLabel } from '../sources.js';` dan `Globe` ke impor lucide (`Globe,`). Tambahkan di `<script>`:
+Add the import `import { sourceLabel } from '../sources.js';` and `Globe` to the lucide import (`Globe,`). Add in `<script>`:
 
 ```js
   const sourceItems = $derived(
@@ -2179,7 +2179,7 @@ Tambahkan impor `import { sourceLabel } from '../sources.js';` dan `Globe` ke im
   );
 ```
 
-Sisipkan blok berikut di antara penutup `</div>` Status Filters (sebelum `<div class="h-px ...">` pertama, baris ±82) :
+Insert the following block between the closing `</div>` of Status Filters (before the first `<div class="h-px ...">`, line ±82):
 
 ```svelte
   {#if sourceItems.length > 1}
@@ -2207,9 +2207,9 @@ Sisipkan blok berikut di antara penutup `</div>` Status Filters (sebelum `<div c
   {/if}
 ```
 
-- [ ] **Step 9: Badge dan filter di `LibraryModal.svelte`**
+- [ ] **Step 9: Badge and filter in `LibraryModal.svelte`**
 
-Tambahkan impor `import { itemSource, sourceLabel } from '../sources.js';`, state `let librarySource = $state('all');`, dan ubah `filteredLibrary` (baris 37–47) menjadi:
+Add the import `import { itemSource, sourceLabel } from '../sources.js';`, state `let librarySource = $state('all');`, and change `filteredLibrary` (lines 37–47) to:
 
 ```js
   let filteredLibrary = $derived(
@@ -2230,7 +2230,7 @@ Tambahkan impor `import { itemSource, sourceLabel } from '../sources.js';`, stat
   );
 ```
 
-Tepat setelah elemen `<input ... bind:value={librarySearch} ...>` (baris ±284) tambahkan:
+Right after the `<input ... bind:value={librarySearch} ...>` element (line ±284) add:
 
 ```svelte
           {#if librarySourceOptions.length > 1}
@@ -2243,7 +2243,7 @@ Tepat setelah elemen `<input ... bind:value={librarySearch} ...>` (baris ±284) 
           {/if}
 ```
 
-Dan pada baris judul (baris ±435) ganti `<span class="text-white truncate" title={item.title}>{item.title}</span>` dengan:
+And in the title row (line ±435) replace `<span class="text-white truncate" title={item.title}>{item.title}</span>` with:
 
 ```svelte
                     {#if itemSource(item) !== 'default'}
@@ -2252,17 +2252,17 @@ Dan pada baris judul (baris ±435) ganti `<span class="text-white truncate" titl
                     <span class="text-white truncate" title={item.title}>{item.title}</span>
 ```
 
-- [ ] **Step 10: Build UI dan tes**
+- [ ] **Step 10: Build the UI and test**
 
 Run: `npm --prefix webui run build`
-Expected: build sukses tanpa error Svelte/Vite.
+Expected: build succeeds without Svelte/Vite errors.
 
 Run: `npm test`
 Expected: PASS.
 
-- [ ] **Step 11: Verifikasi manual di dev server lokal**
+- [ ] **Step 11: Manual verification on a local dev server**
 
-Run (terminal terpisah): `npm start`, buka `http://localhost:8080`, tempel dua URL dari dua sumber berbeda lewat dialog Add, lalu pastikan: (a) badge sumber muncul pada baris antrean item non-default, (b) section "Source" muncul di sidebar saat ada ≥ 2 sumber, dan klik memfilter list, (c) Library Manager menampilkan badge dan dropdown sumber. Catat hasil di balasan.
+Run (separate terminal): `npm start`, open `http://localhost:8080`, paste two URLs from two different sources through the Add dialog, then confirm: (a) the source badge appears on the queue rows of non-default items, (b) the "Source" section appears in the sidebar when there are ≥ 2 sources, and clicking it filters the list, (c) the Library Manager shows the badge and the source dropdown. Record the results in the reply.
 
 - [ ] **Step 12: Commit**
 
@@ -2273,40 +2273,40 @@ git commit -m "feat(ui): show source badge and source filter in queue sidebar an
 
 ---
 
-### Task 8: Tes langsung, dokumentasi, dan penutup
+### Task 8: Live test, documentation, and wrap-up
 
 **Files:**
-- Modify: `docs/CHANGELOG.md`, `docs/PLAN.md`, `docs/ARCHITECTURE.md`, `docs/AI_AGENT.md` (hanya jika membahas format ID/URL), `.gitignore` (tambah `samples/` setelah dikonfirmasi user)
+- Modify: `docs/CHANGELOG.md`, `docs/PLAN.md`, `docs/ARCHITECTURE.md`, `docs/AI_AGENT.md` (only if it covers the ID/URL format), `.gitignore` (add `samples/` after the user confirms)
 
 **Interfaces:**
-- Consumes: semua task sebelumnya.
+- Consumes: all previous tasks.
 
-- [ ] **Step 1: Tes langsung dengan server lokal (SQLite, jaringan yang bisa menjangkau situs)**
+- [ ] **Step 1: Live test with a local server (SQLite, a network that can reach the sites)**
 
-Pastikan DNS/VPN mesin tidak memblokir tiga domain. Jalankan di terminal terpisah: `NHDL_DB_PATH=./data/live-test.db DOWNLOAD_DIR=./samples/live PORT=8099 npm start`. Lalu:
+Make sure the machine's DNS/VPN does not block the three domains. Run in a separate terminal: `NHDL_DB_PATH=./data/live-test.db DOWNLOAD_DIR=./samples/live PORT=8099 npm start`. Then:
 
 ```bash
 curl -s -X POST http://localhost:8099/api/queue -H 'Content-Type: application/json' -d '{"text":"https://nhentai.xxx/g/539224/\nhttps://hentairox.com/gallery/817456/\nhttps://nhentai.com/en/comic/amys-country-wrangle-porn-comic","format":"folder"}'
 ```
 
-Expected: `{"success":true,...,"galleryIds":["xxx:539224","rox:817456","com:amys-country-wrangle-porn-comic"],...}`. Tunggu hingga `GET /api/status` memperlihatkan ketiganya `DONE` (`curl -s http://localhost:8099/api/status`). Catatan: galeri `xxx:539224` berisi 240 halaman, sehingga unduhan penuh memakan waktu; boleh dihentikan setelah beberapa halaman via `POST /api/queue/pause` untuk uji resume, lalu `resume`.
+Expected: `{"success":true,...,"galleryIds":["xxx:539224","rox:817456","com:amys-country-wrangle-porn-comic"],...}`. Wait until `GET /api/status` shows all three as `DONE` (`curl -s http://localhost:8099/api/status`). Note: gallery `xxx:539224` has 240 pages, so a full download takes a while; it may be stopped after a few pages via `POST /api/queue/pause` to test resume, then `resume`.
 
-- [ ] **Step 2: Verifikasi hasil tes langsung**
+- [ ] **Step 2: Verify the live test results**
 
-Run: `ls samples/live` dan hitung berkas per galeri; bandingkan dengan sampel manual di `samples/probe/out/` (hentairox 51 file, nhentai.com 17 file, nhentai.xxx sesuai halaman yang selesai). Pastikan: tidak ada berkas `.part`, tidak ada berkas < 2 KB selain placeholder yang tercatat di `placeholder_pages.log`, dan tidak ada nama folder berisi `:`. Hentikan server, hapus `data/live-test.db` dan `samples/live`.
+Run: `ls samples/live` and count files per gallery; compare with the manual samples in `samples/probe/out/` (hentairox 51 files, nhentai.com 17 files, nhentai.xxx per the pages completed). Make sure: there are no `.part` files, no files < 2 KB other than placeholders recorded in `placeholder_pages.log`, and no folder name containing `:`. Stop the server, delete `data/live-test.db` and `samples/live`.
 
-- [ ] **Step 3: Perbarui dokumentasi**
+- [ ] **Step 3: Update documentation**
 
-- `docs/CHANGELOG.md`: tambah entri teratas dengan aktor `AI (Claude Code, Sonnet 5.5)` memuat: lapisan provider, kunci berprefix, migrasi skema v3, field `source`, badge/filter sumber.
-- `docs/PLAN.md`: tambah fase/tugas "Multi-source download" dan centang `[x]` task yang selesai, isi tabel Log.
-- `docs/ARCHITECTURE.md`: tambah bagian `core/providers/` pada struktur direktori dan jelaskan format kunci `gallery_id`, provider interface, dan `source`; perbaiki bagian yang menyebut `gallery_id` sebagai angka. Gunakan penamaan generik (site A/B1/B2/C).
-- Periksa `docs/AI_AGENT.md` dengan `grep -n "gallery\|ID\|/g/" docs/AI_AGENT.md`; perbarui hanya bila ada pernyataan yang menjadi keliru.
+- `docs/CHANGELOG.md`: add a top entry with actor `AI (Claude Code, Sonnet 5.5)` covering: provider layer, prefixed keys, schema migration v3, `source` field, source badge/filter.
+- `docs/PLAN.md`: add a "Multi-source download" phase/task and tick `[x]` the completed tasks, fill in the Log table.
+- `docs/ARCHITECTURE.md`: add a `core/providers/` section to the directory structure and explain the `gallery_id` key format, the provider interface, and `source`; fix sections that describe `gallery_id` as a number. Use generic naming (site A/B1/B2/C).
+- Check `docs/AI_AGENT.md` with `grep -n "gallery\|ID\|/g/" docs/AI_AGENT.md`; update only if a statement becomes wrong.
 
-- [ ] **Step 4: Ringkasan yang harus ditanyakan ke user**
+- [ ] **Step 4: Summary to ask the user**
 
-Tanyakan apakah `samples/` boleh ditambahkan ke `.gitignore`; jika ya, tambahkan baris `samples/` dan sertakan di commit.
+Ask whether `samples/` may be added to `.gitignore`; if yes, add the line `samples/` and include it in the commit.
 
-- [ ] **Step 5: Jalankan seluruh suite dan commit**
+- [ ] **Step 5: Run the whole suite and commit**
 
 Run: `npm test`
 Expected: PASS.
