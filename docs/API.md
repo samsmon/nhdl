@@ -1,16 +1,16 @@
-# NHDL — Kontrak REST API & Event SSE
+# NHDL — REST API & SSE Event Contract
 
-Dokumen ini menjadi kontrak resmi untuk seluruh komunikasi antara frontend (Svelte UI) dan backend (`server/index.js` maupun calon backend Go di Fase 6).
-Setiap endpoint atau event baru **wajib** ditambahkan ke dokumen ini terlebih dahulu sebelum diimplementasikan di kode.
+This document is the official contract for all communication between the frontend (Svelte UI) and the backend (`server/index.js` and the planned Go backend in Phase 6).
+Every new endpoint or event **must** be added to this document first, before it is implemented in code.
 
-> **Catatan Dokumentasi:** Situs target disebut **"certain site ( ͡° ͜ʖ ͡°)"** dengan domain contoh `https://certain.site/g/<gallery_id>/`.
+> **Documentation note:** The target site is referred to as **"certain site ( ͡° ͜ʖ ͡°)"** with the example domain `https://certain.site/g/<gallery_id>/`.
 
 ---
 
-## 1. Tipe Data Utama
+## 1. Core Data Types
 
 ### `QueueItem`
-Representasi item antrian yang dikirim melalui REST (`/api/status`) maupun SSE (`/api/events`):
+Representation of a queue item sent over REST (`/api/status`) and SSE (`/api/events`):
 ```json
 {
   "id": 1,
@@ -32,18 +32,18 @@ Representasi item antrian yang dikirim melalui REST (`/api/status`) maupun SSE (
   "updatedAt": "2026-09-28 08:01:00"
 }
 ```
-- Nilai `rawStatus`: `'PENDING'` | `'ON_PROGRESS'` | `'STOPPED'` | `'PAUSED'` | `'COOLDOWN'` | `'DONE'` | `'ERROR'` | `'SKIPPED'`
-- Status `'STOPPED'` khusus untuk item yang di-pause secara manual oleh pengguna (tidak disentuh oleh `requeueFailedItems()` maupun pre-pass `_runBatchBody`). Status `'PAUSED'` digunakan oleh *circuit breaker* saat terkena batas 429 beruntun.
-- Nilai `status`: sama dengan `rawStatus`, atau `"${rawStatus} - ${error}"` apabila kolom `error` terisi.
-- `galleryId`: `number` untuk galeri site A (kunci angka polos, kompatibel dengan versi sebelumnya), `string` berprefix (`"<prefix>:<isi>"`) untuk site B1/B2/C. Contoh: `123456`, `"b1:539224"`, `"c1:some-slug"`. Nilai ini dipakai apa adanya pada `ids`/`galleryId` di endpoint lain.
-- `source`: id sumber hasil turunan dari prefix `galleryId` (`"default"` bila tanpa prefix). Tidak disimpan di DB. Daftar sumber ada di `GET /api/config` → `sources`.
-- `createdAt` / `updatedAt`: string waktu. SQLite: UTC tanpa zona (`"2026-09-28 08:00:00"`); PostgreSQL: ISO 8601 (`"2026-09-28T08:00:00.000Z"`). UI mengurai keduanya.
-- `category`: tipe konten `"comic" | "manga" | "other" | null`. Dipetakan dari kategori di situs asal (site B1/B2/C); `null` untuk site A, item lama, dan item yang metadatanya belum diambil. Disimpan di tabel `queue` (kolom `category`) dan ikut di event SSE `item`.
+- `rawStatus` values: `'PENDING'` | `'ON_PROGRESS'` | `'STOPPED'` | `'PAUSED'` | `'COOLDOWN'` | `'DONE'` | `'ERROR'` | `'SKIPPED'`
+- Status `'STOPPED'` is reserved for items the user paused manually (untouched by `requeueFailedItems()` and the `_runBatchBody` pre-pass). Status `'PAUSED'` is used by the *circuit breaker* when consecutive 429 limits are hit.
+- `status` values: same as `rawStatus`, or `"${rawStatus} - ${error}"` when the `error` column is set.
+- `galleryId`: a `number` for site A galleries (plain numeric key, compatible with earlier versions), a prefixed `string` (`"<prefix>:<content>"`) for site B1/B2/C. Examples: `123456`, `"b1:539224"`, `"c1:some-slug"`. This value is used as-is in `ids`/`galleryId` on other endpoints.
+- `source`: source id derived from the `galleryId` prefix (`"default"` when there is no prefix). Not stored in the DB. The list of sources is in `GET /api/config` → `sources`.
+- `createdAt` / `updatedAt`: time strings. SQLite: UTC without a zone (`"2026-09-28 08:00:00"`); PostgreSQL: ISO 8601 (`"2026-09-28T08:00:00.000Z"`). The UI parses both.
+- `category`: content type `"comic" | "manga" | "other" | null`. Mapped from the category on the origin site (site B1/B2/C); `null` for site A, old items, and items whose metadata has not been fetched yet. Stored in the `queue` table (`category` column) and included in the SSE `item` event.
 
 ### `LiveProgress`
-Representasi progress aktif (`engine.currentProgress`), atau `null` jika tidak ada. Ada dua bentuk.
+Representation of the active progress (`engine.currentProgress`), or `null` if there is none. It has two shapes.
 
-Unduhan galeri (`live: true`):
+Gallery download (`live: true`):
 ```json
 {
   "galleryId": 123456,
@@ -63,7 +63,7 @@ Unduhan galeri (`live: true`):
 }
 ```
 
-Masa tunggu (`type`: `"COOLDOWN"` jeda anti-ban antar galeri, `"BATCH_REST"` istirahat antar batch, `"RATE_LIMIT"` cooldown 429; `remaining` dan `total` dalam detik):
+Waiting period (`type`: `"COOLDOWN"` anti-ban pause between galleries, `"BATCH_REST"` rest between batches, `"RATE_LIMIT"` 429 cooldown; `remaining` and `total` in seconds):
 ```json
 {
   "type": "COOLDOWN",
@@ -76,147 +76,147 @@ Masa tunggu (`type`: `"COOLDOWN"` jeda anti-ban antar galeri, `"BATCH_REST"` ist
   "totalTasks": 10
 }
 ```
-UI memakai bentuk kedua untuk chip hitung mundur di tabel antrian (lihat ARCHITECTURE bagian 2a).
+The UI uses the second shape for the countdown chip in the queue table (see ARCHITECTURE section 2a).
 
 ### `EngineStatus`
-String status mesin pengunduh: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'COOLDOWN'` (jeda anti-ban / istirahat batch) | `'COOLDOWN_429'` (rate limit) | teks alasan saat folder unduhan tidak sehat (default `'Download folder unavailable'`; alasan lain mis. `Download folder is empty while library has entries`).
+Status string of the download engine: `'IDLE'` | `'RUNNING'` | `'PAUSED'` | `'COOLDOWN'` (anti-ban pause / batch rest) | `'COOLDOWN_429'` (rate limit) | a reason text when the download folder is unhealthy (default `'Download folder unavailable'`; other reasons, e.g. `Download folder is empty while library has entries`).
 
 ---
 
 ## 2. Server-Sent Events (SSE) — `GET /api/events`
 
-Membuka stream HTTP satu arah (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`) untuk menerima pembaruan state secara real-time tanpa polling.
+Opens a one-way HTTP stream (`Content-Type: text/event-stream`, `Cache-Control: no-cache`, `Connection: keep-alive`) to receive real-time state updates without polling.
 
 ### 2.1. `event: snapshot` & `event: reloaded`
-Dikirim **segera setelah koneksi SSE terbuka** (`snapshot`), serta dipancarkan kembali ke seluruh klien SSE aktif setelah operasi impor atau pemulihan database selesai (`snapshot` dan `reloaded`). Berisi state penuh antrian saat itu sehingga antrian dan status library di UI langsung ter-update secara instan tanpa perlu memuat ulang halaman:
+Sent **immediately after the SSE connection opens** (`snapshot`), and re-emitted to all active SSE clients after an import or database restore finishes (`snapshot` and `reloaded`). Contains the full queue state at that moment so the queue and library status in the UI update instantly without reloading the page:
 ```
 event: snapshot
 data: {"items":[...],"batchCount":1,"engineStatus":"IDLE","liveProgress":null,"autoContinueBatches":true}
 ```
 
 ### 2.2. `event: item`
-Dikirim setiap kali ada perubahan pada tabel `queue` di basis data (`core/db.js` `dbEvents`):
-- **Penambahan atau pembaruan baris (`inserted` / `updated`)**:
+Sent whenever the `queue` table in the database changes (`core/db.js` `dbEvents`):
+- **Row added or updated (`inserted` / `updated`)**:
   ```
   event: item
   data: {"type":"inserted","item":{"id":1,"galleryId":123456,"status":"PENDING","rawStatus":"PENDING","url":"https://certain.site/g/123456/","title":null,"batch":1,"priority":0,"pagesDone":0,"pagesTotal":0,"error":null,"retries":0,"format":null,"source":"default","category":null},"batchCount":1}
   ```
-- **Penghapusan satu baris (`deleted`)**:
+- **Single row deleted (`deleted`)**:
   ```
   event: item
   data: {"type":"deleted","galleryId":123456,"batchCount":1}
   ```
-- **Penghapusan satu batch (`batch_deleted`)**:
+- **Whole batch deleted (`batch_deleted`)**:
   ```
   event: item
   data: {"type":"batch_deleted","batch":2,"batchCount":1}
   ```
-- **Pembersihan item selesai (`cleared`)**:
+- **Completed items cleared (`cleared`)**:
   ```
   event: item
   data: {"type":"cleared","removedIds":[123456,234567],"batchCount":1}
   ```
-- **Perubahan urutan prioritas (`reordered`)**:
-  Hanya dikirim jika terdapat perubahan prioritas nyata (`items` tidak pernah berupa array kosong):
+- **Priority order changed (`reordered`)**:
+  Only sent when there is an actual priority change (`items` is never an empty array):
   ```
   event: item
   data: {"type":"reordered","items":[{"galleryId":123456,"priority":501},{"galleryId":234567,"priority":500}],"batchCount":1}
   ```
 
 ### 2.3. `event: progress`
-Dikirim saat halaman galeri selesai diunduh atau saat hitungan mundur jeda/cooldown berubah:
+Sent when a gallery page finishes downloading or when the pause/cooldown countdown changes:
 ```
 event: progress
 data: {"liveProgress":{...},"engineStatus":"RUNNING"}
 ```
 
 ### 2.4. `event: engine`
-Dikirim saat status mesin pengunduh atau konfigurasi berubah; `detail` berisi payload event engine (atau `null`) (`paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`, `download_dir_unavailable`):
+Sent when the download engine status or configuration changes; `detail` holds the engine event payload (or `null`) (`paused`, `resumed`, `stopped`, `restarted`, `batch_start`, `batch_complete`, `circuit_breaker`, `config_updated`, `download_dir_unavailable`):
 ```
 event: engine
 data: {"type":"paused","engineStatus":"PAUSED","liveProgress":null,"autoContinueBatches":true,"detail":null}
 ```
 
 ### 2.5. Heartbeat
-Setiap 25 detik server mengirimkan komentar SSE `: ping\n\n` agar koneksi tidak diputus oleh reverse proxy.
+Every 25 seconds the server sends the SSE comment `: ping\n\n` so the connection is not dropped by a reverse proxy.
 
 ---
 
-## 3. Endpoint REST API
+## 3. REST API Endpoints
 
-Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/download`) mengembalikan `Content-Type: application/json`. Jika autentikasi diaktifkan (`NHDL_PASSWORD` di `.env`) dan session cookie `nhdl_session` tidak valid, server mengembalikan `401 Unauthorized` (`{"error":"Unauthorized"}`).
+All endpoints under `/api/*` (except `/api/queue/export` and `/api/logs/download`) return `Content-Type: application/json`. If authentication is enabled (`NHDL_PASSWORD` in `.env`) and the `nhdl_session` session cookie is invalid, the server returns `401 Unauthorized` (`{"error":"Unauthorized"}`).
 
-### 3.1. Autentikasi
+### 3.1. Authentication
 
-| Method | Path | Body | Response (`200 OK`) | Keterangan |
+| Method | Path | Body | Response (`200 OK`) | Notes |
 |---|---|---|---|---|
-| `POST` | `/api/login` | `{"password":"..."}` | `{"success":true}` | Mengatur cookie `HttpOnly` `nhdl_session`. Mengembalikan `401` jika password salah. |
-| `POST` | `/api/logout` | — | `{"success":true}` | Menghapus session dan mengosongkan cookie `nhdl_session`. |
+| `POST` | `/api/login` | `{"password":"..."}` | `{"success":true}` | Sets the `HttpOnly` cookie `nhdl_session`. Returns `401` if the password is wrong. |
+| `POST` | `/api/logout` | — | `{"success":true}` | Deletes the session and clears the `nhdl_session` cookie. |
 
-### 3.2. Status & Antrian (`queue`)
+### 3.2. Status & Queue (`queue`)
 
-| Method | Path | Body | Response (`200 OK`) | Keterangan |
+| Method | Path | Body | Response (`200 OK`) | Notes |
 |---|---|---|---|---|
-| `GET` | `/api/status` | — | `{"items": QueueItem[], "batchCount": number, "rawList": string, "errors": string, "liveProgress": LiveProgress\|null, "engineStatus": EngineStatus, "autoContinueBatches": boolean}` | Endpoint kompatibilitas untuk membaca snapshot status penuh. |
-| `POST` | `/api/queue` | `{"text": string, "replace"?: boolean, "format"?: string}` atau `text/plain` | `{"success":true, "added": number, "updated": number, "duplicates": number, "ignored": number, "galleryIds": (number\|string)[], "total": number}` | Mengimpor daftar URL/ID (`# BATCH N FORMAT=...`). Default `replace = true` pada `/api/queue`. Setiap baris boleh berupa URL galeri dari site A, B1, B2, atau C, ID polos site A, atau kunci berprefix. Baris yang tidak dikenali dilewati dan dihitung di field `ignored` pada respons. |
-| `POST` | `/api/queue/import` | `{"text": string, "replace"?: boolean, "format"?: string}` atau `text/plain` | `{"success":true, "added": number, "updated": number, "duplicates": number, "ignored": number, "galleryIds": (number\|string)[], "total": number}` | Mengimpor daftar `list.txt` (upload/paste). Default `replace = false` (menambahkan/memperbarui tanpa menghapus item lain). Setiap baris boleh berupa URL galeri dari site A, B1, B2, atau C, ID polos site A, atau kunci berprefix. Baris yang tidak dikenali dilewati dan dihitung di field `ignored` pada respons. |
-| `GET` | `/api/queue/export` | — | `text/plain` (`attachment; filename="list.txt"`) | Mengekspor seluruh isi tabel `queue` ke format teks `# BATCH N`. |
-| `POST` | `/api/queue/pause` | `{"ids": (number\|string)[]}` | `{"success":true, "paused": number, "stopping": (number|string)[]}` | Mengubah status item `PENDING`/`ERROR`/`COOLDOWN`/`PAUSED` menjadi `STOPPED`. Untuk item `ON_PROGRESS`, engine menghentikan unduhan galeri tersebut dengan aman di batas halaman berikutnya, menyimpan progres (`pages_done`), mengubah status menjadi `STOPPED` tanpa menghapus file/halaman yang sudah terunduh, lalu melanjutkan ke item berikutnya. |
-| `POST` | `/api/queue/resume` | `{"ids": (number\|string)[]}` | `{"success":true, "resumed": number}` | Mengubah status item `STOPPED` (serta `ERROR`/`COOLDOWN`/`PAUSED`) menjadi `PENDING` (`error = null`) lalu memanggil `autoProcessQueue()`. |
-| `POST` | `/api/queue/delete` | `{"ids": (number\|string)[]}` | `{"success":true, "deleted": number}` | Menghapus item dari tabel `queue` saja (file di disk dan tabel `library` tidak disentuh). Item yang sedang `ON_PROGRESS` dihentikan terlebih dahulu di batas halaman berikutnya seperti pada `/api/queue/pause`. |
-| `POST` | `/api/queue/priority` | `{"ids": (number\|string)[], "action": "top" \| "up" \| "down" \| "bottom"}` | `{"success":true, "updated": number}` | Mengubah urutan prioritas (`ORDER BY priority DESC, id ASC`) untuk ukuran antrian berapa pun dalam satu transaksi SQLite dan memancarkan satu event SSE `item` (`type: "reordered"`). Bila nilai `priority` bertabrakan (mis. semua `0`), antrian dinormalisasi ke `total - index` terlebih dahulu. |
+| `GET` | `/api/status` | — | `{"items": QueueItem[], "batchCount": number, "rawList": string, "errors": string, "liveProgress": LiveProgress\|null, "engineStatus": EngineStatus, "autoContinueBatches": boolean}` | Compatibility endpoint for reading the full status snapshot. |
+| `POST` | `/api/queue` | `{"text": string, "replace"?: boolean, "format"?: string}` or `text/plain` | `{"success":true, "added": number, "updated": number, "duplicates": number, "ignored": number, "galleryIds": (number\|string)[], "total": number}` | Imports a list of URLs/IDs (`# BATCH N FORMAT=...`). Default `replace = true` on `/api/queue`. Each line may be a gallery URL from site A, B1, B2, or C, a plain site A ID, or a prefixed key. Unrecognized lines are skipped and counted in the `ignored` field of the response. |
+| `POST` | `/api/queue/import` | `{"text": string, "replace"?: boolean, "format"?: string}` or `text/plain` | `{"success":true, "added": number, "updated": number, "duplicates": number, "ignored": number, "galleryIds": (number\|string)[], "total": number}` | Imports a `list.txt` list (upload/paste). Default `replace = false` (adds/updates without removing other items). Each line may be a gallery URL from site A, B1, B2, or C, a plain site A ID, or a prefixed key. Unrecognized lines are skipped and counted in the `ignored` field of the response. |
+| `GET` | `/api/queue/export` | — | `text/plain` (`attachment; filename="list.txt"`) | Exports the entire `queue` table to the `# BATCH N` text format. |
+| `POST` | `/api/queue/pause` | `{"ids": (number\|string)[]}` | `{"success":true, "paused": number, "stopping": (number|string)[]}` | Changes the status of `PENDING`/`ERROR`/`COOLDOWN`/`PAUSED` items to `STOPPED`. For `ON_PROGRESS` items, the engine safely stops that gallery's download at the next page boundary, saves progress (`pages_done`), sets the status to `STOPPED` without deleting files/pages already downloaded, then moves on to the next item. |
+| `POST` | `/api/queue/resume` | `{"ids": (number\|string)[]}` | `{"success":true, "resumed": number}` | Changes the status of `STOPPED` items (and `ERROR`/`COOLDOWN`/`PAUSED`) to `PENDING` (`error = null`), then calls `autoProcessQueue()`. |
+| `POST` | `/api/queue/delete` | `{"ids": (number\|string)[]}` | `{"success":true, "deleted": number}` | Deletes items from the `queue` table only (files on disk and the `library` table are untouched). Items currently `ON_PROGRESS` are stopped first at the next page boundary, as in `/api/queue/pause`. |
+| `POST` | `/api/queue/priority` | `{"ids": (number\|string)[], "action": "top" \| "up" \| "down" \| "bottom"}` | `{"success":true, "updated": number}` | Changes the priority order (`ORDER BY priority DESC, id ASC`) for any queue size in a single SQLite transaction and emits one SSE `item` event (`type: "reordered"`). If `priority` values collide (e.g. all `0`), the queue is first normalized to `total - index`. |
 
-### 3.3. Kontrol Engine & Retry
+### 3.3. Engine Control & Retry
 
-| Method | Path | Body | Response (`200 OK`) | Keterangan |
+| Method | Path | Body | Response (`200 OK`) | Notes |
 |---|---|---|---|---|
-| `POST` | `/api/control` | `{"action": "pause" \| "resume" \| "start" \| "stop" \| "restart"}` | `{"success":true, "engineStatus": EngineStatus}` | Mengendalikan siklus mesin pengunduh. `stop` setara `pause` dan `start` setara `resume`. `resume`/`start` mengantrikan ulang item gagal yang masih punya jatah retry; `restart` juga mengembalikan baris `ON_PROGRESS` ke `PENDING`. |
-| `POST` | `/api/retry` | `{"galleryId"?: number\|string}` | `{"success":true, "message":"Force retry triggered"}` | Melewati cooldown aktif; jika `galleryId` disertakan, mengubah status item tersebut kembali ke `PENDING` dan memicu antrian. |
+| `POST` | `/api/control` | `{"action": "pause" \| "resume" \| "start" \| "stop" \| "restart"}` | `{"success":true, "engineStatus": EngineStatus}` | Controls the download engine cycle. `stop` is equivalent to `pause` and `start` to `resume`. `resume`/`start` requeue failed items that still have retry quota; `restart` also returns `ON_PROGRESS` rows to `PENDING`. |
+| `POST` | `/api/retry` | `{"galleryId"?: number\|string}` | `{"success":true, "message":"Force retry triggered"}` | Skips the active cooldown; if `galleryId` is included, sets that item's status back to `PENDING` and triggers the queue. |
 
-### 3.4. Konfigurasi (`settings` & `.env`)
+### 3.4. Configuration (`settings` & `.env`)
 
-| Method | Path | Body | Response (`200 OK`) | Keterangan |
+| Method | Path | Body | Response (`200 OK`) | Notes |
 |---|---|---|---|---|
-| `GET` | `/api/config` | — | `{"downloadDir": string, "downloadFormat": "folder"\|"cbz"\|"zip", "autoContinueBatches": boolean, "authRequired": boolean, "apiKeyConfigured": boolean, "apiKeyMasked": string, "backupIntervalHours": number, "backupKeep": number, "lastBackupAt": string\|null, "sources": {"id": string, "label": string}[]}` | Membaca pengaturan aktif dari tabel `settings` dan status API key dari `.env`. `sources`: daftar sumber yang dikenal server (urutan tampilan UI), dipakai untuk label badge dan filter kategori. |
-| `POST` | `/api/config` | Salah satu dari: `{"downloadDir": string}`, `{"downloadFormat": "folder"\|"cbz"\|"zip"}`, `{"autoContinueBatches": boolean}`, `{"apiKey": string}`, `{"backupIntervalHours": number}`, atau `{"backupKeep": number}` | `{"success":true, ...}` | Menyimpan pengaturan ke tabel `settings` (atau `NHENTAI_API_KEY` ke `.env`). |
-| `POST` | `/api/config/verify-key` | `{"apiKey"?: string}` | `{"valid": boolean, "user"?: object, "rateLimit"?: object, "error"?: string}` | Memverifikasi keabsahan API key ke API v2 certain site ( ͡° ͜ʖ ͡°). |
+| `GET` | `/api/config` | — | `{"downloadDir": string, "downloadFormat": "folder"\|"cbz"\|"zip", "autoContinueBatches": boolean, "authRequired": boolean, "apiKeyConfigured": boolean, "apiKeyMasked": string, "backupIntervalHours": number, "backupKeep": number, "lastBackupAt": string\|null, "sources": {"id": string, "label": string}[]}` | Reads the active settings from the `settings` table and the API key status from `.env`. `sources`: the list of sources known to the server (UI display order), used for badge labels and category filters. |
+| `POST` | `/api/config` | One of: `{"downloadDir": string}`, `{"downloadFormat": "folder"\|"cbz"\|"zip"}`, `{"autoContinueBatches": boolean}`, `{"apiKey": string}`, `{"backupIntervalHours": number}`, or `{"backupKeep": number}` | `{"success":true, ...}` | Saves the setting to the `settings` table (or `NHENTAI_API_KEY` to `.env`). |
+| `POST` | `/api/config/verify-key` | `{"apiKey"?: string}` | `{"valid": boolean, "user"?: object, "rateLimit"?: object, "error"?: string}` | Verifies the API key against the certain site ( ͡° ͜ʖ ͡°) API v2. |
 
 ### 3.5. Library
 
-| Method | Path | Body | Response (`200 OK`) | Keterangan |
+| Method | Path | Body | Response (`200 OK`) | Notes |
 |---|---|---|---|---|
-| `GET` | `/api/library` | — | `{"items": LibraryItem[], "total": number}` | Mengambil daftar galeri di tabel `library` yang tidak berstatus `skipped`. |
-| `POST` | `/api/library/rescan` | — | `{"success":true, "scanned": number, "relocated": number, "pruned": number, "unchanged": number, "aborted"?: boolean, "reason"?: string}` | Memindai ulang folder unduhan berdasarkan file marker `.nhdl-id` dan `.cbz.nhdl-id` (dibatalkan dengan `aborted: true` dan `success: false` jika folder tidak sehat/tidak ter-mount; rescan yang berhasil menghapus status `Download folder unavailable`). |
-| `POST` | `/api/library/rename` | `{"id": string\|number, "newName": string}` | `{"success":true, "oldPath": string, "newPath": string, "newTitle": string}` | Mengubah nama folder/arsip di disk, memperbarui `ComicInfo.xml`, serta memperbarui tabel `library` dan `queue`. |
-| `POST` | `/api/library/compress` | `{"id": string\|number, "ext"?: "cbz"\|"zip"}` | `{"success":true, "archivePath": string, "archiveExt": string, "skipped"?: boolean}` | Mengompres folder galeri menjadi arsip `.cbz`/`.zip` (`STORE` level 0) dan menghapus folder aslinya. |
-| `POST` | `/api/library/batch-compress` | `{"ids": (string\|number)[], "ext"?: "cbz"\|"zip"}` | `{"success":true, "started":true, "total": number}` | Memulai job kompresi massal di latar belakang (`409 Conflict` jika job masih berjalan). |
-| `GET` | `/api/library/compress-status` | — | `{"job": CompressJob\|null}` | Membaca progres job kompresi massal yang sedang/terakhir berjalan. |
+| `GET` | `/api/library` | — | `{"items": LibraryItem[], "total": number}` | Fetches the list of galleries in the `library` table that are not `skipped`. |
+| `POST` | `/api/library/rescan` | — | `{"success":true, "scanned": number, "relocated": number, "pruned": number, "unchanged": number, "aborted"?: boolean, "reason"?: string}` | Rescans the download folder based on `.nhdl-id` and `.cbz.nhdl-id` marker files (aborted with `aborted: true` and `success: false` if the folder is unhealthy/not mounted; a successful rescan clears the `Download folder unavailable` status). |
+| `POST` | `/api/library/rename` | `{"id": string\|number, "newName": string}` | `{"success":true, "oldPath": string, "newPath": string, "newTitle": string}` | Renames the folder/archive on disk, updates `ComicInfo.xml`, and updates the `library` and `queue` tables. |
+| `POST` | `/api/library/compress` | `{"id": string\|number, "ext"?: "cbz"\|"zip"}` | `{"success":true, "archivePath": string, "archiveExt": string, "skipped"?: boolean}` | Compresses a gallery folder into a `.cbz`/`.zip` archive (`STORE` level 0) and deletes the original folder. |
+| `POST` | `/api/library/batch-compress` | `{"ids": (string\|number)[], "ext"?: "cbz"\|"zip"}` | `{"success":true, "started":true, "total": number}` | Starts a bulk compression job in the background (`409 Conflict` if a job is still running). |
+| `GET` | `/api/library/compress-status` | — | `{"job": CompressJob\|null}` | Reads the progress of the bulk compression job that is running or ran most recently. |
 
 `LibraryItem`:
 ```json
 { "id": "123456", "source": "default", "category": null, "title": "Title", "author": "Artist", "lang": "English", "pages": 24, "folder": "/downloads/English/Artist/Title.cbz", "downloadedAt": "2026-09-28 08:00:00", "legacy": false, "archived": true, "archiveExt": "cbz" }
 ```
-- `id`: kunci kanonik sebagai string (`"123456"`, `"b1:539224"`).
-- `source`: sama seperti `QueueItem.source`.
-- `category`: nilai yang sama seperti `QueueItem.category` (dibaca dari `meta.contentType` library; `null` bila tidak ada).
+- `id`: canonical key as a string (`"123456"`, `"b1:539224"`).
+- `source`: same as `QueueItem.source`.
+- `category`: same value as `QueueItem.category` (read from the library's `meta.contentType`; `null` if absent).
 
-### 3.6. Log & Penjelajah Direktori
+### 3.6. Logs & Directory Browser
 
-| Method | Path | Body | Response (`200 OK`) | Keterangan |
+| Method | Path | Body | Response (`200 OK`) | Notes |
 |---|---|---|---|---|
-| `GET` | `/api/logs` | — | `{"log": string}` atau `{"ts": string, "level": string, "message": string}[]` (jika query `galleryId` diberikan) | Tanpa `galleryId`: mengambil string log aktivitas dari tabel `events`. Dengan `?galleryId=<id>&limit=<n>`: mengembalikan JSON array berisi baris dari tabel `events` untuk galeri tersebut (`[{ "ts", "level", "message" }]`). |
-| `GET` | `/api/logs/download` | — | `text/plain` (`attachment; filename="nhdl-activity-<ts>.log"`) | Mengunduh log aktivitas sebagai file `.log`. |
-| `GET` | `/api/fs/browse?path=<dir>` | — | `{"currentPath": string, "parentPath": string\|null, "drives": string[], "directories": {"name": string, "path": string}[]}` | Menjelajahi daftar direktori lokal untuk pemilih folder unduhan di UI. |
+| `GET` | `/api/logs` | — | `{"log": string}` or `{"ts": string, "level": string, "message": string}[]` (if the `galleryId` query is given) | Without `galleryId`: fetches the activity log string from the `events` table. With `?galleryId=<id>&limit=<n>`: returns a JSON array of rows from the `events` table for that gallery (`[{ "ts", "level", "message" }]`). |
+| `GET` | `/api/logs/download` | — | `text/plain` (`attachment; filename="nhdl-activity-<ts>.log"`) | Downloads the activity log as a `.log` file. |
+| `GET` | `/api/fs/browse?path=<dir>` | — | `{"currentPath": string, "parentPath": string\|null, "drives": string[], "directories": {"name": string, "path": string}[]}` | Browses the local directory listing for the download folder picker in the UI. |
 
 ### 3.7. Database Management (Export, Import & Backup)
 
-| Method | Path | Body | Response (`200 OK`) | Keterangan |
+| Method | Path | Body | Response (`200 OK`) | Notes |
 |---|---|---|---|---|
-| `GET` | `/api/db/info` | — | `{"type": "sqlite" \| "postgres", "connected": boolean, "path"?: string, "host"?: string, "port"?: string, "database"?: string, "detail"?: string, "maskedUrl"?: string, "backupIntervalHours": number, "backupKeep": number, "lastBackupAt": string\|null, "backupDir": string}` | Menampilkan informasi database yang sedang aktif (jenis, status koneksi, path/host, tanpa password), konfigurasi backup terjadwal, dan path folder backup aktif. |
-| `GET` | `/api/db/export` | — | `application/json` (`attachment; filename="nhdl-export-<YYYY-MM-DD-HHmmss>.json"`) | Mengunduh seluruh database (`queue`, `library`, `settings`, `events`, `schema_version`) dalam format JSON independen basis data. |
-| `POST` | `/api/db/import` | `{"mode": "replace" \| "merge", "data": object}` | `{"success":true, "mode": "replace" \| "merge", "imported": {"queue": number, "library": number, "settings": number, "events": number}, "preImportBackup"?: string}` | Mengimpor data JSON dalam satu transaksi. Mode `replace` membuat backup otomatis `nhdl-backup-pre-import-<ts>.json` terlebih dahulu sebelum mengosongkan tabel (bila backup gagal, import dibatalkan). Mengembalikan `409 Conflict` (`{"success":false,"error":"Pause engine first","needsPause":true}`) bila `engine.isRunning` atau ada item `ON_PROGRESS`. |
-| `POST` | `/api/db/backup` | `{}` | `{"success":true, "filename": string, "size": number, "createdAt": string}` | Membuat backup instan ke folder backup aktif (`data/backups/` atau `NHDL_BACKUP_DIR`) dan memangkas retensi sesuai `backupKeep` (default 7). |
-| `GET` | `/api/db/backups` | — | `{"backups": [{"filename": string, "size": number, "createdAt": string}]}` | Mengambil daftar file backup yang tersimpan di direktori backup aktif (`data/backups/` atau `NHDL_BACKUP_DIR`). |
-| `POST` | `/api/db/restore` | `{"filename": string, "mode"?: "replace" \| "merge"}` | `{"success":true, "filename": string, "restored": object, "preImportBackup"?: string}` | Memulihkan (*restore*) isi database dari file backup lokal tertentu (default mode `replace`). Dalam mode `replace`, backup otomatis `nhdl-backup-pre-import-<ts>.json` dibuat terlebih dahulu sebelum restore dijalankan. Mengembalikan `409 Conflict` (`{"success":false,"error":"Pause engine first","needsPause":true}`) bila `engine.isRunning` atau ada item `ON_PROGRESS`. |
-| `DELETE` | `/api/db/backups/:name` | — | `{"success":true, "deleted": string}` | Menghapus file backup tertentu di folder backup aktif. |
+| `GET` | `/api/db/info` | — | `{"type": "sqlite" \| "postgres", "connected": boolean, "path"?: string, "host"?: string, "port"?: string, "database"?: string, "detail"?: string, "maskedUrl"?: string, "backupIntervalHours": number, "backupKeep": number, "lastBackupAt": string\|null, "backupDir": string}` | Shows information about the active database (type, connection status, path/host, no password), the scheduled backup configuration, and the active backup folder path. |
+| `GET` | `/api/db/export` | — | `application/json` (`attachment; filename="nhdl-export-<YYYY-MM-DD-HHmmss>.json"`) | Downloads the entire database (`queue`, `library`, `settings`, `events`, `schema_version`) as database-independent JSON. |
+| `POST` | `/api/db/import` | `{"mode": "replace" \| "merge", "data": object}` | `{"success":true, "mode": "replace" \| "merge", "imported": {"queue": number, "library": number, "settings": number, "events": number}, "preImportBackup"?: string}` | Imports JSON data in a single transaction. `replace` mode first creates an automatic backup `nhdl-backup-pre-import-<ts>.json` before emptying the tables (if the backup fails, the import is aborted). Returns `409 Conflict` (`{"success":false,"error":"Pause engine first","needsPause":true}`) if `engine.isRunning` or any item is `ON_PROGRESS`. |
+| `POST` | `/api/db/backup` | `{}` | `{"success":true, "filename": string, "size": number, "createdAt": string}` | Creates an instant backup in the active backup folder (`data/backups/` or `NHDL_BACKUP_DIR`) and prunes retention according to `backupKeep` (default 7). |
+| `GET` | `/api/db/backups` | — | `{"backups": [{"filename": string, "size": number, "createdAt": string}]}` | Fetches the list of backup files stored in the active backup directory (`data/backups/` or `NHDL_BACKUP_DIR`). |
+| `POST` | `/api/db/restore` | `{"filename": string, "mode"?: "replace" \| "merge"}` | `{"success":true, "filename": string, "restored": object, "preImportBackup"?: string}` | Restores the database contents from a specific local backup file (default mode `replace`). In `replace` mode, an automatic backup `nhdl-backup-pre-import-<ts>.json` is first created before the restore runs. Returns `409 Conflict` (`{"success":false,"error":"Pause engine first","needsPause":true}`) if `engine.isRunning` or any item is `ON_PROGRESS`. |
+| `DELETE` | `/api/db/backups/:name` | — | `{"success":true, "deleted": string}` | Deletes a specific backup file in the active backup folder. |
 

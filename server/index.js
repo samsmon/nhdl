@@ -655,7 +655,7 @@ function createRequestHandler() {
                         if (typeof apiKey === 'string') {
                             if (!apiKey.trim()) {
                                 res.writeHead(400);
-                                return res.end(JSON.stringify({ success: false, error: 'API key kosong' }));
+                                return res.end(JSON.stringify({ success: false, error: 'API key is empty' }));
                             }
                             saveEnvValue(ROOT_DIR, 'NHENTAI_API_KEY', apiKey.trim());
                             return res.end(JSON.stringify({ success: true }));
@@ -1083,7 +1083,7 @@ const server = http.createServer(createRequestHandler());
 
 if (require.main === module) {
     server.listen(PORT, '0.0.0.0', async () => {
-        console.log(`\x1b[32m[+] NHDL Web Daemon aktif pada http://0.0.0.0:${PORT}\x1b[0m`);
+        console.log(`\x1b[32m[+] NHDL Web Daemon active at http://0.0.0.0:${PORT}\x1b[0m`);
         console.log(`[+] Web UI Dashboard: http://localhost:${PORT}`);
         try {
             const dbInfo = getDbInfo();

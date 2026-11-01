@@ -2,86 +2,86 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Galeri dari site B1/B2/C dipetakan dari kategori situsnya ke tipe `comic`/`manga`/`other`, disimpan di folder per tipe, dan tipenya tampil serta bisa difilter di UI.
+**Goal:** Galleries from site B1/B2/C are mapped from their site category to the `comic`/`manga`/`other` type, stored in a per-type folder, and the type is shown and filterable in the UI.
 
-**Architecture:** Provider mengekstrak slug kategori; modul murni `core/providers/contentType.js` memetakan slug ke tipe. Engine memakai tipe untuk memilih folder (`<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`), menyimpan tipe di kolom baru `queue.category` (migrasi v4) dan di `meta` library. UI membaca `category` dari item dan menambah badge + filter "Type".
+**Architecture:** The provider extracts the category slug; the pure module `core/providers/contentType.js` maps the slug to a type. The engine uses the type to choose the folder (`<base>/<Type>/<Language>/<Author>/<Title>`), stores the type in the new `queue.category` column (migration v4) and in the library `meta`. The UI reads `category` from the item and adds a badge + "Type" filter.
 
-**Tech Stack:** Node >= 22.13 (`node:test`, `node:sqlite`), `pg`, Svelte 5 + Vite. Tanpa dependensi baru.
+**Tech Stack:** Node >= 22.13 (`node:test`, `node:sqlite`), `pg`, Svelte 5 + Vite. No new dependencies.
 
 **Spec:** `docs/superpowers/specs/2026-10-06-content-type-design.md`
 
 ## Global Constraints
 
-- Tanpa dependensi runtime baru.
-- Commit atas nama user (git config), TANPA trailer `Co-Authored-By` atau atribusi AI. Jalankan `npm test` sebelum commit; jangan commit bila gagal. Jangan `git add` `samples/` atau `webui/dist`; jangan sentuh `.gitignore`.
-- Branch `rework`. Server user di port 8080 dan folder `data/` tidak boleh disentuh oleh tes/verifikasi; pakai server sementara di port lain dengan DB di folder temp OS.
-- Setiap field/endpoint baru ditulis di `docs/API.md` dulu (Task 1).
-- Di dokumen situs ditulis generik: site A (default), site B1/B2, site C; nama asli, domain, dan prefix asli hanya di kode/tes.
-- Tipe konten: `ContentType = 'comic' | 'manga' | 'other'`; label dan nama folder `Comic`, `Manga`, `Other`.
-- Pemetaan slug (huruf kecil) → tipe: `western`, `porn-comic`, `comic` → `comic`; `manga`, `doujinshi` → `manga`; slug valid lain → `other`; kosong/tidak valid → `null`. Slug valid: `^[a-z0-9][a-z0-9-]{0,40}$`.
-- Nama folder tipe hanya dari label tetap; slug remote tidak pernah dipakai sebagai nama folder.
-- Site A tidak berubah: tanpa tipe, folder lama, `category` selalu `null`.
-- Library lama tidak dipindah otomatis.
+- No new runtime dependencies.
+- Commit under the user's name (git config), WITHOUT a `Co-Authored-By` trailer or AI attribution. Run `npm test` before committing; do not commit if it fails. Do not `git add` `samples/` or `webui/dist`; do not touch `.gitignore`.
+- Branch `rework`. The user's server on port 8080 and the `data/` folder must not be touched by tests/verification; use a temporary server on another port with the DB in an OS temp folder.
+- Every new field/endpoint is written in `docs/API.md` first (Task 1).
+- Documents write sites generically: site A (default), site B1/B2, site C; real names, domains, and prefixes only in code/tests.
+- Content type: `ContentType = 'comic' | 'manga' | 'other'`; labels and folder names `Comic`, `Manga`, `Other`.
+- Slug (lowercase) → type mapping: `western`, `porn-comic`, `comic` → `comic`; `manga`, `doujinshi` → `manga`; other valid slugs → `other`; empty/invalid → `null`. Valid slug: `^[a-z0-9][a-z0-9-]{0,40}$`.
+- The type folder name comes only from the fixed label; a remote slug is never used as a folder name.
+- Site A is unchanged: no type, old folder, `category` always `null`.
+- The existing library is not moved automatically.
 - `QueueItem.category` / `LibraryItem.category`: `"comic" | "manga" | "other" | null`.
-- Svelte 5 runes saja; id galeri di UI selalu string; UI menerima perubahan lewat SSE, tanpa polling.
+- Svelte 5 runes only; gallery ids in the UI are always strings; the UI receives changes via SSE, no polling.
 
 ## Review Focus
 
-1. Slug kategori dari remote berisi karakter aneh/panjang/path (`../x`, `a/b`, 200 karakter, kosong): tidak pernah menjadi nama folder; hasilnya `null` (layout lama) atau `other`.
-2. Halaman galeri tanpa tautan kategori atau request kategori site C gagal/403/timeout/JSON rusak: download tetap jalan tanpa tipe (layout lama), dengan peringatan di activity log; tidak melempar error.
-3. Migrasi v4 pada DB v3 berisi data: tidak ada baris hilang, idempoten bila dijalankan ulang, kolom `category` nullable; export lalu import mempertahankan `category`.
-4. Galeri yang sebagian sudah terunduh di layout lama lalu diproses ulang: tidak crash, tidak menumpuk arsip ganda di folder baru, pemeriksaan "sudah ada di library" tetap bekerja.
-5. Fallback `findExistingOnDisk` (saat 429) menemukan galeri di layout bertipe.
-6. Item tanpa `category` (site A, item lama, item yang belum diambil metadatanya) tidak menampilkan badge dan tidak masuk hitungan filter tipe.
-7. Filter tipe digabung (AND) dengan filter status, sumber, batch, dan pencarian.
+1. A remote category slug containing odd/long/path characters (`../x`, `a/b`, 200 characters, empty): never becomes a folder name; the result is `null` (old layout) or `other`.
+2. A gallery page without a category link, or a failed/403/timed-out/broken-JSON site C category request: the download still runs without a type (old layout), with a warning in the activity log; no error is thrown.
+3. Migration v4 on a v3 DB with data: no rows lost, idempotent when re-run, `category` column nullable; export then import keeps `category`.
+4. A gallery partly downloaded in the old layout and then reprocessed: no crash, no duplicate archives piling up in the new folder, the "already in library" check still works.
+5. The `findExistingOnDisk` fallback (on 429) finds the gallery in the typed layout.
+6. Items without `category` (site A, old items, items whose metadata has not been fetched) show no badge and are not counted in the type filter.
+7. The type filter is combined (AND) with the status, source, batch, and search filters.
 
 ---
 
 ## File Structure
 
-| File | Tanggung jawab |
+| File | Responsibility |
 |---|---|
-| `core/providers/contentType.js` (baru) | `mapCategoryToType`, `normalizeCategorySlug`, `typeFolderName`, `isContentType`, `TYPE_LABELS` |
-| `core/providers/boards.js`, `core/providers/slugapi.js` | Ekstraksi slug kategori → `meta.category`, `meta.contentType` (+ `meta.categoryError` untuk site C) |
-| `core/db/sqlite.js`, `core/db/postgres.js`, `core/db/common.js` | Migrasi v4, `category` di `updateQueueItem`/`formatQueueRow`/import-export |
-| `core/engine.js` | Layout folder bertipe, simpan tipe ke queue + library meta, `findExistingOnDisk` bertipe |
-| `server/index.js` | `category` di `/api/library` |
-| `webui/src/lib/contentType.js` (baru) | Helper murni tipe (badge, filter, hitung) |
-| `webui/src/lib/stores/app.svelte.js`, `VirtualQueueTable.svelte`, `SidebarFilter.svelte`, `LibraryModal.svelte` | Badge + filter "Type" |
-| `test/contentType.test.js`, `test/providerCategory.test.js`, `test/contentType.db.test.js`, `test/contentType.engine.test.js`, `test/webuiContentType.test.js` (baru) | Tes |
+| `core/providers/contentType.js` (new) | `mapCategoryToType`, `normalizeCategorySlug`, `typeFolderName`, `isContentType`, `TYPE_LABELS` |
+| `core/providers/boards.js`, `core/providers/slugapi.js` | Category slug extraction → `meta.category`, `meta.contentType` (+ `meta.categoryError` for site C) |
+| `core/db/sqlite.js`, `core/db/postgres.js`, `core/db/common.js` | Migration v4, `category` in `updateQueueItem`/`formatQueueRow`/import-export |
+| `core/engine.js` | Typed folder layout, store type in queue + library meta, typed `findExistingOnDisk` |
+| `server/index.js` | `category` in `/api/library` |
+| `webui/src/lib/contentType.js` (new) | Pure type helpers (badge, filter, count) |
+| `webui/src/lib/stores/app.svelte.js`, `VirtualQueueTable.svelte`, `SidebarFilter.svelte`, `LibraryModal.svelte` | "Type" badge + filter |
+| `test/contentType.test.js`, `test/providerCategory.test.js`, `test/contentType.db.test.js`, `test/contentType.engine.test.js`, `test/webuiContentType.test.js` (new) | Tests |
 
 ---
 
-### Task 1: Dokumentasi kontrak API (docs-first) dan koreksi spec
+### Task 1: API contract documentation (docs-first) and spec correction
 
 **Files:**
-- Modify: `docs/API.md` (bagian `QueueItem`, `LibraryItem`)
-- Modify: `docs/superpowers/specs/2026-10-06-content-type-design.md` (satu baris di bagian 8)
+- Modify: `docs/API.md` (sections `QueueItem`, `LibraryItem`)
+- Modify: `docs/superpowers/specs/2026-10-06-content-type-design.md` (one line in section 8)
 
 **Interfaces:**
-- Produces: kontrak tertulis `QueueItem.category`, `LibraryItem.category`, dipakai Task 3–5.
+- Produces: the written contract `QueueItem.category`, `LibraryItem.category`, used by Tasks 3–5.
 
-- [ ] **Step 1: Tambah `category` ke contoh `QueueItem`**
+- [ ] **Step 1: Add `category` to the `QueueItem` example**
 
-Di `docs/API.md` bagian `### QueueItem`, tambahkan `"category": null` setelah baris `"source": "default"` pada contoh JSON, dan tambahkan bullet berikut setelah bullet `source`:
-
-```markdown
-- `category`: tipe konten `"comic" | "manga" | "other" | null`. Dipetakan dari kategori di situs asal (site B1/B2/C); `null` untuk site A, item lama, dan item yang metadatanya belum diambil. Disimpan di tabel `queue` (kolom `category`) dan ikut di event SSE `item`.
-```
-
-- [ ] **Step 2: Tambah `category` ke `LibraryItem`**
-
-Di bawah tabel 3.5 (tempat catatan `LibraryItem.source` berada) tambahkan:
+In `docs/API.md` section `### QueueItem`, add `"category": null` after the `"source": "default"` line in the JSON example, and add the following bullet after the `source` bullet:
 
 ```markdown
-`LibraryItem` juga memiliki field `category` (nilai yang sama seperti `QueueItem.category`, dibaca dari `meta` library; `null` bila tidak ada).
+- `category`: content type `"comic" | "manga" | "other" | null`. Mapped from the category on the origin site (site B1/B2/C); `null` for site A, old items, and items whose metadata has not been fetched. Stored in the `queue` table (`category` column) and included in the SSE `item` event.
 ```
 
-Dan di bagian yang menjelaskan layout penyimpanan (cari dengan `grep -n "Language\|<Author>" docs/API.md docs/ARCHITECTURE.md`; bila tidak ada di API.md cukup di ARCHITECTURE pada Task 6) tidak ada perubahan lain.
+- [ ] **Step 2: Add `category` to `LibraryItem`**
 
-- [ ] **Step 3: Koreksi spec**
+Below table 3.5 (where the `LibraryItem.source` note is) add:
 
-Di spec bagian 8 ganti kalimat `tampil bila ≥ 2 tipe hadir (pola yang sama dengan bagian "Source")` dengan `tampil bila minimal 1 tipe hadir (sama seperti bagian "Source")`.
+```markdown
+`LibraryItem` also has a `category` field (the same value as `QueueItem.category`, read from the library `meta`; `null` if absent).
+```
+
+And in the section describing the storage layout (find it with `grep -n "Language\|<Author>" docs/API.md docs/ARCHITECTURE.md`; if it is not in API.md, doing it in ARCHITECTURE in Task 6 is enough) there are no other changes.
+
+- [ ] **Step 3: Correct the spec**
+
+In spec section 8 replace the sentence `shown when ≥ 2 types are present (same pattern as the "Source" section)` with `shown when at least 1 type is present (same as the "Source" section)`.
 
 - [ ] **Step 4: Commit**
 
@@ -92,11 +92,11 @@ git commit -m "docs(api): document content type category on queue and library it
 
 ---
 
-### Task 2: Modul tipe konten dan ekstraksi kategori di provider
+### Task 2: Content type module and category extraction in providers
 
 **Files:**
 - Create: `core/providers/contentType.js`
-- Modify: `core/providers/boards.js` (fungsi `parseGallery`), `core/providers/slugapi.js` (`fetchMeta`)
+- Modify: `core/providers/boards.js` (function `parseGallery`), `core/providers/slugapi.js` (`fetchMeta`)
 - Test: `test/contentType.test.js`, `test/providerCategory.test.js`
 
 **Interfaces:**
@@ -106,11 +106,11 @@ git commit -m "docs(api): document content type category on queue and library it
   - `mapCategoryToType(raw) -> 'comic' | 'manga' | 'other' | null`
   - `typeFolderName(type) -> string | null`
   - `isContentType(v) -> boolean`
-- Provider `fetchMeta` result gains `category: string | null` (slug mentah ter-normalisasi), `contentType: ContentType | null`, dan (hanya site C) `categoryError: string | null`.
+- Provider `fetchMeta` result gains `category: string | null` (normalized raw slug), `contentType: ContentType | null`, and (site C only) `categoryError: string | null`.
 
-- [ ] **Step 1: Tulis tes modul tipe yang gagal**
+- [ ] **Step 1: Write the failing type module test**
 
-Buat `test/contentType.test.js`:
+Create `test/contentType.test.js`:
 
 ```js
 const test = require('node:test');
@@ -149,12 +149,12 @@ test('typeFolderName only yields the fixed labels', () => {
 });
 ```
 
-- [ ] **Step 2: Jalankan, pastikan gagal**
+- [ ] **Step 2: Run, confirm it fails**
 
 Run: `node --test test/contentType.test.js`
 Expected: FAIL (`Cannot find module '../core/providers/contentType'`).
 
-- [ ] **Step 3: Implementasi `core/providers/contentType.js`**
+- [ ] **Step 3: Implement `core/providers/contentType.js`**
 
 ```js
 const TYPE_LABELS = { comic: 'Comic', manga: 'Manga', other: 'Other' };
@@ -189,14 +189,14 @@ function typeFolderName(type) {
 module.exports = { TYPE_LABELS, normalizeCategorySlug, mapCategoryToType, isContentType, typeFolderName };
 ```
 
-- [ ] **Step 4: Jalankan tes modul, pastikan lulus**
+- [ ] **Step 4: Run the module tests, confirm they pass**
 
 Run: `node --test test/contentType.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Tulis tes ekstraksi kategori provider yang gagal**
+- [ ] **Step 5: Write the failing provider category extraction test**
 
-Buat `test/providerCategory.test.js`:
+Create `test/providerCategory.test.js`:
 
 ```js
 const test = require('node:test');
@@ -300,14 +300,14 @@ test('slugapi: a failing, blocked, or malformed category request never fails the
 });
 ```
 
-- [ ] **Step 6: Jalankan, pastikan gagal**
+- [ ] **Step 6: Run, confirm it fails**
 
 Run: `node --test test/providerCategory.test.js`
 Expected: FAIL (`meta.category` undefined).
 
-- [ ] **Step 7: Implementasi di `core/providers/boards.js`**
+- [ ] **Step 7: Implement in `core/providers/boards.js`**
 
-Tambahkan impor di bagian atas file: `const { normalizeCategorySlug, mapCategoryToType } = require('./contentType');`. Tambahkan fungsi helper di dekat `taxonomy` (sebelum `createBoardsProvider`):
+Add the import at the top of the file: `const { normalizeCategorySlug, mapCategoryToType } = require('./contentType');`. Add a helper function near `taxonomy` (before `createBoardsProvider`):
 
 ```js
 // The gallery's own category tag link is single-quoted, like the other taxonomy links;
@@ -318,16 +318,16 @@ function categorySlug(html) {
 }
 ```
 
-Di `parseGallery`, tepat sebelum `return {`, tambahkan `const category = categorySlug(html);` dan tambahkan dua properti ke objek yang di-return (setelah `extraMeta: { tags, source: id },`):
+In `parseGallery`, right before `return {`, add `const category = categorySlug(html);` and add two properties to the returned object (after `extraMeta: { tags, source: id },`):
 
 ```js
             category,
             contentType: mapCategoryToType(category),
 ```
 
-- [ ] **Step 8: Implementasi di `core/providers/slugapi.js`**
+- [ ] **Step 8: Implement in `core/providers/slugapi.js`**
 
-Tambahkan impor: `const { normalizeCategorySlug, mapCategoryToType } = require('./contentType');`. Tambahkan helper di atas `createSlugApiProvider`:
+Add the import: `const { normalizeCategorySlug, mapCategoryToType } = require('./contentType');`. Add a helper above `createSlugApiProvider`:
 
 ```js
 // Category lives only on the detail endpoint. Any failure here is non-fatal: the gallery
@@ -347,7 +347,7 @@ async function fetchCategory(origin, slug, fetchText, headers) {
 }
 ```
 
-Di `fetchMeta`, setelah blok `images.forEach(...)` dan sebelum `const rawTitle`, tambahkan `const cat = await fetchCategory(origin, slug, fetchText, imageHeaders());` dan tambahkan ke objek yang di-return (setelah `extraMeta: {...},`):
+In `fetchMeta`, after the `images.forEach(...)` block and before `const rawTitle`, add `const cat = await fetchCategory(origin, slug, fetchText, imageHeaders());` and add to the returned object (after `extraMeta: {...},`):
 
 ```js
                 category: cat.category,
@@ -355,10 +355,10 @@ Di `fetchMeta`, setelah blok `images.forEach(...)` dan sebelum `const rawTitle`,
                 categoryError: cat.error,
 ```
 
-- [ ] **Step 9: Jalankan semua tes provider**
+- [ ] **Step 9: Run all provider tests**
 
 Run: `node --test test/contentType.test.js test/providerCategory.test.js test/providerFetch.test.js test/providers.test.js`
-Expected: PASS. Catatan: tes site C lama di `test/providerFetch.test.js` memakai stub `fetchText` yang mencatat URL terakhir (`requested = url`) lalu menegaskan URL `/images`; request kategori tambahan menimpa nilai itu. Ubah HANYA stub itu agar mencatat URL pertama (`if (!requested) requested = url;`) dan biarkan asersinya; respons stub untuk request kategori tidak berisi kategori sehingga `categoryError` terisi dan `contentType` `null`, yang memang non-fatal. Jangan melemahkan tes lain.
+Expected: PASS. Note: the old site C test in `test/providerFetch.test.js` uses a `fetchText` stub that records the last URL (`requested = url`) and then asserts the `/images` URL; the extra category request overwrites that value. Change ONLY that stub so it records the first URL (`if (!requested) requested = url;`) and leave its assertions; the stub response for the category request has no category, so `categoryError` is set and `contentType` is `null`, which is non-fatal by design. Do not weaken other tests.
 
 - [ ] **Step 10: Commit**
 
@@ -369,19 +369,19 @@ git commit -m "feat(providers): map site categories to comic/manga/other content
 
 ---
 
-### Task 3: Migrasi v4 dan kolom `category` di queue
+### Task 3: Migration v4 and the `category` column in queue
 
 **Files:**
-- Modify: `core/db/common.js` (`CURRENT_APP_SCHEMA_VERSION = 4`, `formatQueueRow`), `core/db/sqlite.js` (MIGRATIONS, `updateQueueItem`, `importData`), `core/db/postgres.js` (idem)
-- Test: `test/contentType.db.test.js`; update `test/db.test.js` (hitungan migrasi/versi skema)
+- Modify: `core/db/common.js` (`CURRENT_APP_SCHEMA_VERSION = 4`, `formatQueueRow`), `core/db/sqlite.js` (MIGRATIONS, `updateQueueItem`, `importData`), `core/db/postgres.js` (same)
+- Test: `test/contentType.db.test.js`; update `test/db.test.js` (migration count/schema version)
 
 **Interfaces:**
 - Consumes: Task 2 (`isContentType`).
-- Produces: `updateQueueItem(id, { category: 'comic'|'manga'|'other'|null })`; `formatQueueRow(row).category: string|null`; export/import mempertahankan `category`.
+- Produces: `updateQueueItem(id, { category: 'comic'|'manga'|'other'|null })`; `formatQueueRow(row).category: string|null`; export/import keeps `category`.
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/contentType.db.test.js` (pola helper sama dengan `test/multiSource.db.test.js`):
+Create `test/contentType.db.test.js` (same helper pattern as `test/multiSource.db.test.js`):
 
 ```js
 const test = require('node:test');
@@ -486,14 +486,14 @@ test('migration v4 upgrades a v3 database in place, keeps rows, and is idempoten
 });
 ```
 
-- [ ] **Step 2: Jalankan, pastikan gagal**
+- [ ] **Step 2: Run, confirm it fails**
 
 Run: `node --test test/contentType.db.test.js`
-Expected: FAIL (`category` tidak ada; versi skema 3).
+Expected: FAIL (`category` missing; schema version 3).
 
-- [ ] **Step 3: Migrasi di SQLite**
+- [ ] **Step 3: Migration in SQLite**
 
-Di `core/db/sqlite.js`, tambahkan elemen ke `MIGRATIONS` setelah versi 3:
+In `core/db/sqlite.js`, add an element to `MIGRATIONS` after version 3:
 
 ```js
     ,{
@@ -507,9 +507,9 @@ Di `core/db/sqlite.js`, tambahkan elemen ke `MIGRATIONS` setelah versi 3:
     }
 ```
 
-- [ ] **Step 4: Migrasi di PostgreSQL**
+- [ ] **Step 4: Migration in PostgreSQL**
 
-Di `core/db/postgres.js`, tambahkan elemen ke `MIGRATIONS` setelah versi 3:
+In `core/db/postgres.js`, add an element to `MIGRATIONS` after version 3:
 
 ```js
     ,{
@@ -520,23 +520,23 @@ Di `core/db/postgres.js`, tambahkan elemen ke `MIGRATIONS` setelah versi 3:
     }
 ```
 
-- [ ] **Step 5: Versi aplikasi, `formatQueueRow`, `updateQueueItem`**
+- [ ] **Step 5: App version, `formatQueueRow`, `updateQueueItem`**
 
-- `core/db/common.js`: ubah `const CURRENT_APP_SCHEMA_VERSION = 3;` menjadi `4`, dan tambahkan `category: r.category || null,` ke objek yang di-return `formatQueueRow` (setelah `format: r.format || null,`).
-- `core/db/sqlite.js` dan `core/db/postgres.js`: di objek `map` pada `updateQueueItem` tambahkan `category: 'category'` (setelah `format: 'format'`). Perhatikan: kondisi `fields[key] !== undefined` sudah membolehkan `null` untuk menghapus nilai.
+- `core/db/common.js`: change `const CURRENT_APP_SCHEMA_VERSION = 3;` to `4`, and add `category: r.category || null,` to the object returned by `formatQueueRow` (after `format: r.format || null,`).
+- `core/db/sqlite.js` and `core/db/postgres.js`: in the `map` object in `updateQueueItem` add `category: 'category'` (after `format: 'format'`). Note: the `fields[key] !== undefined` condition already allows `null` to clear the value.
 
-- [ ] **Step 6: Export/import mempertahankan `category`**
+- [ ] **Step 6: Export/import keeps `category`**
 
-Di kedua adapter, cari penyisipan queue di `importData` (`grep -n "INSERT INTO queue" core/db/sqlite.js core/db/postgres.js`). Tambahkan kolom `category` ke daftar kolom dan nilai (`const category = isContentType(r.category) ? r.category : null;` di loop yang sama; impor `isContentType` dari `../providers/contentType`), termasuk ke klausa update/`ON CONFLICT` bila ada. `exportData` memakai `SELECT *` sehingga kolom baru ikut otomatis (periksa bahwa tidak ada daftar kolom eksplisit; bila ada, tambahkan `category`).
+In both adapters, find the queue insert in `importData` (`grep -n "INSERT INTO queue" core/db/sqlite.js core/db/postgres.js`). Add the `category` column to the column list and values (`const category = isContentType(r.category) ? r.category : null;` in the same loop; import `isContentType` from `../providers/contentType`), including in the update/`ON CONFLICT` clause if there is one. `exportData` uses `SELECT *` so the new column is included automatically (check that there is no explicit column list; if there is, add `category`).
 
-- [ ] **Step 7: Perbarui tes lama yang mengasumsikan versi 3**
+- [ ] **Step 7: Update old tests that assume version 3**
 
-Jalankan `grep -n "schema_version\|getSchemaVersion\|version, 3\|=== 3\|, 3)" test/*.js` dan ubah hanya angka versi skema/hitungan migrasi yang bergantung pada jumlah migrasi (3 → 4) di `test/db.test.js` (dan tes lain bila ada). Jangan ubah asersi lain.
+Run `grep -n "schema_version\|getSchemaVersion\|version, 3\|=== 3\|, 3)" test/*.js` and change only the schema version numbers/migration counts that depend on the number of migrations (3 → 4) in `test/db.test.js` (and other tests if any). Do not change other assertions.
 
-- [ ] **Step 8: Jalankan tes**
+- [ ] **Step 8: Run the tests**
 
 Run: `node --test test/contentType.db.test.js test/db.test.js test/multiSource.db.test.js`
-Expected: PASS. Lalu `npm test` sekali (timeout besar): PASS. (Suite PostgreSQL tidak bisa dijalankan tanpa `DATABASE_URL`; cocokkan logika PG dengan SQLite dengan membaca teliti.)
+Expected: PASS. Then `npm test` once (large timeout): PASS. (The PostgreSQL suite cannot run without `DATABASE_URL`; match the PG logic to SQLite by reading carefully.)
 
 - [ ] **Step 9: Commit**
 
@@ -547,19 +547,19 @@ git commit -m "feat(db): schema v4 adds queue.category and carries it through ex
 
 ---
 
-### Task 4: Engine — folder bertipe, penyimpanan tipe, library, dan server
+### Task 4: Engine — typed folder, type storage, library, and server
 
 **Files:**
-- Modify: `core/engine.js` (impor; `findExistingOnDisk`; `processGallery`), `server/index.js` (`GET /api/library`)
+- Modify: `core/engine.js` (imports; `findExistingOnDisk`; `processGallery`), `server/index.js` (`GET /api/library`)
 - Test: `test/contentType.engine.test.js`
 
 **Interfaces:**
 - Consumes: Task 2 (`typeFolderName`, `isContentType`, `meta.contentType`, `meta.category`, `meta.categoryError`), Task 3 (`updateQueueItem(..., { category })`).
-- Produces: galeri non-default dengan tipe disimpan di `<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`; `queue.category` terisi; library `meta.contentType` + `meta.category` terisi; `/api/library` items punya `category`.
+- Produces: non-default galleries with a type are stored in `<base>/<Type>/<Language>/<Author>/<Title>`; `queue.category` is filled; library `meta.contentType` + `meta.category` are filled; `/api/library` items have `category`.
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/contentType.engine.test.js` berdasarkan pola `test/multiSource.engine.test.js` (baca file itu dulu; gunakan ulang gaya `startSite`/`setup`, tetapi salin helper yang diperlukan ke file baru agar tes mandiri):
+Create `test/contentType.engine.test.js` based on the pattern in `test/multiSource.engine.test.js` (read that file first; reuse the `startSite`/`setup` style, but copy the needed helpers into the new file so the test is self-contained):
 
 ```js
 const test = require('node:test');
@@ -690,22 +690,22 @@ test('GET /api/library item mapping exposes category from library meta', () => {
 });
 ```
 
-- [ ] **Step 2: Jalankan, pastikan gagal**
+- [ ] **Step 2: Run, confirm it fails**
 
 Run: `node --test test/contentType.engine.test.js`
-Expected: FAIL (tidak ada folder bertipe, `lib.meta.contentType` undefined, `findExistingOnDisk` tidak menemukan).
+Expected: FAIL (no typed folder, `lib.meta.contentType` undefined, `findExistingOnDisk` finds nothing).
 
-- [ ] **Step 3: Impor di `core/engine.js`**
+- [ ] **Step 3: Imports in `core/engine.js`**
 
-Setelah baris `const { PAGE_EXTS } = require('./providers/boards');` tambahkan:
+After the line `const { PAGE_EXTS } = require('./providers/boards');` add:
 
 ```js
 const { typeFolderName, isContentType, TYPE_LABELS } = require('./providers/contentType');
 ```
 
-- [ ] **Step 4: `findExistingOnDisk` menelusuri layout bertipe**
+- [ ] **Step 4: `findExistingOnDisk` walks the typed layout**
 
-Di `findExistingOnDisk(cachedTitle, cachedAuthor)` (sekarang membaca `langDirs` dari `this.baseDownloadDir`), bungkus penelusuran yang ada dalam loop atas root: root pertama `this.baseDownloadDir`, lalu tiap folder tipe yang ada (`Object.values(TYPE_LABELS)` → `path.join(this.baseDownloadDir, label)`, hanya bila direktori). Ganti semua pemakaian `this.baseDownloadDir` di dalam penelusuran bahasa/author (mis. `fs.readdirSync(this.baseDownloadDir, ...)`, `path.join(this.baseDownloadDir, langDir.name)`) dengan variabel `root`. Kerangka hasil:
+In `findExistingOnDisk(cachedTitle, cachedAuthor)` (which currently reads `langDirs` from `this.baseDownloadDir`), wrap the existing traversal in a loop over roots: the first root is `this.baseDownloadDir`, then each existing type folder (`Object.values(TYPE_LABELS)` → `path.join(this.baseDownloadDir, label)`, only if it is a directory). Replace every use of `this.baseDownloadDir` inside the language/author traversal (e.g. `fs.readdirSync(this.baseDownloadDir, ...)`, `path.join(this.baseDownloadDir, langDir.name)`) with the `root` variable. Resulting skeleton:
 
 ```js
         const roots = [this.baseDownloadDir];
@@ -718,16 +718,16 @@ Di `findExistingOnDisk(cachedTitle, cachedAuthor)` (sekarang membaca `langDirs` 
             try {
                 langDirs = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory());
             } catch (e) { continue; }
-            // ... isi loop lama, dengan `root` menggantikan `this.baseDownloadDir`
+            // ... body of the old loop, with `root` replacing `this.baseDownloadDir`
         }
         return null;
 ```
 
-Pertahankan logika pencocokan yang ada persis (cocok judul/author, arsip lalu folder). Catatan: di root dasar, folder tipe (`Comic`, `Manga`, `Other`) akan terbaca sebagai "bahasa"; itu tidak berbahaya (author dir di dalamnya tidak cocok dengan author yang dicari) dan diabaikan.
+Keep the existing matching logic exactly (match title/author, archive then folder). Note: at the base root, the type folders (`Comic`, `Manga`, `Other`) will be read as "languages"; that is harmless (the author dirs inside them do not match the author being searched) and is ignored.
 
-- [ ] **Step 5: `processGallery` — simpan tipe dan pilih folder**
+- [ ] **Step 5: `processGallery` — store the type and choose the folder**
 
-Setelah baris destrukturisasi `const { title, mediaId, numPages, pageExts, langStr, authorStr, extraMeta } = meta;` ganti `extraMeta` agar menjadi variabel turunan. Ubah baris itu menjadi:
+After the destructuring line `const { title, mediaId, numPages, pageExts, langStr, authorStr, extraMeta } = meta;` make `extraMeta` a derived variable. Change that line to:
 
 ```js
             const { title, mediaId, numPages, pageExts, langStr, authorStr } = meta;
@@ -741,13 +741,13 @@ Setelah baris destrukturisasi `const { title, mediaId, numPages, pageExts, langS
             }
 ```
 
-Setelah blok yang memanggil `updateQueueItem(galleryId, { pagesTotal: numPages })` (di dalam `if (!this.isGalleryDeleting(gid)) { ... }`) tambahkan di dalam blok yang sama:
+After the block that calls `updateQueueItem(galleryId, { pagesTotal: numPages })` (inside `if (!this.isGalleryDeleting(gid)) { ... }`) add inside the same block:
 
 ```js
                 if (contentType) await updateQueueItem(galleryId, { category: contentType });
 ```
 
-Ganti baris `const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);` dengan:
+Replace the line `const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);` with:
 
 ```js
             const typeDir = typeFolderName(contentType);
@@ -756,20 +756,20 @@ Ganti baris `const parentDir = path.join(this.baseDownloadDir, sanitizedLang, sa
                 : path.join(this.baseDownloadDir, sanitizedLang, sanitizedAuthor);
 ```
 
-(`extraMeta` yang baru dipakai oleh dua panggilan `saveToLibrary` dan oleh `tryApiArchiveDownload`; tidak perlu mengubah pemanggilnya. Library `meta` mewarisi `contentType`/`category` lewat `...extra.extraMeta` di `saveToLibrary`.)
+(The new `extraMeta` is used by the two `saveToLibrary` calls and by `tryApiArchiveDownload`; their callers need no change. The library `meta` inherits `contentType`/`category` through `...extra.extraMeta` in `saveToLibrary`.)
 
 - [ ] **Step 6: Server `/api/library`**
 
-Di `server/index.js` pada pemetaan `items` untuk `GET /api/library`, tambahkan setelah `source: sourceOf(data.gallery_id),`:
+In `server/index.js`, in the `items` mapping for `GET /api/library`, add after `source: sourceOf(data.gallery_id),`:
 
 ```js
                     category: (data.meta && data.meta.contentType) || null,
 ```
 
-- [ ] **Step 7: Jalankan tes**
+- [ ] **Step 7: Run the tests**
 
 Run: `node --test test/contentType.engine.test.js test/multiSource.engine.test.js`
-Expected: PASS. Lalu `npm test` sekali (timeout besar): PASS.
+Expected: PASS. Then `npm test` once (large timeout): PASS.
 
 - [ ] **Step 8: Commit**
 
@@ -780,25 +780,25 @@ git commit -m "feat(engine): store provider galleries under type folders and rec
 
 ---
 
-### Task 5: UI — badge dan filter tipe
+### Task 5: UI — type badge and filter
 
 **Files:**
 - Create: `webui/src/lib/contentType.js`, `test/webuiContentType.test.js`
 - Modify: `webui/src/lib/stores/app.svelte.js`, `webui/src/lib/components/VirtualQueueTable.svelte`, `SidebarFilter.svelte`, `LibraryModal.svelte`
 
 **Interfaces:**
-- Consumes: respons API `item.category` (Task 1/3/4).
-- Produces (`webui/src/lib/contentType.js`, ES module murni, tanpa rune):
+- Consumes: API response `item.category` (Tasks 1/3/4).
+- Produces (`webui/src/lib/contentType.js`, pure ES module, no runes):
   - `TYPE_ORDER = ['comic', 'manga', 'other']`
   - `typeLabel(type) -> 'Comic' | 'Manga' | 'Other' | ''`
-  - `itemType(item) -> 'comic' | 'manga' | 'other' | null` (membaca `item.category`, selain tiga nilai itu → `null`)
-  - `matchesTypeFilter(item, filter) -> boolean` (`'all'`/falsy lolos semua)
-  - `countByType(items) -> Map<string, number>` (hanya item bertipe)
-  - `typeBadgeClass(type) -> string` (kelas Tailwind inline untuk badge)
+  - `itemType(item) -> 'comic' | 'manga' | 'other' | null` (reads `item.category`; anything other than the three values → `null`)
+  - `matchesTypeFilter(item, filter) -> boolean` (`'all'`/falsy passes everything)
+  - `countByType(items) -> Map<string, number>` (typed items only)
+  - `typeBadgeClass(type) -> string` (inline Tailwind classes for the badge)
 
-- [ ] **Step 1: Tulis tes yang gagal**
+- [ ] **Step 1: Write the failing test**
 
-Buat `test/webuiContentType.test.js`:
+Create `test/webuiContentType.test.js`:
 
 ```js
 const test = require('node:test');
@@ -840,12 +840,12 @@ test('matchesTypeFilter and countByType ignore untyped items', async () => {
 });
 ```
 
-- [ ] **Step 2: Jalankan, pastikan gagal**
+- [ ] **Step 2: Run, confirm it fails**
 
 Run: `node --test test/webuiContentType.test.js`
-Expected: FAIL (modul tidak ada).
+Expected: FAIL (module does not exist).
 
-- [ ] **Step 3: Implementasi `webui/src/lib/contentType.js`**
+- [ ] **Step 3: Implement `webui/src/lib/contentType.js`**
 
 ```js
 // Pure helpers for the content type (comic / manga / other) shown in the queue and library.
@@ -887,14 +887,14 @@ export function typeBadgeClass(type) {
 }
 ```
 
-- [ ] **Step 4: Jalankan tes helper**
+- [ ] **Step 4: Run the helper tests**
 
 Run: `node --test test/webuiContentType.test.js`
 Expected: PASS.
 
 - [ ] **Step 5: Store**
 
-Di `webui/src/lib/stores/app.svelte.js`: tambahkan impor `import { TYPE_ORDER, matchesTypeFilter, countByType } from '../contentType.js';`. Tambahkan state di dekat `sourceFilter`: `typeFilter = $state('all'); // 'all' | 'comic' | 'manga' | 'other'` dan method di dekat `setSourceFilter`:
+In `webui/src/lib/stores/app.svelte.js`: add the import `import { TYPE_ORDER, matchesTypeFilter, countByType } from '../contentType.js';`. Add state near `sourceFilter`: `typeFilter = $state('all'); // 'all' | 'comic' | 'manga' | 'other'` and a method near `setSourceFilter`:
 
 ```js
   setTypeFilter(id) {
@@ -902,33 +902,33 @@ Di `webui/src/lib/stores/app.svelte.js`: tambahkan impor `import { TYPE_ORDER, m
   }
 ```
 
-Di `filterCounts` (tempat `sources` dihitung) tambahkan sebelum `return`: `const typeCounts = countByType(this.items);` dan ke objek yang di-return tambahkan:
+In `filterCounts` (where `sources` is computed) add before `return`: `const typeCounts = countByType(this.items);` and add to the returned object:
 
 ```js
       types: TYPE_ORDER.filter((id) => typeCounts.has(id)).map((id) => ({ id, count: typeCounts.get(id) }))
 ```
 
-Di `filteredAndSortedItems`, di samping pembacaan `const srcf = this.sourceFilter;` tambahkan `const tf = this.typeFilter;` dan setelah baris `if (!matchesSourceFilter(item, srcf)) continue;` tambahkan `if (!matchesTypeFilter(item, tf)) continue;`.
+In `filteredAndSortedItems`, next to the `const srcf = this.sourceFilter;` read, add `const tf = this.typeFilter;` and after the line `if (!matchesSourceFilter(item, srcf)) continue;` add `if (!matchesTypeFilter(item, tf)) continue;`.
 
-- [ ] **Step 6: Badge di `VirtualQueueTable.svelte`**
+- [ ] **Step 6: Badge in `VirtualQueueTable.svelte`**
 
-Impor `import { itemType, typeLabel, typeBadgeClass } from '../contentType.js';`. Di blok `{#each visibleRows ...}` tambahkan `{@const ctype = itemType(item)}` di samping `{@const src = ...}`. Tepat setelah badge sumber (baik di sel judul mobile maupun desktop; keduanya sudah memiliki `<span ...>{sourceLabel(...)}</span>` tanpa kondisi), tambahkan:
+Import `import { itemType, typeLabel, typeBadgeClass } from '../contentType.js';`. In the `{#each visibleRows ...}` block add `{@const ctype = itemType(item)}` next to `{@const src = ...}`. Right after the source badge (in both the mobile and desktop title cells; both already have an unconditional `<span ...>{sourceLabel(...)}</span>`), add:
 
 ```svelte
 {#if ctype}<span class="inline-block align-middle leading-none px-1 py-0.5 rounded text-[9px] font-mono uppercase mr-1 {typeBadgeClass(ctype)}" title="Type: {typeLabel(ctype)}">{typeLabel(ctype)}</span>{/if}
 ```
 
-Jangan ubah `ROW_HEIGHT`, grid, atau konstanta virtualisasi.
+Do not change `ROW_HEIGHT`, the grid, or the virtualization constants.
 
-- [ ] **Step 7: Filter "Type" di `SidebarFilter.svelte`**
+- [ ] **Step 7: "Type" filter in `SidebarFilter.svelte`**
 
-Impor `import { typeLabel } from '../contentType.js';` dan tambahkan di `<script>`:
+Import `import { typeLabel } from '../contentType.js';` and add in `<script>`:
 
 ```js
   const typeItems = $derived(counts.types.map((t) => ({ ...t, label: typeLabel(t.id) })));
 ```
 
-Tepat setelah blok `{#if sourceItems.length > 0} ... {/if}` (bagian Source), tambahkan blok serupa:
+Right after the `{#if sourceItems.length > 0} ... {/if}` block (the Source section), add a similar block:
 
 ```svelte
   {#if typeItems.length > 0}
@@ -955,7 +955,7 @@ Tepat setelah blok `{#if sourceItems.length > 0} ... {/if}` (bagian Source), tam
 
 - [ ] **Step 8: Library Manager**
 
-Di `LibraryModal.svelte`: impor `import { itemType, typeLabel, typeBadgeClass } from '../contentType.js';`, tambah state `let libraryType = $state('all');`, tambahkan di predikat `filteredLibrary` (setelah pemeriksaan sumber) `if (libraryType !== 'all' && itemType(item) !== libraryType) return false;`, tambahkan `let libraryTypeOptions = $derived(['comic', 'manga', 'other'].filter(t => libraryItems.some(i => itemType(i) === t)));`, dan tepat setelah `<select>` sumber tambahkan:
+In `LibraryModal.svelte`: import `import { itemType, typeLabel, typeBadgeClass } from '../contentType.js';`, add state `let libraryType = $state('all');`, add to the `filteredLibrary` predicate (after the source check) `if (libraryType !== 'all' && itemType(item) !== libraryType) return false;`, add `let libraryTypeOptions = $derived(['comic', 'manga', 'other'].filter(t => libraryItems.some(i => itemType(i) === t)));`, and right after the source `<select>` add:
 
 ```svelte
           {#if libraryTypeOptions.length > 0}
@@ -968,12 +968,12 @@ Di `LibraryModal.svelte`: impor `import { itemType, typeLabel, typeBadgeClass } 
           {/if}
 ```
 
-Dan di baris judul, tepat setelah badge sumber, tambahkan `{#if itemType(item)}<span class="px-1 py-0.5 rounded text-[9px] font-mono uppercase shrink-0 {typeBadgeClass(itemType(item))}">{typeLabel(itemType(item))}</span>{/if}`.
+And in the title row, right after the source badge, add `{#if itemType(item)}<span class="px-1 py-0.5 rounded text-[9px] font-mono uppercase shrink-0 {typeBadgeClass(itemType(item))}">{typeLabel(itemType(item))}</span>{/if}`.
 
-- [ ] **Step 9: Build dan tes**
+- [ ] **Step 9: Build and test**
 
-Run: `node --test test/webuiContentType.test.js test/webuiSources.test.js test/webuiQueueView.test.js`, lalu `npm --prefix webui run build` (tanpa peringatan Svelte), lalu `npm test` sekali (timeout besar).
-Expected: semua PASS.
+Run: `node --test test/webuiContentType.test.js test/webuiSources.test.js test/webuiQueueView.test.js`, then `npm --prefix webui run build` (no Svelte warnings), then `npm test` once (large timeout).
+Expected: all PASS.
 
 - [ ] **Step 10: Commit**
 
@@ -984,17 +984,17 @@ git commit -m "feat(ui): show content type badge and add a Type filter to the qu
 
 ---
 
-### Task 6: Verifikasi kategori nyata, dokumentasi, dan penutup
+### Task 6: Real category verification, documentation, and wrap-up
 
 **Files:**
-- Modify: `docs/ARCHITECTURE.md`, `docs/CHANGELOG.md`, `docs/PLAN.md`, `docs/AI_AGENT.md` (hanya bila ada pernyataan yang menjadi keliru)
+- Modify: `docs/ARCHITECTURE.md`, `docs/CHANGELOG.md`, `docs/PLAN.md`, `docs/AI_AGENT.md` (only if a statement becomes wrong)
 
 **Interfaces:**
-- Consumes: semua task sebelumnya.
+- Consumes: all previous tasks.
 
-- [ ] **Step 1: Cek kategori nyata (hanya metadata, tanpa mengunduh halaman)**
+- [ ] **Step 1: Check real categories (metadata only, without downloading pages)**
 
-Tulis skrip sekali pakai di folder temp OS (BUKAN di repo) yang memanggil `fetchMeta` provider asli memakai transport yang sama dengan engine, lalu cetak `category`, `contentType`, `categoryError`, `numPages`:
+Write a throwaway script in the OS temp folder (NOT in the repo) that calls the real providers' `fetchMeta` using the same transport as the engine, then prints `category`, `contentType`, `categoryError`, `numPages`:
 
 ```js
 // run from the repo root: node <temp>/probe-category.js
@@ -1016,19 +1016,19 @@ const urls = [
 })().catch(e => { console.error(e); process.exit(1); });
 ```
 
-Gunakan jalur absolut repo pada `require`. Perkiraan yang masuk akal: site B2 `western` → `comic`; site C `porn-comic` → `comic`; site B1 sesuai tautan kategori di halamannya (mis. `manga` → `manga`). Laporkan hasil apa adanya; bila ada yang `null`, selidiki markup/response sebenarnya (jangan menebak) dan laporkan sebagai BLOCKED/DONE_WITH_CONCERNS beserta buktinya. Jangan menjalankan server pengguna di port 8080 dan jangan menulis ke `data/`.
+Use absolute repo paths in `require`. Reasonable expectations: site B2 `western` → `comic`; site C `porn-comic` → `comic`; site B1 per the category link on its page (e.g. `manga` → `manga`). Report the results as they are; if any is `null`, investigate the actual markup/response (do not guess) and report it as BLOCKED/DONE_WITH_CONCERNS with the evidence. Do not run the user's server on port 8080 and do not write to `data/`.
 
-- [ ] **Step 2: Dokumentasi (nama generik saja)**
+- [ ] **Step 2: Documentation (generic names only)**
 
-- `docs/ARCHITECTURE.md`: tambahkan `core/providers/contentType.js` dan penjelasan tipe konten (pemetaan slug → tipe, layout folder `<base>/<Tipe>/<Bahasa>/<Author>/<Judul>`, site A tidak berubah, kolom `queue.category`, `meta.contentType` di library, `findExistingOnDisk` bertipe, skema v4).
-- `docs/CHANGELOG.md`: entri teratas baru, aktor `AI (Claude Code, Sonnet 5.5)`, ringkas fitur dan hasil verifikasi (jangan menambah entri "Manual (...)").
-- `docs/PLAN.md`: tambahkan kelompok tugas "Content type" dengan `[x]` dan baris Log.
-- `docs/AI_AGENT.md`: periksa dengan `grep -n "Language\|Author\|folder" docs/AI_AGENT.md`; perbarui hanya bila ada pernyataan layout folder yang menjadi keliru.
-- Grep baris yang ditambahkan di `docs/` (selain `docs/superpowers/`) untuk nama/domain/prefix asli: harus nol hasil.
+- `docs/ARCHITECTURE.md`: add `core/providers/contentType.js` and an explanation of the content type (slug → type mapping, folder layout `<base>/<Type>/<Language>/<Author>/<Title>`, site A unchanged, the `queue.category` column, `meta.contentType` in the library, typed `findExistingOnDisk`, schema v4).
+- `docs/CHANGELOG.md`: new top entry, actor `AI (Claude Code, Sonnet 5.5)`, summarize the feature and verification results (do not add a "Manual (...)" entry).
+- `docs/PLAN.md`: add a "Content type" task group with `[x]` and a Log line.
+- `docs/AI_AGENT.md`: check with `grep -n "Language\|Author\|folder" docs/AI_AGENT.md`; update only if a folder layout statement becomes wrong.
+- Grep the lines added in `docs/` (other than `docs/superpowers/`) for real names/domains/prefixes: there must be zero results.
 
-- [ ] **Step 3: Jalankan seluruh suite dan commit**
+- [ ] **Step 3: Run the whole suite and commit**
 
-Run: `npm test` (timeout besar). Expected: PASS.
+Run: `npm test` (large timeout). Expected: PASS.
 
 ```bash
 git add docs

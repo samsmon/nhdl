@@ -8,7 +8,7 @@ if not exist "node_modules\pg" (
 )
 
 if not exist "webui\dist\index.html" (
-    echo Web UI belum di-build, menjalankan build...
+    echo Web UI is not built yet, running build...
     if not exist "webui\node_modules" call npm --prefix webui install || goto :fail
     call npm run build:ui || goto :fail
 )
@@ -18,6 +18,6 @@ node server/index.js
 goto :eof
 
 :fail
-echo Instalasi atau build gagal. Periksa pesan error di atas.
+echo Install or build failed. Check the error messages above.
 pause
 exit /b 1

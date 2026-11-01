@@ -1,23 +1,23 @@
-# NHDL — aturan untuk semua AI agent (Claude Code, Antigravity/Gemini, dll.)
+# NHDL: rules for all AI agents (Claude Code, Antigravity/Gemini, etc.)
 
-## Dokumentasi & pencatatan
-- Panduan mengoperasikan aplikasi (deploy, manage, modify, maintain, troubleshooting, dan hal yang dilarang untuk agent) ada di `docs/AI_AGENT.md`. File ini (AGENTS.md) khusus aturan saat mengembangkan repo.
-- Peta arsitektur lengkap, struktur modul, format data, event engine, dan kontrak API ada di `docs/ARCHITECTURE.md` — baca file tersebut terlebih dahulu di sesi baru agar tidak perlu membaca ulang seluruh source code dari awal.
-- Rencana rework dan status task ada di `docs/PLAN.md`. Perbarui checklist (`[ ]`/`[~]`/`[x]`) dan tabel Log setiap menyelesaikan task.
-- Catat setiap perubahan di `docs/CHANGELOG.md` (entri terbaru di atas, aktor `AI (<agent/model>)`, mis. `AI (Antigravity, Gemini 3.8 Flash High)`).
-- Kalau menemukan perubahan manual dari user yang belum tercatat (lihat `git log`), tambahkan entri dengan aktor `Manual (<nama>)`.
-- Di dokumentasi, sebut situs targetnya "certain site ( ͡° ͜ʖ ͡°)" dan domain contohnya `certain.site`. Nama asli hanya boleh ada di kode.
+## Documentation & record keeping
+- The guide for operating the app (deploy, manage, modify, maintain, troubleshooting, and what agents must not do) is in `docs/AI_AGENT.md`. This file (AGENTS.md) only covers the rules for developing the repo.
+- The full architecture map, module structure, data formats, engine events, and API contract are in `docs/ARCHITECTURE.md`. Read that file first in a new session so you do not need to re-read all the source code from scratch.
+- The rework plan and task status are in `docs/PLAN.md`. Update the checklist (`[ ]`/`[~]`/`[x]`) and the Log table whenever a task is finished.
+- Record every change in `docs/CHANGELOG.md` (newest entry on top, actor `AI (<agent/model>)`, e.g. `AI (Antigravity, Gemini 3.8 Flash High)`).
+- If you find manual changes by the user that are not yet recorded (see `git log`), add an entry with the actor `Manual (<name>)`.
+- In documentation, call the target site "certain site ( ͡° ͜ʖ ͡°)" and use `certain.site` as the example domain. The real name may only appear in code.
 
 ## Git
-- Commit dan push **wajib atas nama user** (identitas dari `git config user.name` / `user.email`). Jangan ubah identitas git, jangan pakai author lain, dan jangan tambahkan trailer `Co-Authored-By` atau atribusi AI apa pun di pesan commit maupun deskripsi PR.
-- Pekerjaan rework (Fase 1 dst.) dilakukan di branch `rework`. `main` hanya menerima perubahan yang sudah stabil.
-- Jalankan `npm test` sebelum commit (setelah test tersedia di Fase 1). Jangan commit kalau test gagal.
+- Commits and pushes **must be made as the user** (identity from `git config user.name` / `user.email`). Do not change the git identity, do not use another author, and do not add a `Co-Authored-By` trailer or any AI attribution to commit messages or PR descriptions.
+- Rework (Phase 1 onward) happens on the `rework` branch. `main` only accepts changes that are already stable.
+- Run `npm test` before committing (once tests exist in Phase 1). Do not commit if tests fail.
 
-## Arsitektur
-- Tidak ada CLI; satu-satunya entry point adalah `server/index.js`.
-- Semua state (antrian, library, config, log) ada di database lewat `core/db.js` (async): SQLite `data/nhdl.db` secara default, atau PostgreSQL kalau `DATABASE_URL` diisi. Jangan menyimpan state di file teks/JSON baru. Pengecualian: secret tetap di `.env`.
-- Pola untuk setiap fitur baru (mis. Pause/Resume per item):
-  1. State disimpan di tabel DB. Kolom/tabel baru lewat migrasi skema di **kedua** adapter (`core/db/sqlite.js` dan `core/db/postgres.js`), lalu diekspos lewat `core/db.js`.
-  2. Perubahan dilakukan lewat endpoint REST yang tercatat di `docs/API.md`.
-  3. UI menerima perubahan lewat event SSE (`/api/events`), **bukan** polling.
-- Setiap endpoint atau event baru wajib ditambahkan ke `docs/API.md` dulu, baru diimplementasikan.
+## Architecture
+- There is no CLI; the only entry point is `server/index.js`.
+- All state (queue, library, config, logs) lives in the database through `core/db.js` (async): SQLite `data/nhdl.db` by default, or PostgreSQL when `DATABASE_URL` is set. Do not store state in new text/JSON files. Exception: secrets stay in `.env`.
+- Pattern for every new feature (e.g. per-item Pause/Resume):
+  1. State is stored in a DB table. New columns/tables go through schema migrations in **both** adapters (`core/db/sqlite.js` and `core/db/postgres.js`), then are exposed through `core/db.js`.
+  2. Changes are made through REST endpoints documented in `docs/API.md`.
+  3. The UI receives changes through SSE events (`/api/events`), **not** polling.
+- Every new endpoint or event must be added to `docs/API.md` first, then implemented.

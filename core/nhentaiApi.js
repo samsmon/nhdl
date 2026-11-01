@@ -29,13 +29,13 @@ const CURL_EXTRA_FLAGS = process.platform === 'win32' ? '--ssl-no-revoke' : '';
 // lines say "connection timed out" instead of dumping the whole failed command (which,
 // for the download endpoints, includes a multi-KB presigned URL with base64 metadata).
 const CURL_EXIT_REASONS = {
-    6: 'gagal resolve host',
-    7: 'gagal connect',
+    6: 'failed to resolve host',
+    7: 'failed to connect',
     18: 'transfer terputus di tengah',
     28: 'timeout (koneksi macet)',
-    35: 'SSL handshake gagal',
-    52: 'server balikin response kosong',
-    56: 'koneksi putus saat baca data'
+    35: 'SSL handshake failed',
+    52: 'server returned an empty response',
+    56: 'connection dropped while reading data'
 };
 
 // Turns a child_process exec() error into a short, log-safe reason — never echoes the
@@ -52,7 +52,7 @@ function cleanExecError(e) {
 // 200 (with the account profile) on a good one, so it's the cheapest possible check.
 async function verifyApiKey(apiKey) {
     if (!apiKey || typeof apiKey !== 'string' || !apiKey.trim()) {
-        return { valid: false, error: 'API key kosong' };
+        return { valid: false, error: 'API key is empty' };
     }
 
     const curlCmd = `${CURL_BIN} -skL ${CURL_EXTRA_FLAGS} -o NUL -w "%{http_code}" --resolve nhentai.net:443:${NHENTAI_MAIN_IP} -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" -H "Authorization: Key ${apiKey.trim()}" https://nhentai.net/api/v2/user`;
@@ -63,10 +63,10 @@ async function verifyApiKey(apiKey) {
         const status = stdout.trim();
         if (status === '200') return { valid: true };
         if (status === '401') return { valid: false, error: 'API key ditolak (401 Unauthorized)' };
-        if (status === '429') return { valid: false, error: 'Kena rate limit (429), coba lagi nanti' };
+        if (status === '429') return { valid: false, error: 'Rate limited (429), try again later' };
         return { valid: false, error: `Response tak terduga (HTTP ${status || 'unknown'})` };
     } catch (e) {
-        return { valid: false, error: `Gagal menghubungi nhentai: ${cleanExecError(e)}` };
+        return { valid: false, error: `Failed to contact nhentai: ${cleanExecError(e)}` };
     }
 }
 
@@ -87,9 +87,9 @@ async function fetchGalleryMetadata(galleryId, apiKey) {
         if (parsed && parsed.id && Array.isArray(parsed.pages)) {
             return { success: true, data: parsed };
         }
-        return { success: false, reason: parsed.error || 'Response tidak punya field id/pages', notFound: /not.?found/i.test(parsed.error || '') };
+        return { success: false, reason: parsed.error || 'Response has no id/pages field', notFound: /not.?found/i.test(parsed.error || '') };
     } catch (e) {
-        return { success: false, reason: `Gagal request metadata: ${cleanExecError(e)}` };
+        return { success: false, reason: `Failed to request metadata: ${cleanExecError(e)}` };
     }
 }
 
@@ -111,9 +111,9 @@ async function requestDownloadUrl(galleryId, format, apiKey) {
         if (parsed && parsed.url && parsed.expires_at) {
             return { success: true, url: parsed.url, expiresAt: parsed.expires_at };
         }
-        return { success: false, reason: parsed.error || 'Response tidak punya field url/expires_at' };
+        return { success: false, reason: parsed.error || 'Response has no url/expires_at field' };
     } catch (e) {
-        return { success: false, reason: `Gagal request download URL: ${cleanExecError(e)}` };
+        return { success: false, reason: `Failed to request download URL: ${cleanExecError(e)}` };
     }
 }
 
@@ -168,14 +168,14 @@ async function downloadArchiveFile(url, destPath, attempts = 3) {
             if (status !== '200') {
                 lastReason = `Server balikin HTTP ${status || 'unknown'} (bukan file archive)`;
             } else if (!fs.existsSync(destPath) || fs.statSync(destPath).size === 0) {
-                lastReason = 'File hasil download kosong/gagal ditulis';
+                lastReason = 'Downloaded file is empty/failed to write';
             } else if (!isZipFile(destPath)) {
-                lastReason = 'File hasil download bukan zip (kemungkinan halaman HTML/challenge)';
+                lastReason = 'Downloaded file is not a zip (likely an HTML/challenge page)';
             } else {
                 return { success: true };
             }
         } catch (e) {
-            lastReason = `Gagal download archive: ${cleanExecError(e)}`;
+            lastReason = `Failed to download archive: ${cleanExecError(e)}`;
         }
         if (fs.existsSync(destPath)) { try { fs.unlinkSync(destPath); } catch (e2) {} }
         if (attempt < attempts) await new Promise(r => setTimeout(r, 1000 * attempt));

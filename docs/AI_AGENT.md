@@ -79,7 +79,7 @@ curl -s http://localhost:8080/api/status | head -c 300
 Expected:
 - `/api/db/info` returns JSON with `"type":"sqlite"` or `"type":"postgres"` and `"connected":true`. Postgres credentials are masked.
 - `/api/status` returns JSON with `items`, `engineStatus` (e.g. `"IDLE"`), and `batchCount`.
-- The startup log contains `NHDL Web Daemon aktif pada http://0.0.0.0:<PORT>` and `Database: SQLite (...)` or the Postgres equivalent.
+- The startup log contains `NHDL Web Daemon active at http://0.0.0.0:<PORT>` and `Database: SQLite (...)` or the Postgres equivalent.
 
 If `NHDL_PASSWORD` is set, `/api/*` returns `401 {"error":"Unauthorized"}` until you log in (next section).
 

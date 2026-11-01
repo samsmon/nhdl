@@ -1,127 +1,127 @@
 # Multi-source download (provider layer) — Design
 
-Status: disetujui di chat (2026-10-06), menunggu review spec tertulis.
+Status: approved in chat (2026-10-06), awaiting written spec review.
 Branch: `rework`.
 
-> Aturan dokumentasi repo: nama situs asli hanya boleh ada di kode. Di dokumen ini situs ditulis generik:
-> **site A** (default, sudah ada), **site B1/B2** (dua domain, platform sama, ID angka), **site C** (ID berupa slug, punya API JSON).
-> Domain dan prefix asli didefinisikan sebagai konstanta di `core/providers/*.js`.
+> Repo documentation rule: real site names may exist only in code. In this document sites are written generically:
+> **site A** (default, already exists), **site B1/B2** (two domains, same platform, numeric ID), **site C** (slug ID, has a JSON API).
+> Real domains and prefixes are defined as constants in `core/providers/*.js`.
 
-## 1. Tujuan
+## 1. Goal
 
-Pengguna menempelkan URL dari site B1, B2, atau C ke antrean. Galeri didownload dan masuk library seperti galeri site A.
+The user pastes a URL from site B1, B2, or C into the queue. The gallery is downloaded and added to the library like a site A gallery.
 
 Success criteria:
-- URL dari B1, B2, dan C diterima oleh `POST /api/queue`, didownload, dan masuk library.
-- Format keluaran (`folder`/`cbz`/`zip`), batch, pause/resume/retry, dan SSE tidak berubah.
-- Data lama (antrean, library, marker `.nhdl-id`, export) tetap valid tanpa penulisan ulang.
-- Tes lokal (SQLite) lolos, dan tes langsung dengan tiga URL contoh menghasilkan jumlah halaman yang sama dengan yang diumumkan situs.
+- URLs from B1, B2, and C are accepted by `POST /api/queue`, downloaded, and added to the library.
+- Output format (`folder`/`cbz`/`zip`), batch, pause/resume/retry, and SSE are unchanged.
+- Old data (queue, library, `.nhdl-id` markers, exports) stays valid without rewriting.
+- Local tests (SQLite) pass, and a live test with three sample URLs produces the same page count as the one announced by the site.
 
-Di luar lingkup: pencarian, login, situs lain, filter otomatis halaman non-komik.
+Out of scope: search, login, other sites, automatic filtering of non-comic pages.
 
-## 2. Temuan riset (sampel diunduh manual, tanpa kode nhdl)
+## 2. Research findings (samples downloaded manually, without nhdl code)
 
-| Situs | URL galeri | Daftar gambar | Pola gambar |
+| Site | Gallery URL | Image list | Image pattern |
 |---|---|---|---|
-| B1 | `/g/<id>/` | Input hidden di HTML: `load_server`, `load_dir`, `load_id`, `load_pages`, `gallery_id` | `https://i{server}.<cdn-b1>/{dir}/{id}/{n}.{ext}` |
-| B2 | `/gallery/<id>/` | Struktur HTML sama dengan B1 | `https://m{server}.<domain-b2>/{dir}/{id}/{n}.{ext}` |
-| C | `/<lang>/comic/<slug>` | `GET /api/comics/<slug>/images` → `images[]` berisi `page`, `source_url` | `https://<cdn-c>/.../images/<comic_id>/<n>.webp` |
+| B1 | `/g/<id>/` | Hidden inputs in the HTML: `load_server`, `load_dir`, `load_id`, `load_pages`, `gallery_id` | `https://i{server}.<cdn-b1>/{dir}/{id}/{n}.{ext}` |
+| B2 | `/gallery/<id>/` | Same HTML structure as B1 | `https://m{server}.<domain-b2>/{dir}/{id}/{n}.{ext}` |
+| C | `/<lang>/comic/<slug>` | `GET /api/comics/<slug>/images` → `images[]` containing `page`, `source_url` | `https://<cdn-c>/.../images/<comic_id>/<n>.webp` |
 
-Fakta yang memengaruhi desain:
-- Ekstensi gambar campur per halaman di B1 (webp dan jpg). Halaman 404 pada ekstensi salah mengembalikan HTML kecil (162 byte), jadi harus dicek kode status dan signature.
-- Semua gambar hanya butuh header `Referer` situsnya. Tidak ada login atau tantangan Cloudflare yang terlihat.
-- Jumlah halaman yang diumumkan bisa tidak sama dengan isi nyata: B1 halaman terakhir (240) berukuran 1280×173 (kemungkinan banner); C mengembalikan 17 gambar untuk "16 halaman" dengan gambar ke-17 berformat JPEG. Perilaku awal: **download semua yang diumumkan, tanpa membuang apa pun**.
-- Dari jaringan yang DNS-nya memblokir domain ini, akses harus lewat DNS/VPN yang tidak terblokir. Kode tidak boleh mengakali blokir DNS.
+Facts that affect the design:
+- Image extensions are mixed per page on B1 (webp and jpg). A 404 on the wrong extension returns a small HTML (162 bytes), so the status code and signature must be checked.
+- All images only need the site's `Referer` header. No login or Cloudflare challenge was seen.
+- The announced page count may not match the real content: B1's last page (240) is 1280×173 (probably a banner); C returns 17 images for "16 pages" with the 17th image in JPEG format. Initial behavior: **download everything announced, without discarding anything**.
+- From a network whose DNS blocks these domains, access must go through a DNS/VPN that is not blocked. The code must not work around DNS blocking.
 
-## 3. Arsitektur
+## 3. Architecture
 
-### 3.1 Antarmuka provider (`core/providers/`)
+### 3.1 Provider interface (`core/providers/`)
 
 ```
-match(input)              -> { key, provider } | null     // input: URL atau ID mentah
+match(input)              -> { key, provider } | null     // input: URL or raw ID
 fetchGallery(key, ctx)    -> { title, author, lang, tags, numFavorites, uploadDate,
                                pages: [{ n, urls: [candidateUrl, ...] }] }
 headers()                 -> { Referer, 'User-Agent' }
 ```
 
-- `index.js`: daftar provider dan fungsi `resolve(input)`. ID polos (angka) tanpa prefix diarahkan ke provider default.
-- `default.js` (site A): membungkus kode yang sudah ada (`nhentaiApi.js`, `fetchMetadata`, CDN pinned) tanpa mengubah perilakunya.
-- `boards.js` (B1 dan B2): satu implementasi, dua konfigurasi domain. Parse input hidden dari HTML. Untuk tiap halaman, `urls` berisi kandidat `webp, jpg, png, gif`.
-- `slugapi.js` (C): panggil API JSON, urutkan `images` menurut `page`, `urls` berisi satu `source_url` per halaman.
+- `index.js`: the provider list and the `resolve(input)` function. A plain ID (number) without a prefix is routed to the default provider.
+- `default.js` (site A): wraps the existing code (`nhentaiApi.js`, `fetchMetadata`, pinned CDN) without changing its behavior.
+- `boards.js` (B1 and B2): one implementation, two domain configurations. Parses the hidden inputs from the HTML. For each page, `urls` holds the candidates `webp, jpg, png, gif`.
+- `slugapi.js` (C): calls the JSON API, sorts `images` by `page`, `urls` holds one `source_url` per page.
 
-### 3.2 Perubahan di engine
-`processGallery` memanggil `providers.resolve(key)` lalu memakai `fetchGallery` dan `headers()` dari provider tersebut. Yang tidak berubah: cek library, retry 429, circuit breaker, placeholder PNG, verifikasi gambar, kompres CBZ, event SSE. Untuk site A, jalur API-archive (`tryApiArchiveDownload`) tetap khusus provider default.
+### 3.2 Engine changes
+`processGallery` calls `providers.resolve(key)` then uses that provider's `fetchGallery` and `headers()`. Unchanged: library check, 429 retry, circuit breaker, PNG placeholder, image verification, CBZ compression, SSE events. For site A, the API-archive path (`tryApiArchiveDownload`) stays specific to the default provider.
 
-Download per halaman: coba kandidat `urls` berurutan sampai ada yang berstatus 200 dan lolos `verifyImage`; ekstensi yang menang disimpan di `pageExts`.
+Per-page download: try the `urls` candidates in order until one returns 200 and passes `verifyImage`; the winning extension is saved in `pageExts`.
 
-## 4. Kunci ID
+## 4. ID key
 
-`gallery_id` menjadi **TEXT**.
+`gallery_id` becomes **TEXT**.
 
-| Sumber | Bentuk kunci | Contoh (generik) |
+| Source | Key form | Example (generic) |
 |---|---|---|
-| Site A (default) | angka polos, tanpa prefix | `468614` |
+| Site A (default) | plain number, no prefix | `468614` |
 | Site B1 | `<prefix-b1>:<id>` | `b1:539224` |
 | Site B2 | `<prefix-b2>:<id>` | `b2:817456` |
 | Site C | `<prefix-c>:<slug>` | `c1:some-slug` |
 
-- ID lama tanpa prefix berarti site A, jadi marker `.nhdl-id`, library, dan antrean lama tidak perlu ditulis ulang.
-- Nilai prefix saat ini diusulkan `xxx`, `rox`, `com` (konstanta di kode, mudah diganti).
-- `normalizeGalleryId` dan `isValidGalleryId` (`core/db/common.js`) menerima angka polos atau `prefix:isi` dan mengembalikan string kanonik. Angka polos tetap divalidasi sebagai bilangan bulat positif.
-- Semua tempat yang membandingkan atau menyaring `Number(gallery_id)` / `parseInt(id)` diganti perbandingan string: `core/db/sqlite.js` dan `core/db/postgres.js` (reorder prioritas, import replace, bulk pause/resume/delete, `logEvent`), `core/engine.js` (flag stop/hapus galeri), `core/tracker.js` (baca marker di `rescanLibrary`), `server/index.js` (`activeGalleryId`), dan `webui` (`rankById`, parser URL).
-- Respons API memakai `toPublicId`: `galleryId` bertipe number untuk kunci angka polos (site A, kompatibel dengan klien lama) dan string untuk kunci berprefix. Baris mentah dari DB mengikuti aturan yang sama.
-- Nama folder tidak pernah memakai kunci mentah (karakter `:` tidak valid di Windows); fallback memakai `safeKeyName`.
-- Marker `.nhdl-id` dan `<archive>.nhdl-id` menyimpan string kunci apa adanya. `rescanLibrary` berhenti memakai `parseInt` untuk membaca isinya.
-- Nama file/folder keluaran tidak memuat kunci mentah, jadi tidak ada karakter `:` yang masuk ke path (Windows).
+- An old ID without a prefix means site A, so old `.nhdl-id` markers, library, and queue need no rewriting.
+- The prefix values are currently proposed as `xxx`, `rox`, `com` (constants in code, easy to change).
+- `normalizeGalleryId` and `isValidGalleryId` (`core/db/common.js`) accept a plain number or `prefix:content` and return a canonical string. A plain number is still validated as a positive integer.
+- Every place that compares or filters `Number(gallery_id)` / `parseInt(id)` is replaced with string comparison: `core/db/sqlite.js` and `core/db/postgres.js` (priority reorder, import replace, bulk pause/resume/delete, `logEvent`), `core/engine.js` (gallery stop/delete flags), `core/tracker.js` (marker reading in `rescanLibrary`), `server/index.js` (`activeGalleryId`), and `webui` (`rankById`, URL parser).
+- API responses use `toPublicId`: `galleryId` is a number for plain-number keys (site A, compatible with old clients) and a string for prefixed keys. Raw DB rows follow the same rule.
+- Folder names never use the raw key (the `:` character is invalid on Windows); the fallback uses `safeKeyName`.
+- The `.nhdl-id` and `<archive>.nhdl-id` markers store the key string as is. `rescanLibrary` stops using `parseInt` to read their contents.
+- Output file/folder names do not contain the raw key, so no `:` character enters a path (Windows).
 
-## 5. Migrasi skema (v3, kedua adapter)
+## 5. Schema migration (v3, both adapters)
 
-`CURRENT_APP_SCHEMA_VERSION` naik dari 2 ke 3.
+`CURRENT_APP_SCHEMA_VERSION` goes up from 2 to 3.
 
-- **PostgreSQL** (`core/db/postgres.js`): `ALTER TABLE queue ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text` dan hal yang sama untuk `library`, dalam satu transaksi migrasi.
-- **SQLite** (`core/db/sqlite.js`): tipe kolom PK tidak bisa diubah, jadi bangun ulang tabel `queue` dan `library` (buat tabel baru, salin dengan `CAST(gallery_id AS TEXT)`, hapus lama, ganti nama, buat ulang indeks) dalam satu transaksi.
-- Tabel `events` ikut dimigrasi di PostgreSQL (`gallery_id` BIGINT → TEXT). Di SQLite kolom `events.gallery_id` tetap berafinitas INTEGER karena SQLite menyimpan teks non-numerik (kunci berprefix) apa adanya.
-- Driver `pg` mempertahankan parser tipe 20 (int8) → number untuk kolom BIGINT lain; kolom `gallery_id` yang kini TEXT dikembalikan sebagai string lalu dipetakan lewat `toPublicId`.
-- Export/import: format tetap `nhdl-export` v1; payload lama (ID angka) lolos validasi, payload baru boleh memuat ID berprefix.
-- Rollback: backup database (`data/nhdl.db` atau dump Postgres) sebelum migrasi. Migrasi satu arah, tidak ada downgrade otomatis.
+- **PostgreSQL** (`core/db/postgres.js`): `ALTER TABLE queue ALTER COLUMN gallery_id TYPE TEXT USING gallery_id::text` and the same for `library`, in a single migration transaction.
+- **SQLite** (`core/db/sqlite.js`): a PK column type cannot be changed, so rebuild the `queue` and `library` tables (create a new table, copy with `CAST(gallery_id AS TEXT)`, drop the old one, rename, recreate indexes) in a single transaction.
+- The `events` table is also migrated in PostgreSQL (`gallery_id` BIGINT → TEXT). In SQLite the `events.gallery_id` column keeps INTEGER affinity because SQLite stores non-numeric text (prefixed keys) as is.
+- The `pg` driver keeps the type 20 (int8) → number parser for other BIGINT columns; the `gallery_id` column, now TEXT, is returned as a string then mapped through `toPublicId`.
+- Export/import: the format stays `nhdl-export` v1; old payloads (numeric IDs) pass validation, new payloads may contain prefixed IDs.
+- Rollback: back up the database (`data/nhdl.db` or a Postgres dump) before migrating. The migration is one-way, with no automatic downgrade.
 
-## 6. API (didokumentasikan di `docs/API.md` sebelum implementasi)
+## 6. API (documented in `docs/API.md` before implementation)
 
-Tidak ada endpoint baru. Perubahan kontrak:
-- `POST /api/queue`: baris `text` menerima URL dari site B1, B2, C, dan ID berprefix. Baris tak dikenal ditolak dengan pesan jelas (bukan diam-diam dilewati).
-- `POST /api/retry` dan `GET` yang menerima `galleryId`: nilai berupa string, boleh berprefix.
-- Payload event SSE `item`/`progress` dan respons `/api/status`, `/api/library`: `galleryId` bertipe number untuk site A dan string untuk kunci berprefix (sesuai bagian 4), dan setiap item punya field turunan `source` (lihat 6b).
-- `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/CHANGELOG.md` (aktor `AI (Claude Code, Sonnet 5.5)`), dan `docs/PLAN.md` diperbarui; nama situs asli tidak ditulis di dokumen.
+No new endpoints. Contract changes:
+- `POST /api/queue`: `text` lines accept URLs from site B1, B2, C, and prefixed IDs. Unrecognized lines are rejected with a clear message (not silently skipped).
+- `POST /api/retry` and any `GET` that accepts `galleryId`: the value is a string, and may be prefixed.
+- SSE `item`/`progress` event payloads and the `/api/status` and `/api/library` responses: `galleryId` is a number for site A and a string for prefixed keys (per section 4), and every item has a derived `source` field (see 6b).
+- `docs/API.md`, `docs/ARCHITECTURE.md`, `docs/CHANGELOG.md` (actor `AI (Claude Code, Sonnet 5.5)`), and `docs/PLAN.md` are updated; real site names are not written in the documents.
 
-## 6b. Kategori sumber di list (UI)
+## 6b. Source category in the list (UI)
 
-Tujuan: di antrean dan library terlihat jelas tiap item berasal dari situs mana.
+Goal: the queue and library show clearly which site each item comes from.
 
-- **Field turunan `source`** pada respons `/api/status`, `/api/library`, dan payload SSE `item`: nilai id provider (`default`, `b1`, `b2`, `c1`), dihitung dari prefix `gallery_id` lewat `providers.resolve()`. Tidak disimpan di DB, jadi tidak ada kolom atau migrasi tambahan, dan ID lama otomatis jadi `default`.
-- **Label tampilan** (nama situs untuk pengguna) berasal dari metadata provider (`label`), dikirim bersama daftar sumber lewat respons yang sudah ada (mis. `/api/config`), supaya UI tidak menulis nama situs sendiri.
-- **Antrean**: badge sumber di setiap baris, plus filter kategori (chip: `Semua` + satu chip per sumber yang ada, lengkap dengan jumlah item) yang digabung dengan filter status dan pencarian yang sudah ada. Pengelompokan per batch tidak berubah.
-- **Library**: badge dan filter sumber yang sama di modal Library Manager.
-- Filter berjalan di sisi klien dari data SSE yang sudah masuk (tanpa polling baru), sesuai aturan repo.
-- Tes: unit untuk pemetaan prefix → `source`/`label`, dan tes SSE/API yang memastikan `source` ada di payload; tampilan UI diverifikasi manual di dev server lokal.
+- **Derived `source` field** on the `/api/status` and `/api/library` responses and the SSE `item` payload: the provider id value (`default`, `b1`, `b2`, `c1`), computed from the `gallery_id` prefix through `providers.resolve()`. Not stored in the DB, so there is no extra column or migration, and old IDs automatically become `default`.
+- **Display label** (the site name shown to the user) comes from provider metadata (`label`), sent together with the source list through an existing response (e.g. `/api/config`), so the UI does not hardcode site names.
+- **Queue**: a source badge on each row, plus a category filter (chips: `All` + one chip per existing source, with the item count) combined with the existing status and search filters. Per-batch grouping is unchanged.
+- **Library**: the same source badge and filter in the Library Manager modal.
+- Filtering runs client-side on SSE data already received (no new polling), per the repo rules.
+- Tests: unit tests for the prefix → `source`/`label` mapping, and SSE/API tests confirming `source` is in the payload; the UI display is verified manually on a local dev server.
 
-## 7. Penanganan error
+## 7. Error handling
 
-| Kasus | Perilaku |
+| Case | Behavior |
 |---|---|
-| URL/ID tak dikenali | Baris ditolak saat `POST /api/queue`, dicatat di event log |
-| Galeri tak ada (404 / API kosong) | `SKIPPED - <alasan>` seperti sekarang |
-| Semua kandidat ekstensi gagal untuk satu halaman | Retry sesuai aturan yang ada, lalu placeholder PNG + `placeholder_pages.log` |
-| Respons HTML berupa halaman blokir DNS/ISP atau tantangan | Error jelas (`ERROR - blocked or unexpected HTML`), tidak dianggap gambar |
-| 429 / rate limit | Alur backoff dan circuit breaker yang ada |
+| URL/ID not recognized | Line rejected at `POST /api/queue`, recorded in the event log |
+| Gallery missing (404 / empty API) | `SKIPPED - <reason>` as today |
+| All extension candidates fail for a page | Retry per the existing rules, then PNG placeholder + `placeholder_pages.log` |
+| HTML response is a DNS/ISP block page or a challenge | Clear error (`ERROR - blocked or unexpected HTML`), not treated as an image |
+| 429 / rate limit | Existing backoff and circuit breaker flow |
 
-## 8. Pengujian
+## 8. Testing
 
-1. **Unit** (`node:test`): `match()` tiap provider; parser input hidden dengan fixture HTML hasil unduhan manual (tanpa konten eksplisit, hanya potongan tag yang relevan); parser JSON C; `normalizeGalleryId`/`isValidGalleryId` untuk angka polos dan berprefix.
-2. **Migrasi**: DB v2 berisi ID angka dimigrasi ke v3 tanpa data hilang di SQLite dan PostgreSQL; ID angka tetap bisa dicari dan di-retry; export lalu import tetap konsisten.
-3. **E2E lokal**: server dengan SQLite, `POST /api/queue` memuat tiga URL contoh, menunggu `done`, lalu bandingkan jumlah dan keutuhan file dengan `samples/probe/out/` (jumlah halaman sama, tanpa file di bawah 2 KB yang bukan placeholder).
-4. `npm test` harus hijau sebelum commit.
+1. **Unit** (`node:test`): `match()` for each provider; hidden input parser with HTML fixtures from the manual download (no explicit content, only the relevant tag snippets); C's JSON parser; `normalizeGalleryId`/`isValidGalleryId` for plain and prefixed numbers.
+2. **Migration**: a v2 DB containing numeric IDs migrates to v3 without data loss in SQLite and PostgreSQL; numeric IDs can still be looked up and retried; export then import stays consistent.
+3. **Local E2E**: server with SQLite, `POST /api/queue` with three sample URLs, wait for `done`, then compare file count and integrity against `samples/probe/out/` (same page count, no files under 2 KB that are not placeholders).
+4. `npm test` must be green before committing.
 
-## 9. Keputusan terbuka (default yang diasumsikan)
+## 9. Open decisions (assumed defaults)
 
-- Nilai prefix `xxx` / `rox` / `com`: diasumsikan; bisa diganti lewat konstanta tanpa memengaruhi desain.
-- Halaman non-komik (banner, gambar ekstra): tidak difilter. Opsi filter berdasarkan rasio/ukuran bisa menjadi fitur lanjutan.
+- Prefix values `xxx` / `rox` / `com`: assumed; can be changed through constants without affecting the design.
+- Non-comic pages (banners, extra images): not filtered. An option to filter by ratio/size could be a follow-up feature.
