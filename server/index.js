@@ -82,6 +82,8 @@ process.on('unhandledRejection', (reason) => {
     logActivity(`FATAL Unhandled Rejection: ${msg}`);
 });
 
+const backfill = require('../core/backfill');
+
 let compressJob = null;
 
 function startBatchCompressJob(ids, ext) {
@@ -707,6 +709,21 @@ function createRequestHandler() {
                     }
                 });
                 return;
+            }
+
+            if (req.method === 'POST' && req.url === '/api/library/backfill-metadata') {
+                const result = await backfill.startBackfill();
+                if (!result.started) res.writeHead(409);
+                return res.end(JSON.stringify({ success: result.started, ...result }));
+            }
+
+            if (req.method === 'POST' && req.url === '/api/library/backfill-metadata/cancel') {
+                backfill.cancel();
+                return res.end(JSON.stringify({ success: true }));
+            }
+
+            if (req.method === 'GET' && req.url === '/api/library/backfill-metadata') {
+                return res.end(JSON.stringify({ job: backfill.getJob() }));
             }
 
             if (req.method === 'POST' && req.url === '/api/library/compress') {

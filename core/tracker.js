@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { sanitizeName } = require('./utils');
 const { buildZip } = require('./zip');
+const { writeComicInfo, COMIC_INFO_NAME } = require('./comicInfo');
 const { canonicalKey } = require('./providers');
 const {
     getLibraryEntry,
@@ -55,6 +56,7 @@ async function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra
         try {
             fs.writeFileSync(path.join(folder, MARKER_FILENAME), id.toString(), 'utf-8');
         } catch (e) {}
+        try { writeComicInfo(id, folder, 'folder', meta); } catch (e) {}
     } catch (e) {
         console.error('Failed to save to SQLite library:', e.message);
     }
@@ -77,6 +79,7 @@ async function saveArchivedToLibrary(id, title, archivePath, archiveExt, extra =
         try {
             fs.writeFileSync(archiveMarkerPath(archivePath), id.toString(), 'utf-8');
         } catch (e) {}
+        try { writeComicInfo(id, archivePath, fmt, extra.extraMeta); } catch (e) {}
     } catch (e) {
         console.error('Failed to save archived entry to SQLite library:', e.message);
     }
@@ -548,6 +551,8 @@ async function compressLibraryEntry(id, options = {}) {
     let zipBuf;
     try {
         const entries = files.map(name => ({ name, data: fs.readFileSync(path.join(entry.folder, name)) }));
+        const infoPath = path.join(entry.folder, COMIC_INFO_NAME);
+        if (fs.existsSync(infoPath)) entries.push({ name: COMIC_INFO_NAME, data: fs.readFileSync(infoPath) });
         zipBuf = buildZip(entries);
     } catch (e) {
         return { success: false, error: 'Failed to build archive: ' + e.message };
