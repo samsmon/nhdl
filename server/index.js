@@ -65,7 +65,7 @@ const mimeTypes = {
     '.html': 'text/html',
     '.js': 'text/javascript',
     '.css': 'text/css',
-    '.json': 'application/json',
+    '.json': 'application/json; charset=utf-8',
     '.png': 'image/png',
     '.jpg': 'image/jpg',
     '.svg': 'image/svg+xml',
@@ -186,7 +186,7 @@ function createRequestHandler() {
                 let body = '';
                 req.on('data', chunk => { body += chunk.toString(); });
                 req.on('end', async () => {
-                    res.setHeader('Content-Type', 'application/json');
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
                     try {
                         const { password } = JSON.parse(body);
                         if (checkPassword(password)) {
@@ -209,14 +209,14 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/logout') {
                 destroySession(cookies[SESSION_COOKIE]);
                 res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; HttpOnly; Path=/; Max-Age=0`);
-                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
                 await logActivity('Logout');
                 return res.end(JSON.stringify({ success: true }));
             }
 
             if (!authed) {
                 if (req.url.startsWith('/api/')) {
-                    res.setHeader('Content-Type', 'application/json');
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
                     res.writeHead(401);
                     return res.end(JSON.stringify({ error: 'Unauthorized' }));
                 }
@@ -228,7 +228,7 @@ function createRequestHandler() {
         }
 
         if (req.url.startsWith('/api/')) {
-            res.setHeader('Content-Type', 'application/json');
+            res.setHeader('Content-Type', 'application/json; charset=utf-8');
             res.setHeader('Access-Control-Allow-Origin', '*');
             res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
             res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
@@ -905,7 +905,7 @@ function createRequestHandler() {
             }
 
             if (req.method === 'GET' && req.url === '/api/db/info') {
-                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
                 const info = getDbInfo();
                 info.backupIntervalHours = await getSetting('backupIntervalHours', 24);
                 info.backupKeep = await getSetting('backupKeep', 7);
@@ -919,7 +919,7 @@ function createRequestHandler() {
                 const pad = (n) => String(n).padStart(2, '0');
                 const now = new Date();
                 const ts = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}-${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
                 res.setHeader('Content-Disposition', `attachment; filename="nhdl-export-${ts}.json"`);
                 return res.end(JSON.stringify(data, null, 2));
             }
@@ -927,7 +927,7 @@ function createRequestHandler() {
             if (req.method === 'POST' && req.url === '/api/db/import') {
                 const onProgressItems = await getQueueItems({ status: 'ON_PROGRESS' });
                 if (engine.isRunning || onProgressItems.length > 0) {
-                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
                     return res.end(JSON.stringify({ success: false, error: 'Pause engine first', needsPause: true }));
                 }
 
@@ -951,7 +951,7 @@ function createRequestHandler() {
                                 await logActivity(`Pre-import backup created: ${preImportBackup}`);
                             } catch (err) {
                                 await logActivity(`Import cancelled: failed to create pre-import backup (${err.message})`, 'error');
-                                res.writeHead(500, { 'Content-Type': 'application/json' });
+                                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
                                 return res.end(JSON.stringify({ success: false, error: `Failed to create pre-import backup: ${err.message}` }));
                             }
                         }
@@ -961,7 +961,7 @@ function createRequestHandler() {
                             result.preImportBackup = preImportBackup;
                         }
                         await logActivity(`Database imported: mode ${mode}, ${result.imported.queue} queue, ${result.imported.library} library`);
-                        res.setHeader('Content-Type', 'application/json');
+                        res.setHeader('Content-Type', 'application/json; charset=utf-8');
                         return res.end(JSON.stringify(result));
                     } catch (e) {
                         res.writeHead(400);
@@ -985,7 +985,7 @@ function createRequestHandler() {
                         }
                         const result = await createBackup(null, customName);
                         await logActivity(`Database backup created: ${result.filename}`);
-                        res.setHeader('Content-Type', 'application/json');
+                        res.setHeader('Content-Type', 'application/json; charset=utf-8');
                         return res.end(JSON.stringify({ success: true, ...result }));
                     } catch (e) {
                         res.writeHead(500);
@@ -997,14 +997,14 @@ function createRequestHandler() {
 
             if (req.method === 'GET' && req.url === '/api/db/backups') {
                 const backups = listBackups();
-                res.setHeader('Content-Type', 'application/json');
+                res.setHeader('Content-Type', 'application/json; charset=utf-8');
                 return res.end(JSON.stringify({ backups }));
             }
 
             if (req.method === 'POST' && req.url === '/api/db/restore') {
                 const onProgressItems = await getQueueItems({ status: 'ON_PROGRESS' });
                 if (engine.isRunning || onProgressItems.length > 0) {
-                    res.writeHead(409, { 'Content-Type': 'application/json' });
+                    res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' });
                     return res.end(JSON.stringify({ success: false, error: 'Pause engine first', needsPause: true }));
                 }
 
@@ -1030,7 +1030,7 @@ function createRequestHandler() {
                                 await logActivity(`Pre-restore backup created: ${preImportBackup}`);
                             } catch (err) {
                                 await logActivity(`Restore cancelled: failed to create pre-restore backup (${err.message})`, 'error');
-                                res.writeHead(500, { 'Content-Type': 'application/json' });
+                                res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });
                                 return res.end(JSON.stringify({ success: false, error: `Failed to create pre-import backup: ${err.message}` }));
                             }
                         }
@@ -1040,7 +1040,7 @@ function createRequestHandler() {
                             result.preImportBackup = preImportBackup;
                         }
                         await logActivity(`Database restored from ${filename}`);
-                        res.setHeader('Content-Type', 'application/json');
+                        res.setHeader('Content-Type', 'application/json; charset=utf-8');
                         return res.end(JSON.stringify(result));
                     } catch (e) {
                         res.writeHead(400);
@@ -1055,7 +1055,7 @@ function createRequestHandler() {
                 try {
                     const result = deleteBackup(name);
                     await logActivity(`Deleted backup: ${name}`);
-                    res.setHeader('Content-Type', 'application/json');
+                    res.setHeader('Content-Type', 'application/json; charset=utf-8');
                     return res.end(JSON.stringify(result));
                 } catch (e) {
                     res.writeHead(404);
