@@ -190,13 +190,17 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 | `POST` | `/api/library/rename` | `{"id": string\|number, "newName": string}` | `{"success":true, "oldPath": string, "newPath": string, "newTitle": string}` | Mengubah nama folder/arsip di disk, memperbarui `ComicInfo.xml`, serta memperbarui tabel `library` dan `queue`. |
 | `POST` | `/api/library/compress` | `{"id": string\|number, "ext"?: "cbz"\|"zip"}` | `{"success":true, "archivePath": string, "archiveExt": string, "skipped"?: boolean}` | Mengompres folder galeri menjadi arsip `.cbz`/`.zip` (`STORE` level 0) dan menghapus folder aslinya. |
 | `POST` | `/api/library/batch-compress` | `{"ids": (string\|number)[], "ext"?: "cbz"\|"zip"}` | `{"success":true, "started":true, "total": number}` | Memulai job kompresi massal di latar belakang (`409 Conflict` jika job masih berjalan). |
+| `POST` | `/api/library/backfill-metadata` | — | `{"success":true, "started":true, "total": number}` | Memulai job latar belakang yang mengambil tag, tanggal unggah, dan scanlator dari API untuk entri library yang metadatanya belum lengkap (hasil rescan), lalu menulis `ComicInfo.xml` dan `info.json` (di folder, atau di dalam `.cbz`/`.zip` tanpa mengubah 512000 byte pertama; penulisan yang akan mengubahnya ditolak dan dihitung sebagai `skipped`). Entri dengan sidecar format lama ditulis ulang. Dibatasi di bawah rate limit API (sekitar 3,2 detik per galeri tanpa API key, 1,5 detik dengan key). `409 Conflict` bila job masih berjalan. Job yang sama juga dijalankan otomatis (setengah kecepatan) setiap kali pengunduhan dimulai, jadi pemanggilan manual tidak wajib. |
+| `POST` | `/api/library/backfill-metadata/cancel` | — | `{"success":true}` | Menghentikan job backfill setelah galeri yang sedang diproses. |
+| `GET` | `/api/library/backfill-metadata` | — | `{"job": BackfillJob\|null}` | Progres job: `total`, `done`, `updated`, `skipped`, `notFound`, `failed`, `currentId`, `currentTitle`, `etaSeconds`, `errors[]`, `abortedReason`, `startedAt`, `finishedAt`. |
 | `GET` | `/api/library/compress-status` | — | `{"job": CompressJob\|null}` | Membaca progres job kompresi massal yang sedang/terakhir berjalan. |
 
 `LibraryItem`:
 ```json
-{ "id": "123456", "source": "default", "category": null, "title": "Title", "author": "Artist", "lang": "English", "pages": 24, "folder": "/downloads/English/Artist/Title.cbz", "downloadedAt": "2026-09-28 08:00:00", "legacy": false, "archived": true, "archiveExt": "cbz" }
+{ "id": "123456", "url": "https://certain.site/g/123456/", "source": "default", "category": null, "title": "Title", "author": "Artist", "lang": "English", "pages": 24, "folder": "/downloads/English/Artist/Title.cbz", "downloadedAt": "2026-09-28 08:00:00", "legacy": false, "archived": true, "archiveExt": "cbz" }
 ```
 - `id`: kunci kanonik sebagai string (`"123456"`, `"b1:539224"`).
+- `url`: halaman asli galeri di situs sumbernya, dibangun oleh provider dari kunci (bukan selalu situs utama; UI memakainya untuk tombol buka link).
 - `source`: sama seperti `QueueItem.source`.
 - `category`: nilai yang sama seperti `QueueItem.category` (dibaca dari `meta.contentType` library; `null` bila tidak ada).
 

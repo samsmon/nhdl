@@ -10,6 +10,7 @@ const dns = require('dns');
 const { sanitizeName, toTitleCase, getDynamicDelay, verifyImage, writeBlankPlaceholderImage, sleep, withFsRetryAsync } = require('./utils');
 const { loadLibrary, saveToLibrary, saveArchivedToLibrary, saveSkippedToLibrary, logError, logPlaceholderPage, updateListStatus, isLibraryEntryValid, isPermanentlySkipped, buildDisplayName, getCachedDisplayName, updateListDisplayName, compressLibraryEntry, getBatchFormatForGallery, setStateDir, uniqueArchivePath, saveArchivedGallery, isDownloadDirHealthy, rescanLibrary, hasActiveLibraryEntries } = require('./tracker');
 const { logActivity, setLogDir } = require('./logger');
+const backfill = require('./backfill');
 const { fetchGalleryMetadata, requestDownloadUrl, downloadArchiveFile } = require('./nhentaiApi');
 const providers = require('./providers');
 const { toPublicId } = providers;
@@ -1146,6 +1147,13 @@ class DownloaderEngine extends EventEmitter {
             return;
         }
         this.clearDownloadDirUnavailable();
+
+        // Fill in tags/ComicInfo.xml for older library entries in the background, slow enough
+        // to leave rate-limit headroom for the downloads themselves. No-op when nothing is missing.
+        // Off under `node --test` (NODE_TEST_CONTEXT) so tests never reach the network; NHDL_AUTO_BACKFILL=0 disables it.
+        if (process.env.NHDL_AUTO_BACKFILL !== '0' && !process.env.NODE_TEST_CONTEXT) {
+            backfill.startBackfill({ background: true }).catch(() => {});
+        }
 
         const library = await loadLibrary();
         if (Array.isArray(galleryIds) && galleryIds.length > 0) {

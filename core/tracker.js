@@ -2,6 +2,7 @@ const fs = require('fs');
 const path = require('path');
 const { sanitizeName } = require('./utils');
 const { buildZip } = require('./zip');
+const { writeMetadata, COMIC_INFO_NAME, INFO_JSON_NAME } = require('./comicInfo');
 const { canonicalKey } = require('./providers');
 const {
     getLibraryEntry,
@@ -33,12 +34,20 @@ async function loadLibrary() {
     return await getLibraryMap();
 }
 
+function writeMetadataSafe(id, target, format, meta, ctx) {
+    try { return writeMetadata(id, target, format, meta, ctx); } catch (e) { return { written: false, reason: e.message }; }
+}
+
+function warnIfSkipped(id, result) {
+    if (!result.written) console.warn(`[metadata] ID ${id}: not written (${result.reason})`);
+}
+
 async function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra = {}) {
     try {
         const meta = {
             ext: ext || 'jpg',
             pageExts: pageExts || {},
-            ...(extra.extraMeta ? extra.extraMeta : {})
+            ...(extra.extraMeta ? { ...extra.extraMeta, tagsFetched: true } : {}) // tagsFetched: a fetch happened, even if the gallery has no tags
         };
         await upsertLibraryEntry({
             galleryId: id,
@@ -55,6 +64,7 @@ async function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra
         try {
             fs.writeFileSync(path.join(folder, MARKER_FILENAME), id.toString(), 'utf-8');
         } catch (e) {}
+        warnIfSkipped(id, writeMetadataSafe(id, folder, 'folder', meta, { artist: extra.author, language: extra.lang }));
     } catch (e) {
         console.error('Failed to save to SQLite library:', e.message);
     }
@@ -71,12 +81,13 @@ async function saveArchivedToLibrary(id, title, archivePath, archiveExt, extra =
             format: fmt,
             language: extra.lang || null,
             artist: extra.author || null,
-            meta: extra.extraMeta || null
+            meta: extra.extraMeta ? { ...extra.extraMeta, tagsFetched: true } : null
         });
         _hasActiveLibrary = true;
         try {
             fs.writeFileSync(archiveMarkerPath(archivePath), id.toString(), 'utf-8');
         } catch (e) {}
+        warnIfSkipped(id, writeMetadataSafe(id, archivePath, fmt, extra.extraMeta, { artist: extra.author, language: extra.lang }));
     } catch (e) {
         console.error('Failed to save archived entry to SQLite library:', e.message);
     }
@@ -548,6 +559,10 @@ async function compressLibraryEntry(id, options = {}) {
     let zipBuf;
     try {
         const entries = files.map(name => ({ name, data: fs.readFileSync(path.join(entry.folder, name)) }));
+        const infoPath = path.join(entry.folder, COMIC_INFO_NAME);
+        if (fs.existsSync(infoPath)) entries.push({ name: COMIC_INFO_NAME, data: fs.readFileSync(infoPath) });
+        const infoJsonPath = path.join(entry.folder, INFO_JSON_NAME);
+        if (fs.existsSync(infoJsonPath)) entries.push({ name: INFO_JSON_NAME, data: fs.readFileSync(infoJsonPath) });
         zipBuf = buildZip(entries);
     } catch (e) {
         return { success: false, error: 'Failed to build archive: ' + e.message };

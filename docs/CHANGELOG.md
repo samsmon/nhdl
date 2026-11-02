@@ -8,6 +8,30 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Format tag untuk LANraragi dan HappyPanda X
+- `ComicInfo.xml` baru: Tags berisi nama polos (tanpa `tag:`), tambah Penciller (artis), Characters, LanguageISO (`en`/`ja`/`zh`) dan Genre (kategori); Title tidak ditulis; Web tetap URL sumber; ada penanda `nhdl-format:2` supaya backfill bisa mengenali versi.
+- `info.json` gaya HDoujin (`manga_info`, tags berupa list tanpa namespace) ditulis ke dalam arsip, atau ke folder, untuk plugin File Metadata HappyPanda X.
+- Galeri tanpa tag di sumbernya tetap mendapat metadata minimal (artis, kategori, URL). Penanda `tagsFetched` di `library.meta` mencegah pengambilan ulang.
+- Penulisan ke zip tetap byte-for-byte (`upsertZipEntries`) dan kini dijaga: bila 512000 byte pertama (ID arsip LANraragi) akan berubah, penulisan ditolak dan dilaporkan per galeri (`skipped` di job backfill).
+- Backfill menulis ulang `ComicInfo.xml` format lama tanpa mengubah hash itu. Resolver DoH dicabut kembali (revert).
+- Tes: `test/comicInfo.test.js` (SHA1 512000 byte pertama sebelum/sesudah, penolakan arsip kecil dan ComicInfo di awal), `npm test` 137 lulus.
+
+## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Backfill untuk semua sumber dan jalan saat server start
+- Backfill kini juga memproses sumber non-default lewat `fetchMeta` provider (tag tanpa tipe dipetakan ke `tag:` di ComicInfo; Writer jatuh ke artist dari library; Web dari URL provider).
+- Entri yang tag-nya sudah ada di database tetapi `ComicInfo.xml` belum pernah ditulis (unduhan lama) sekarang ditulis tanpa request (`hasComicInfo` membaca central directory saja).
+- Backfill dijalankan otomatis saat server start, selain saat pengunduhan dimulai.
+
+## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Perbaikan link galeri sumber non-default
+- Panel detail dan modal Library selalu membuat link `.../g/<id>/` ke situs utama, sehingga item berkunci berprefix (mis. `com:slug`) menghasilkan URL salah. Panel detail kini memakai URL item sendiri; `/api/library` menambah field `url` (dari provider) dan modal Library memakainya, dan tombol disembunyikan bila tidak ada.
+
+## 2026-11-01 · AI (Claude Code, Sonnet 5.5) · ComicInfo.xml dan backfill metadata
+- Modul baru `core/comicInfo.js`: membuat `ComicInfo.xml` dari tag, tanggal unggah, dan scanlator (artist ke Writer, group ke Publisher, category ke Genre, sisanya ke Tags), serta menyisipkannya ke dalam `.cbz`/`.zip` tanpa kompresi ulang (`upsertZipEntry`) atau menulisnya di folder galeri.
+- `tracker.saveToLibrary`/`saveArchivedToLibrary` menulis `ComicInfo.xml` untuk unduhan baru; `compressLibraryEntry` ikut membawa file itu ke arsip.
+- Job baru `core/backfill.js` untuk koleksi lama (hasil rescan, hanya punya artist dari nama folder): mengambil metadata dari API dengan jeda di bawah rate limit, mengisi `library.meta`, lalu menulis `ComicInfo.xml`. Endpoint `/api/library/backfill-metadata` (+ `/cancel`) tercatat di `docs/API.md`.
+- Tes baru `test/comicInfo.test.js`; `npm test` 132 lulus, 1 dilewati.
+- Backfill berjalan otomatis di latar belakang (setengah kecepatan) setiap kali pengunduhan dimulai, tanpa langkah manual; nonaktif lewat `NHDL_AUTO_BACKFILL=0`, dan mati di bawah `node --test`.
+- Belum dikerjakan: langganan/sinkron per tag (endpoint pencarian belum diverifikasi), tombol backfill di UI.
+
 ## 2026-10-06 · AI (Claude Code, Sonnet 5.5) · Verifikasi: PostgreSQL nyata dan cek metadata langsung
 - Adapter PostgreSQL dijalankan pertama kali pada server PostgreSQL 18 sementara (localhost, port khusus, dihapus setelahnya): suite live `test/db.test.js` 32/32 lulus, seluruh `npm test` dengan `TEST_DATABASE_URL` 129/129 lulus, dan pemeriksaan tambahan upgrade DB skema v2 → v4 (tipe `gallery_id` menjadi TEXT, kolom `category`, baris/prioritas tetap, ID angka tetap angka di API, kunci berprefix, import/export dengan `category`, `initDb` idempoten) lulus. Tidak ada cacat adapter ditemukan.
 - Catatan kecil: `importData` mode merge menyisipkan event tanpa dedup sehingga impor berulang menggandakan baris event (belum diubah; mungkin memang disengaja).

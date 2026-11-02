@@ -123,6 +123,13 @@
     if (!it) return '—';
     return it.title || parseItemUrl(it.url).title || `Gallery #${it.galleryId}`;
   }
+
+  // The item's own source URL; the numeric-ID fallback only applies to the default site.
+  function galleryLink(it) {
+    const raw = parseItemUrl(it && it.url).rawUrl;
+    if (/^https?:\/\//i.test(raw)) return raw;
+    return /^\d+$/.test(String(it && it.galleryId)) ? `https://nhentai.net/g/${it.galleryId}/` : null;
+  }
 </script>
 
 <!-- Mobile Bottom Sheet Backdrop (< 768px) -->
@@ -259,15 +266,19 @@
 
           <div class="flex items-center gap-2">
             <span class="text-[var(--text-muted)] w-24 shrink-0 uppercase text-[10px]">Link:</span>
-            <a
-              href="https://nhentai.net/g/{item.galleryId}/"
-              target="_blank"
-              rel="noopener noreferrer"
-              class="text-[var(--accent)] hover:underline flex items-center gap-1 truncate"
-            >
-              <span>https://certain.site/g/{item.galleryId}/</span>
-              <ExternalLink class="w-3 h-3 shrink-0" />
-            </a>
+            {#if galleryLink(item)}
+              <a
+                href={galleryLink(item)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-[var(--accent)] hover:underline flex items-center gap-1 truncate"
+              >
+                <span>{galleryLink(item)}</span>
+                <ExternalLink class="w-3 h-3 shrink-0" />
+              </a>
+            {:else}
+              <span class="text-[var(--text-muted)]">—</span>
+            {/if}
           </div>
 
           <div class="flex items-center gap-2">

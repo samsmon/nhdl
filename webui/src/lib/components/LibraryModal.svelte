@@ -502,15 +502,17 @@
                 >
                   <Plus class="w-3.5 h-3.5" />
                 </button>
-                <a
-                  href={`https://nhentai.net/g/${item.id}/`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="text-[#666] hover:text-white p-1 rounded hover:bg-[#222] transition-colors"
-                  title="Open on nhentai"
-                >
-                  <ExternalLink class="w-3.5 h-3.5" />
-                </a>
+                {#if item.url}
+                  <a
+                    href={item.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-[#666] hover:text-white p-1 rounded hover:bg-[#222] transition-colors"
+                    title="Open original page"
+                  >
+                    <ExternalLink class="w-3.5 h-3.5" />
+                  </a>
+                {/if}
               </div>
             </div>
           {/each}
