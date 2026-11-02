@@ -6,6 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 const { crc32 } = require('./zip');
+const { urlForKey } = require('./db/common');
 
 const COMIC_INFO_NAME = 'ComicInfo.xml';
 
@@ -22,8 +23,8 @@ function xmlEscape(value) {
 // Joins the names of tags of the given types, sorted, or null when none match.
 function joinTags(tags, types, withType) {
     const names = tags
-        .filter(t => t && types.includes(t.type) && t.name)
-        .map(t => (withType ? `${t.type}: ${t.name}` : t.name));
+        .filter(t => t && types.includes(t.type || 'tag') && t.name) // other sources give untyped tags
+        .map(t => (withType ? `${t.type || 'tag'}: ${t.name}` : t.name));
     if (names.length === 0) return null;
     return names.sort().join(', ');
 }
@@ -42,7 +43,7 @@ function hasFullMetadata(meta) {
 }
 
 // meta is the library `meta` object (see DownloaderEngine.fetchMetadata -> extraMeta).
-function buildComicInfoXml(galleryId, meta, { webUrl = null } = {}) {
+function buildComicInfoXml(galleryId, meta, { webUrl = null, artist = null } = {}) {
     const tags = Array.isArray(meta.tags) ? meta.tags : [];
     const title = meta.titlePretty || meta.titleEnglish || meta.titleJapanese || '';
     const date = parseUploadDate(meta.uploadDate);
@@ -51,7 +52,7 @@ function buildComicInfoXml(galleryId, meta, { webUrl = null } = {}) {
         ['Year', date ? date.getUTCFullYear() : null],
         ['Month', date ? date.getUTCMonth() + 1 : null],
         ['Day', date ? date.getUTCDate() : null],
-        ['Writer', joinTags(tags, ['artist'], false)],
+        ['Writer', joinTags(tags, ['artist'], false) || artist],
         ['Translator', meta.scanlator || null],
         ['Publisher', joinTags(tags, ['group'], false)],
         ['Genre', joinTags(tags, ['category'], false)],
@@ -67,7 +68,7 @@ function buildComicInfoXml(galleryId, meta, { webUrl = null } = {}) {
 }
 
 function webUrlFor(galleryId) {
-    return /^\d+$/.test(String(galleryId)) ? `https://nhentai.net/g/${galleryId}/` : null;
+    try { return urlForKey(galleryId); } catch (e) { return null; }
 }
 
 // Returns a copy of a zip buffer with `name` added or replaced. Existing entries are copied
@@ -167,13 +168,42 @@ function upsertZipEntry(zipBuf, name, data) {
     return Buffer.concat([...parts, cd, end]);
 }
 
+// True when ComicInfo.xml already exists for the entry (folder file, or archive entry found by
+// reading only the zip's central directory, not the whole archive).
+function hasComicInfo(target, format) {
+    try {
+        if (format !== 'cbz' && format !== 'zip') return fs.existsSync(path.join(target, COMIC_INFO_NAME));
+        const fd = fs.openSync(target, 'r');
+        try {
+            const size = fs.fstatSync(fd).size;
+            const tailLen = Math.min(size, 22 + 65535);
+            const tail = Buffer.alloc(tailLen);
+            fs.readSync(fd, tail, 0, tailLen, size - tailLen);
+            let e = -1;
+            for (let i = tailLen - 22; i >= 0; i--) { if (tail.readUInt32LE(i) === 0x06054b50) { e = i; break; } }
+            if (e < 0) return false;
+            const cdSize = tail.readUInt32LE(e + 12);
+            const cdOffset = tail.readUInt32LE(e + 16);
+            const cd = Buffer.alloc(cdSize);
+            fs.readSync(fd, cd, 0, cdSize, cdOffset);
+            let p = 0;
+            while (p + 46 <= cd.length && cd.readUInt32LE(p) === 0x02014b50) {
+                const n = cd.readUInt16LE(p + 28), x = cd.readUInt16LE(p + 30), c = cd.readUInt16LE(p + 32);
+                if (cd.toString('utf-8', p + 46, p + 46 + n) === COMIC_INFO_NAME) return true;
+                p += 46 + n + x + c;
+            }
+            return false;
+        } finally { fs.closeSync(fd); }
+    } catch (e) { return false; }
+}
+
 // Writes ComicInfo.xml for a library entry. `target` is the folder or archive path.
 // The archive is rewritten through a temp file and swapped in, so a crash never leaves a
 // half-written .cbz behind.
-function writeComicInfo(galleryId, target, format, meta) {
+function writeComicInfo(galleryId, target, format, meta, { artist = null } = {}) {
     if (!hasFullMetadata(meta)) return { written: false, reason: 'no tag metadata' };
     if (!target || !fs.existsSync(target)) return { written: false, reason: 'target missing' };
-    const xml = Buffer.from(buildComicInfoXml(galleryId, meta, { webUrl: webUrlFor(galleryId) }), 'utf-8');
+    const xml = Buffer.from(buildComicInfoXml(galleryId, meta, { webUrl: webUrlFor(galleryId), artist }), 'utf-8');
 
     if (format === 'cbz' || format === 'zip') {
         const tmp = `${target}.nhdl-tmp`;
@@ -186,4 +216,4 @@ function writeComicInfo(galleryId, target, format, meta) {
     return { written: true };
 }
 
-module.exports = { COMIC_INFO_NAME, buildComicInfoXml, upsertZipEntry, writeComicInfo, hasFullMetadata, parseUploadDate };
+module.exports = { hasComicInfo, COMIC_INFO_NAME, buildComicInfoXml, upsertZipEntry, writeComicInfo, hasFullMetadata, parseUploadDate };

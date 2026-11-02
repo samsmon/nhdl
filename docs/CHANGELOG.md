@@ -8,6 +8,11 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Backfill untuk semua sumber dan jalan saat server start
+- Backfill kini juga memproses sumber non-default lewat `fetchMeta` provider (tag tanpa tipe dipetakan ke `tag:` di ComicInfo; Writer jatuh ke artist dari library; Web dari URL provider).
+- Entri yang tag-nya sudah ada di database tetapi `ComicInfo.xml` belum pernah ditulis (unduhan lama) sekarang ditulis tanpa request (`hasComicInfo` membaca central directory saja).
+- Backfill dijalankan otomatis saat server start, selain saat pengunduhan dimulai.
+
 ## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Perbaikan link galeri sumber non-default
 - Panel detail dan modal Library selalu membuat link `.../g/<id>/` ke situs utama, sehingga item berkunci berprefix (mis. `com:slug`) menghasilkan URL salah. Panel detail kini memakai URL item sendiri; `/api/library` menambah field `url` (dari provider) dan modal Library memakainya, dan tombol disembunyikan bila tidak ada.
 

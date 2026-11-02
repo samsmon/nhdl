@@ -67,3 +67,16 @@ test('writeComicInfo writes into a folder and skips entries without tags', () =>
     assert.ok(fs.existsSync(path.join(dir, 'ComicInfo.xml')));
     fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('hasComicInfo detects the entry in a zip and in a folder', () => {
+    const { hasComicInfo } = require('../core/comicInfo');
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'nhdl-ci-'));
+    const file = path.join(dir, 'a.cbz');
+    const base = buildZip([{ name: '1.jpg', data: Buffer.from('x') }]);
+    fs.writeFileSync(file, base);
+    assert.equal(hasComicInfo(file, 'cbz'), false);
+    fs.writeFileSync(file, upsertZipEntry(base, 'ComicInfo.xml', Buffer.from('<a/>')));
+    assert.equal(hasComicInfo(file, 'cbz'), true);
+    assert.equal(hasComicInfo(dir, 'folder'), false);
+    fs.rmSync(dir, { recursive: true, force: true });
+});

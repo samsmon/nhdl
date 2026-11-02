@@ -1104,6 +1104,8 @@ if (require.main === module) {
     server.listen(PORT, '0.0.0.0', async () => {
         console.log(`\x1b[32m[+] NHDL Web Daemon aktif pada http://0.0.0.0:${PORT}\x1b[0m`);
         console.log(`[+] Web UI Dashboard: http://localhost:${PORT}`);
+        // Fill in missing tags/ComicInfo.xml for the existing library without any user step.
+        if (process.env.NHDL_AUTO_BACKFILL !== '0') backfill.startBackfill({ background: true }).catch(() => {});
         try {
             const dbInfo = getDbInfo();
             if (dbInfo.type === 'postgres') {

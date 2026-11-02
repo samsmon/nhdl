@@ -4,8 +4,10 @@
 
 const fs = require('fs');
 const { fetchGalleryMetadata } = require('./nhentaiApi');
+const { providerForKey } = require('./providers');
+const { fetchText, curlFetchText } = require('./providers/http');
 const { getAllLibraryEntries, upsertLibraryEntry } = require('./db');
-const { writeComicInfo, hasFullMetadata } = require('./comicInfo');
+const { writeComicInfo, hasFullMetadata, hasComicInfo } = require('./comicInfo');
 const { logActivity } = require('./logger');
 
 const RETRY_WAIT_MS = 60000;
@@ -31,10 +33,10 @@ function extraMetaFromApi(data) {
 
 function isCandidate(entry) {
     if (!entry || entry.format === 'skipped') return false;
-    if (!/^\d+$/.test(String(entry.id))) return false; // other sources have no tag API here
-    if (hasFullMetadata(entry.meta)) return false;
     if (entry.meta && entry.meta.metadataNotFound) return false;
-    return !!(entry.path && fs.existsSync(entry.path));
+    if (!(entry.path && fs.existsSync(entry.path))) return false;
+    // Needs work when tags are missing, or tags are known but the file was never written.
+    return !hasFullMetadata(entry.meta) || !hasComicInfo(entry.path, entry.format);
 }
 
 let job = null;
@@ -72,12 +74,30 @@ async function startBackfill({ background = false } = {}) {
     return { started: true, total: candidates.length };
 }
 
+// Resolves to { success, extraMeta } | { success:false, notFound?, reason }. The default site
+// uses the JSON API; the other sources go through their own provider's metadata fetch.
+async function fetchOne(id, apiKey) {
+    if (/^\d+$/.test(String(id))) {
+        const res = await fetchGalleryMetadata(id, apiKey);
+        return res.success ? { success: true, extraMeta: extraMetaFromApi(res.data) } : res;
+    }
+    const provider = providerForKey(String(id));
+    if (!provider || typeof provider.fetchMeta !== 'function') return { success: false, reason: 'no metadata fetcher for this source' };
+    try {
+        const m = await provider.fetchMeta(String(id), { fetchText: provider.transport === 'curl' ? curlFetchText : fetchText });
+        return { success: true, extraMeta: m.extraMeta || {} };
+    } catch (e) {
+        return { success: false, notFound: !!e.permanent, reason: e.message };
+    }
+}
+
 async function fetchWithRetry(id, apiKey) {
     let last;
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-        last = await fetchGalleryMetadata(id, apiKey);
+        last = await fetchOne(id, apiKey);
         if (last.success || last.notFound) return last;
         if (cancelRequested) return last;
+        if (!/^\d+$/.test(String(id))) return last; // other sources: one try, they block rather than rate-limit
         await sleep(RETRY_WAIT_MS);
     }
     return last;
@@ -94,12 +114,25 @@ async function run(candidates, apiKey, background) {
         job.currentId = entry.id;
         job.currentTitle = entry.title;
 
-        const res = await fetchWithRetry(entry.id, apiKey);
         const meta = entry.meta && typeof entry.meta === 'object' ? { ...entry.meta } : {};
+
+        if (hasFullMetadata(meta)) { // tags already stored; only the file is missing, no request needed
+            try {
+                writeComicInfo(entry.id, entry.path, entry.format, meta, { artist: entry.artist });
+                job.updated++;
+            } catch (e) {
+                job.failed++;
+                job.errors.push({ id: entry.id, error: e.message });
+            }
+            job.done++;
+            continue;
+        }
+
+        const res = await fetchWithRetry(entry.id, apiKey);
 
         if (res.success) {
             consecutiveFailures = 0;
-            Object.assign(meta, extraMetaFromApi(res.data));
+            Object.assign(meta, res.extraMeta);
             try {
                 await upsertLibraryEntry({
                     galleryId: entry.id,
@@ -112,7 +145,7 @@ async function run(candidates, apiKey, background) {
                     addedAt: entry.added_at,
                     meta
                 });
-                writeComicInfo(entry.id, entry.path, entry.format, meta);
+                writeComicInfo(entry.id, entry.path, entry.format, meta, { artist: entry.artist });
                 job.updated++;
             } catch (e) {
                 job.failed++;

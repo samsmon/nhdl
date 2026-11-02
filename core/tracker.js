@@ -56,7 +56,7 @@ async function saveToLibrary(id, title, folder, pages, ext, pageExts = {}, extra
         try {
             fs.writeFileSync(path.join(folder, MARKER_FILENAME), id.toString(), 'utf-8');
         } catch (e) {}
-        try { writeComicInfo(id, folder, 'folder', meta); } catch (e) {}
+        try { writeComicInfo(id, folder, 'folder', meta, { artist: extra.author }); } catch (e) {}
     } catch (e) {
         console.error('Failed to save to SQLite library:', e.message);
     }
@@ -79,7 +79,7 @@ async function saveArchivedToLibrary(id, title, archivePath, archiveExt, extra =
         try {
             fs.writeFileSync(archiveMarkerPath(archivePath), id.toString(), 'utf-8');
         } catch (e) {}
-        try { writeComicInfo(id, archivePath, fmt, extra.extraMeta); } catch (e) {}
+        try { writeComicInfo(id, archivePath, fmt, extra.extraMeta, { artist: extra.author }); } catch (e) {}
     } catch (e) {
         console.error('Failed to save archived entry to SQLite library:', e.message);
     }
