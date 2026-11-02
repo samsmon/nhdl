@@ -276,7 +276,8 @@ function readComicInfo(target, format) {
 // True when the entry already carries the current format (so backfill can leave it alone).
 function hasCurrentComicInfo(target, format) {
     const text = readComicInfo(target, format);
-    return !!(text && text.includes(FORMAT_MARKER));
+    // A file with Penciller was written by the tagging script that already follows this layout.
+    return !!(text && (text.includes(FORMAT_MARKER) || /<Penciller>/.test(text)));
 }
 
 // ---- writing ----
@@ -300,9 +301,13 @@ function writeMetadata(galleryId, target, format, meta, ctx = {}) {
         if (archiveId(out) !== archiveId(before)) {
             return { written: false, reason: 'would change the first 512000 bytes (LANraragi archive ID); left untouched' };
         }
+        const stat = fs.statSync(target);
         const tmp = `${target}.nhdl-tmp`;
         fs.writeFileSync(tmp, out);
         fs.renameSync(tmp, target);
+        // Keep the modification time: reader mirrors (manga-optimizer) compare mtimes, and a touched
+        // file would be reprocessed even though its images did not change.
+        try { fs.utimesSync(target, stat.atime, stat.mtime); } catch (e) {}
         return { written: true };
     }
     fs.writeFileSync(path.join(target, COMIC_INFO_NAME), xml);

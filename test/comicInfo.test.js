@@ -161,3 +161,18 @@ test('folder galleries get both files; missing targets are reported', () => {
     assert.equal(writeMetadata(1, path.join(dir, 'nope'), 'folder', {}, {}).written, false);
     fs.rmSync(dir, { recursive: true, force: true });
 });
+
+test('writing keeps the archive modification time, and script-written files count as current', () => {
+    const dir = tmpDir();
+    const file = path.join(dir, 'a.cbz');
+    fs.writeFileSync(file, bigArchive());
+    const past = new Date('2026-01-02T03:04:05Z');
+    fs.utimesSync(file, past, past);
+    assert.equal(writeMetadata(1, file, 'cbz', TYPED, {}).written, true);
+    assert.equal(fs.statSync(file).mtimeMs, past.getTime());
+
+    const scripted = path.join(dir, 'script.cbz'); // layout of the external tagging script: Penciller, no marker
+    fs.writeFileSync(scripted, upsertZipEntry(bigArchive(), 'ComicInfo.xml', Buffer.from('<ComicInfo><Penciller>x</Penciller></ComicInfo>')));
+    assert.equal(hasCurrentComicInfo(scripted, 'cbz'), true);
+    fs.rmSync(dir, { recursive: true, force: true });
+});
