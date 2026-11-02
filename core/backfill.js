@@ -1,5 +1,6 @@
 // Backfill job: fills in tags, dates and scanlator for library entries that were scanned from
-// disk (so only artist/language from the folder path are known), then writes ComicInfo.xml.
+// disk (so only artist/language from the folder path are known), then writes ComicInfo.xml and
+// info.json. A gallery without any tags still gets the minimal fields (artist, genre, URL).
 // Runs in the background, paced under the API rate limit (20/min without key, 45/min with).
 
 const fs = require('fs');
@@ -7,7 +8,7 @@ const { fetchGalleryMetadata } = require('./nhentaiApi');
 const { providerForKey } = require('./providers');
 const { fetchText, curlFetchText } = require('./providers/http');
 const { getAllLibraryEntries, upsertLibraryEntry } = require('./db');
-const { writeComicInfo, hasFullMetadata, hasComicInfo } = require('./comicInfo');
+const { writeMetadata, hasTagData, hasCurrentComicInfo } = require('./comicInfo');
 const { logActivity } = require('./logger');
 
 const RETRY_WAIT_MS = 60000;
@@ -33,10 +34,10 @@ function extraMetaFromApi(data) {
 
 function isCandidate(entry) {
     if (!entry || entry.format === 'skipped') return false;
-    if (entry.meta && entry.meta.metadataNotFound) return false;
+    if (entry.meta && entry.meta.metadataWriteSkipped) return false; // refused once (e.g. archive ID would change)
     if (!(entry.path && fs.existsSync(entry.path))) return false;
-    // Needs work when tags are missing, or tags are known but the file was never written.
-    return !hasFullMetadata(entry.meta) || !hasComicInfo(entry.path, entry.format);
+    // Needs work when tag data was never fetched, or the sidecars are missing / in the old format.
+    return !hasTagData(entry.meta) || !hasCurrentComicInfo(entry.path, entry.format);
 }
 
 let job = null;
@@ -56,6 +57,7 @@ async function startBackfill({ background = false } = {}) {
         done: 0,
         updated: 0,
         notFound: 0,
+        skipped: 0,
         failed: 0,
         currentId: null,
         currentTitle: null,
@@ -103,6 +105,33 @@ async function fetchWithRetry(id, apiKey) {
     return last;
 }
 
+async function saveMeta(entry, meta) {
+    try {
+        await upsertLibraryEntry({
+            galleryId: entry.id, title: entry.title, path: entry.path, pages: entry.pages,
+            format: entry.format, language: entry.language, artist: entry.artist,
+            addedAt: entry.added_at, meta
+        });
+    } catch (e) {
+        job.errors.push({ id: entry.id, error: `saving metadata failed: ${e.message}` });
+    }
+}
+
+// Writes the sidecars and records a refusal per gallery instead of failing the whole job.
+async function writeFor(entry, meta) {
+    let result;
+    try {
+        result = writeMetadata(entry.id, entry.path, entry.format, meta, { artist: entry.artist, language: entry.language });
+    } catch (e) {
+        result = { written: false, reason: e.message };
+    }
+    if (result.written) { job.updated++; return; }
+    job.skipped++;
+    job.errors.push({ id: entry.id, error: result.reason });
+    meta.metadataWriteSkipped = true;
+    await saveMeta(entry, meta);
+}
+
 async function run(candidates, apiKey, background) {
     // Background runs share the rate limit with active downloads, so they go at about half speed.
     const delay = background ? (apiKey ? 2500 : 6500) : (apiKey ? 1500 : 3200);
@@ -116,14 +145,8 @@ async function run(candidates, apiKey, background) {
 
         const meta = entry.meta && typeof entry.meta === 'object' ? { ...entry.meta } : {};
 
-        if (hasFullMetadata(meta)) { // tags already stored; only the file is missing, no request needed
-            try {
-                writeComicInfo(entry.id, entry.path, entry.format, meta, { artist: entry.artist });
-                job.updated++;
-            } catch (e) {
-                job.failed++;
-                job.errors.push({ id: entry.id, error: e.message });
-            }
+        if (hasTagData(meta)) { // tag data already stored; only the sidecars are missing or old, no request needed
+            await writeFor(entry, meta);
             job.done++;
             continue;
         }
@@ -133,34 +156,15 @@ async function run(candidates, apiKey, background) {
         if (res.success) {
             consecutiveFailures = 0;
             Object.assign(meta, res.extraMeta);
-            try {
-                await upsertLibraryEntry({
-                    galleryId: entry.id,
-                    title: entry.title,
-                    path: entry.path,
-                    pages: entry.pages,
-                    format: entry.format,
-                    language: entry.language,
-                    artist: entry.artist,
-                    addedAt: entry.added_at,
-                    meta
-                });
-                writeComicInfo(entry.id, entry.path, entry.format, meta, { artist: entry.artist });
-                job.updated++;
-            } catch (e) {
-                job.failed++;
-                job.errors.push({ id: entry.id, error: e.message });
-            }
+            meta.tagsFetched = true; // also true for a gallery that really has no tags
+            await saveMeta(entry, meta);
+            await writeFor(entry, meta);
         } else if (res.notFound) {
             consecutiveFailures = 0;
             meta.metadataNotFound = true; // gallery removed upstream; do not ask again
-            try {
-                await upsertLibraryEntry({
-                    galleryId: entry.id, title: entry.title, path: entry.path, pages: entry.pages,
-                    format: entry.format, language: entry.language, artist: entry.artist,
-                    addedAt: entry.added_at, meta
-                });
-            } catch (e) {}
+            meta.tagsFetched = true;
+            await saveMeta(entry, meta);
+            await writeFor(entry, meta); // minimal sidecars: artist, genre, URL
             job.notFound++;
         } else {
             job.failed++;
@@ -178,7 +182,7 @@ async function run(candidates, apiKey, background) {
     job.currentId = null;
     job.currentTitle = null;
     job.finishedAt = new Date().toISOString();
-    await logActivity(`Metadata backfill finished: ${job.updated} updated, ${job.notFound} not found upstream, ${job.failed} failed${job.abortedReason ? ` (stopped: ${job.abortedReason})` : ''}`);
+    await logActivity(`Metadata backfill finished: ${job.updated} written, ${job.skipped} skipped, ${job.notFound} not found upstream, ${job.failed} failed${job.abortedReason ? ` (stopped: ${job.abortedReason})` : ''}`);
 }
 
 module.exports = { startBackfill, getJob, isRunning, cancel, isCandidate, extraMetaFromApi };

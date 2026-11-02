@@ -8,6 +8,14 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Format tag untuk LANraragi dan HappyPanda X
+- `ComicInfo.xml` baru: Tags berisi nama polos (tanpa `tag:`), tambah Penciller (artis), Characters, LanguageISO (`en`/`ja`/`zh`) dan Genre (kategori); Title tidak ditulis; Web tetap URL sumber; ada penanda `nhdl-format:2` supaya backfill bisa mengenali versi.
+- `info.json` gaya HDoujin (`manga_info`, tags berupa list tanpa namespace) ditulis ke dalam arsip, atau ke folder, untuk plugin File Metadata HappyPanda X.
+- Galeri tanpa tag di sumbernya tetap mendapat metadata minimal (artis, kategori, URL). Penanda `tagsFetched` di `library.meta` mencegah pengambilan ulang.
+- Penulisan ke zip tetap byte-for-byte (`upsertZipEntries`) dan kini dijaga: bila 512000 byte pertama (ID arsip LANraragi) akan berubah, penulisan ditolak dan dilaporkan per galeri (`skipped` di job backfill).
+- Backfill menulis ulang `ComicInfo.xml` format lama tanpa mengubah hash itu. Resolver DoH dicabut kembali (revert).
+- Tes: `test/comicInfo.test.js` (SHA1 512000 byte pertama sebelum/sesudah, penolakan arsip kecil dan ComicInfo di awal), `npm test` 137 lulus.
+
 ## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Backfill untuk semua sumber dan jalan saat server start
 - Backfill kini juga memproses sumber non-default lewat `fetchMeta` provider (tag tanpa tipe dipetakan ke `tag:` di ComicInfo; Writer jatuh ke artist dari library; Web dari URL provider).
 - Entri yang tag-nya sudah ada di database tetapi `ComicInfo.xml` belum pernah ditulis (unduhan lama) sekarang ditulis tanpa request (`hasComicInfo` membaca central directory saja).
