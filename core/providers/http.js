@@ -2,54 +2,13 @@ const http = require('http');
 const https = require('https');
 const fs = require('fs');
 const { execFile } = require('child_process');
-const dns = require('dns');
-const net = require('net');
 
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
-
-// DNS-over-HTTPS, so sources blocked by the ISP's DNS (answers pointing at a block page) still
-// resolve. Falls back to the system resolver on any failure. Off with NHDL_DOH=0 and under tests.
-const DOH_URL = 'https://1.1.1.1/dns-query';
-const DOH_TTL_MS = 5 * 60 * 1000;
-const dohCache = new Map();
-
-function dohEnabled() {
-    return process.env.NHDL_DOH !== '0' && !process.env.NODE_TEST_CONTEXT;
-}
-
-function dohSkipHost(host) {
-    return net.isIP(host) || host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.test');
-}
-
-async function dohResolve(host) {
-    const hit = dohCache.get(host);
-    if (hit && hit.until > Date.now()) return hit.ips;
-    const res = await fetch(`${DOH_URL}?name=${encodeURIComponent(host)}&type=A`, {
-        headers: { accept: 'application/dns-json' },
-        signal: AbortSignal.timeout(5000)
-    });
-    if (!res.ok) throw new Error(`DoH status ${res.status}`);
-    const json = await res.json();
-    const ips = (json.Answer || []).filter(a => a.type === 1 && net.isIPv4(a.data)).map(a => a.data);
-    if (ips.length === 0) throw new Error('DoH returned no A records');
-    dohCache.set(host, { ips, until: Date.now() + DOH_TTL_MS });
-    return ips;
-}
-
-function dohLookup(hostname, options, callback) {
-    if (typeof options === 'function') { callback = options; options = {}; }
-    if (!dohEnabled() || dohSkipHost(hostname)) return dns.lookup(hostname, options, callback);
-    dohResolve(hostname).then(ips => {
-        if (options && options.all) callback(null, ips.map(address => ({ address, family: 4 })));
-        else callback(null, ips[0], 4);
-    }).catch(() => dns.lookup(hostname, options, callback));
-}
 
 function open(url, headers, timeoutMs) {
     return new Promise((resolve, reject) => {
         const lib = url.startsWith('https:') ? https : http;
         const req = lib.get(url, {
-            lookup: dohLookup,
             headers: { 'User-Agent': USER_AGENT, 'Accept-Encoding': 'identity', ...headers }
         }, resolve);
         req.setTimeout(timeoutMs, () => { req.destroy(new Error('Socket Timeout')); });
@@ -176,30 +135,16 @@ function resolveCurlPath() {
     return 'curl';
 }
 
-function curlArgs(url, headers, timeoutMs, extra = [], useDoh = false) {
+function curlArgs(url, headers, timeoutMs, extra = []) {
     if (!/^https?:\/\//i.test(String(url))) throw new Error(`curl: refusing non-http(s) URL: ${String(url).slice(0, 80)}`);
     const args = ['-sS', '-L', '--proto', '=http,https', '--proto-redir', '=http,https', '--max-redirs', '3', '--compressed',
         '--max-time', String(Math.max(1, Math.ceil(timeoutMs / 1000))), '-A', USER_AGENT];
     for (const [name, value] of Object.entries(headers || {})) args.push('-H', `${name}: ${value}`);
-    if (useDoh) args.push('--doh-url', DOH_URL);
     args.push(...extra, '--', String(url));
     return args;
 }
 
-// Tries curl's built-in DoH first, then plain system DNS if that attempt fails outright.
-async function withDohFallback(run) {
-    if (!dohEnabled()) return run(false);
-    try { return await run(true); } catch (e) {
-        if (e && e.statusCode) throw e; // an HTTP answer came back; DNS was not the problem
-        return run(false);
-    }
-}
-
 function curlFetchText(url, headers = {}, timeoutMs = 20000) {
-    return withDohFallback((useDoh) => curlFetchTextOnce(url, headers, timeoutMs, useDoh));
-}
-
-function curlFetchTextOnce(url, headers, timeoutMs, useDoh) {
     const marker = `__NHDL_STATUS_${process.pid}_${Date.now()}__`;
     return new Promise((resolve, reject) => {
         let args;
@@ -219,14 +164,10 @@ function curlFetchTextOnce(url, headers, timeoutMs, useDoh) {
 }
 
 function curlDownloadToFile(url, destPath, headers = {}, onProgress = null, timeoutMs = 30000) {
-    return withDohFallback((useDoh) => curlDownloadToFileOnce(url, destPath, headers, onProgress, timeoutMs, useDoh));
-}
-
-function curlDownloadToFileOnce(url, destPath, headers, onProgress, timeoutMs, useDoh) {
     const partPath = `${destPath}.part`;
     return new Promise((resolve, reject) => {
         let args;
-        try { args = curlArgs(url, headers, timeoutMs, ['-o', partPath, '-w', '%{http_code}'], useDoh); } catch (e) { return reject(e); }
+        try { args = curlArgs(url, headers, timeoutMs, ['-o', partPath, '-w', '%{http_code}']); } catch (e) { return reject(e); }
         if (onProgress) onProgress(0, 0);
         execFile(resolveCurlPath(), args, { maxBuffer: 1024 * 1024, windowsHide: true }, (err, stdout, stderr) => {
             const cleanup = () => { try { fs.unlinkSync(partPath); } catch (e) {} };
@@ -259,5 +200,4 @@ function curlDownloadToFileOnce(url, destPath, headers, onProgress, timeoutMs, u
     });
 }
 
-module.exports = {
-    dohLookup, fetchText, downloadToFile, USER_AGENT, resolveCurlPath, curlFetchText, curlDownloadToFile };
+module.exports = { fetchText, downloadToFile, USER_AGENT, resolveCurlPath, curlFetchText, curlDownloadToFile };

@@ -8,10 +8,6 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
-## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · DNS-over-HTTPS untuk sumber non-default
-- Transport node memakai `lookup` kustom yang meminta A record lewat DoH (`https://1.1.1.1/dns-query`, cache 5 menit); transport curl memakai `--doh-url`. Bila DoH gagal, otomatis jatuh ke DNS sistem. Tujuannya melewati DNS ISP yang mengarahkan domain sumber ke IP pemblokiran (mis. `ECONNREFUSED` ke IP blokir). Dimatikan dengan `NHDL_DOH=0`, dan nonaktif di bawah `node --test`.
-- Tes baru `test/doh.test.js` (fetch dipalsukan; tidak ada request nyata).
-
 ## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Backfill untuk semua sumber dan jalan saat server start
 - Backfill kini juga memproses sumber non-default lewat `fetchMeta` provider (tag tanpa tipe dipetakan ke `tag:` di ComicInfo; Writer jatuh ke artist dari library; Web dari URL provider).
 - Entri yang tag-nya sudah ada di database tetapi `ComicInfo.xml` belum pernah ditulis (unduhan lama) sekarang ditulis tanpa request (`hasComicInfo` membaca central directory saja).

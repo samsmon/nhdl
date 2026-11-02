@@ -68,7 +68,6 @@ On the first start with an empty PostgreSQL database, NHDL writes a backup of th
 | `NHDL_DB_PATH` | `data/nhdl.db` | SQLite database file |
 | `NHDL_BACKUP_DIR` | `data/backups` | Where JSON backups are written |
 | `NHDL_PASSWORD` | *(empty → no login)* | Enables the login screen |
-| `NHDL_DOH` | `1` | Set to `0` to stop using DNS-over-HTTPS (1.1.1.1) for site lookups |
 | `NHENTAI_API_KEY` | *(empty)* | API key for fast archive downloads (can also be set in *Settings*) |
 | `NHDL_LEGACY_CONFIG` | `config.json` in the repo root | One-time import of an old `config.json`; set it empty to disable |
 | `TEST_DATABASE_URL` | *(empty → skipped)* | PostgreSQL database used only by `npm test` |
