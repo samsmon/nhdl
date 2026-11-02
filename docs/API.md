@@ -197,9 +197,10 @@ Semua endpoint di bawah `/api/*` (kecuali `/api/queue/export` dan `/api/logs/dow
 
 `LibraryItem`:
 ```json
-{ "id": "123456", "source": "default", "category": null, "title": "Title", "author": "Artist", "lang": "English", "pages": 24, "folder": "/downloads/English/Artist/Title.cbz", "downloadedAt": "2026-09-28 08:00:00", "legacy": false, "archived": true, "archiveExt": "cbz" }
+{ "id": "123456", "url": "https://certain.site/g/123456/", "source": "default", "category": null, "title": "Title", "author": "Artist", "lang": "English", "pages": 24, "folder": "/downloads/English/Artist/Title.cbz", "downloadedAt": "2026-09-28 08:00:00", "legacy": false, "archived": true, "archiveExt": "cbz" }
 ```
 - `id`: kunci kanonik sebagai string (`"123456"`, `"b1:539224"`).
+- `url`: halaman asli galeri di situs sumbernya, dibangun oleh provider dari kunci (bukan selalu situs utama; UI memakainya untuk tombol buka link).
 - `source`: sama seperti `QueueItem.source`.
 - `category`: nilai yang sama seperti `QueueItem.category` (dibaca dari `meta.contentType` library; `null` bila tidak ada).
 

@@ -8,6 +8,9 @@ Aktor: `Manual (<nama>)` atau `AI (<agent/model>)`.
 
 ---
 
+## 2026-11-02 · AI (Claude Code, Sonnet 5.5) · Perbaikan link galeri sumber non-default
+- Panel detail dan modal Library selalu membuat link `.../g/<id>/` ke situs utama, sehingga item berkunci berprefix (mis. `com:slug`) menghasilkan URL salah. Panel detail kini memakai URL item sendiri; `/api/library` menambah field `url` (dari provider) dan modal Library memakainya, dan tombol disembunyikan bila tidak ada.
+
 ## 2026-11-01 · AI (Claude Code, Sonnet 5.5) · ComicInfo.xml dan backfill metadata
 - Modul baru `core/comicInfo.js`: membuat `ComicInfo.xml` dari tag, tanggal unggah, dan scanlator (artist ke Writer, group ke Publisher, category ke Genre, sisanya ke Tags), serta menyisipkannya ke dalam `.cbz`/`.zip` tanpa kompresi ulang (`upsertZipEntry`) atau menulisnya di folder galeri.
 - `tracker.saveToLibrary`/`saveArchivedToLibrary` menulis `ComicInfo.xml` untuk unduhan baru; `compressLibraryEntry` ikut membawa file itu ke arsip.

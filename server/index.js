@@ -40,6 +40,7 @@ initDb();
 const { verifyApiKey } = require('../core/nhentaiApi');
 const DownloaderEngine = require('../core/engine');
 const { sourceOf, listSources } = require('../core/providers');
+const { urlForKey } = require('../core/db/common');
 const {
     loadLibrary,
     rescanLibrary,
@@ -372,6 +373,7 @@ function createRequestHandler() {
                 const entries = allEntries.filter(e => !e.skipped);
                 const items = entries.map(data => ({
                     id: String(data.gallery_id),
+                    url: urlForKey(data.gallery_id),
                     source: sourceOf(data.gallery_id),
                     category: (data.meta && data.meta.contentType) || null,
                     title: data.title || 'Unknown',
